@@ -106,15 +106,19 @@ swarm --json status              # machine-readable output
 
 Agents can invoke tools during task execution. 18 built-in tools organized by group:
 
-| Group | Tools |
-|-------|-------|
-| **Web** | `web_search`, `web_fetch` |
-| **Filesystem** | `read_file`, `write_file`, `edit_file`, `list_dir` |
-| **Memory** | `memory_search`, `memory_save`, `kb_search`, `kb_write` |
-| **Task** | `task_create`, `task_status` |
-| **Automation** | `exec`, `cron`, `process` |
-| **Media** | `screenshot`, `notify` |
-| **Messaging** | `send_mail` |
+| Group | Tools | Highlights |
+|-------|-------|------------|
+| **Web** | `web_search`, `web_fetch` | Brave + Perplexity dual-provider, locale params, markdown extraction, 15-min cache |
+| **Filesystem** | `read_file`, `write_file`, `edit_file`, `list_dir` | Project-scoped, safe find-and-replace edits |
+| **Memory** | `memory_search`, `memory_save`, `kb_search`, `kb_write` | Episodic memory + shared Zettelkasten KB |
+| **Task** | `task_create`, `task_status` | Sub-task creation and status queries |
+| **Automation** | `exec`, `cron`, `process` | Approval-gated shell, scheduled jobs |
+| **Media** | `screenshot`, `notify` | Desktop capture, macOS notifications |
+| **Messaging** | `send_mail` | Inter-agent mailbox communication |
+
+**Web search** supports `country`, `search_lang`, `ui_lang` locale parameters. Auto-detects Brave Search or Perplexity Sonar based on available API keys, with automatic fallback.
+
+**Web fetch** supports `extract_mode: "text"` (plain text) or `"markdown"` (preserves headings, links, lists). Blocks private/internal hostnames for security.
 
 Access control via profiles (`minimal`, `coding`, `full`) and per-agent allow/deny lists:
 
