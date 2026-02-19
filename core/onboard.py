@@ -1011,7 +1011,7 @@ def _section_gateway(cfg: dict):
             if server:
                 console.print(f"  [{C_OK}]+[/{C_OK}] Gateway started on port {port}")
                 import webbrowser
-                url = f"http://127.0.0.1:{port}/"
+                url = f"http://127.0.0.1:{port}/?token={token}"
                 webbrowser.open(url)
                 console.print(f"  [{C_DIM}]Opened dashboard in browser[/{C_DIM}]")
             else:
@@ -1641,11 +1641,12 @@ def _ask_model(provider: str, api_key: str) -> str | None:
 
 def _check_chromadb() -> bool:
     """Check if chromadb is installed and loadable."""
+    import importlib
+    importlib.invalidate_caches()
     try:
         import chromadb  # noqa: F401
         return True
     except (ImportError, Exception):
-        # chromadb may fail to import on Python 3.14+ due to pydantic v1 incompatibility
         return False
 
 

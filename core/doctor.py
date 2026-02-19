@@ -136,6 +136,9 @@ def check_dependencies() -> tuple[bool, str, str]:
     optional = {"chromadb": "Vector memory", "web3": "ERC-8004 chain",
                 "lit_python_sdk": "Lit PKP"}
 
+    # Refresh import finder caches so newly pip-installed packages are visible
+    importlib.invalidate_caches()
+
     missing_req = []
     for mod in required:
         mod_name = "pyyaml" if mod == "yaml" else mod
@@ -172,19 +175,21 @@ def check_memory_backend() -> tuple[bool, str, str]:
     if backend == "mock":
         return True, "Memory", "Mock (in-memory, no persistence)"
 
+    importlib.invalidate_caches()
+
     if backend == "chroma":
         try:
             import chromadb  # noqa: F401
             return True, "Memory", "ChromaDB [ok]"
         except (ImportError, Exception):
-            return False, "Memory", "ChromaDB configured but not loadable — pip3 install chromadb"
+            return False, "Memory", "ChromaDB configured but not loadable -- pip3 install chromadb"
 
     if backend == "hybrid":
         try:
             import chromadb  # noqa: F401
             return True, "Memory", "Hybrid (Vector + BM25) [ok]"
         except (ImportError, Exception):
-            return True, "Memory", "Hybrid (BM25 only — install chromadb for vector search)"
+            return True, "Memory", "Hybrid (BM25 only -- install chromadb for vector search)"
 
     return True, "Memory", f"{backend}"
 

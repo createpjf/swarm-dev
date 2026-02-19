@@ -764,7 +764,18 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
    ══════════════════════════════════════════════════════════════════ */
 
 const API = '';  // same origin
-let TOKEN = localStorage.getItem('swarm_token') || '';
+// Auto-login: read token from URL param (?token=xxx) or localStorage
+let TOKEN = (function() {
+  const p = new URLSearchParams(window.location.search);
+  const t = p.get('token');
+  if (t) {
+    localStorage.setItem('swarm_token', t);
+    // Clean URL without reloading
+    history.replaceState(null, '', window.location.pathname);
+    return t;
+  }
+  return localStorage.getItem('swarm_token') || '';
+})();
 
 // ── State ───────────────────────────────────────────────────────
 let currentPanel = 'overview';
