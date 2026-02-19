@@ -112,7 +112,8 @@ def interactive_main():
         try:
             task_text = Prompt.ask("[bold green]You[/bold green]")
         except (KeyboardInterrupt, EOFError):
-            console.print("\n[dim]Bye![/dim]")
+            from core.i18n import t as _t
+            console.print(f"\n[dim]{_t('cmd.bye')}[/dim]")
             break
 
         task_text = task_text.strip()
@@ -125,28 +126,38 @@ def interactive_main():
         cmd = _lower.lstrip("/") if _lower.startswith("/") else None
 
         if _lower in ("exit", "quit"):
-            console.print("[dim]Bye![/dim]")
+            from core.i18n import t as _t
+            console.print(f"[dim]{_t('cmd.bye')}[/dim]")
             break
 
         if cmd == "help":
-            console.print(Panel(
-                "[bold]/status[/bold]      — task board\n"
-                "[bold]/scores[/bold]     — reputation scores\n"
-                "[bold]/usage[/bold]      — token usage & cost stats\n"
-                "[bold]/budget[/bold]     — view/set spending limits\n"
-                "[bold]/cancel[/bold]     — cancel all running tasks\n"
-                "[bold]/workflows[/bold]  — list available workflows\n"
-                "[bold]/config[/bold]          — show current config\n"
-                "[bold]/config history[/bold]  — config backup history\n"
-                "[bold]/config rollback[/bold] — restore previous config\n"
-                "[bold]/configure[/bold]       — re-run full setup wizard\n"
-                "[bold]/chain[/bold]      — on-chain status\n"
-                "[bold]/doctor[/bold]     — system health check\n"
-                "[bold]/clear[/bold]      — clear task history (with confirmation)\n"
-                "[bold]exit[/bold]        — quit",
-                title="Commands",
-                border_style="dim",
-            ))
+            from core.i18n import t as _t
+            from rich.table import Table as _HelpTbl
+            htbl = _HelpTbl(
+                show_header=False, show_edge=False, box=None,
+                padding=(0, 1), expand=False,
+            )
+            htbl.add_column("cmd", style="bold", min_width=18)
+            htbl.add_column("desc", style="dim")
+            _cmds = [
+                ("/status",          _t("help.status")),
+                ("/scores",          _t("help.scores")),
+                ("/usage",           _t("help.usage")),
+                ("/budget",          _t("help.budget")),
+                ("/cancel",          _t("help.cancel")),
+                ("/workflows",       _t("help.workflows")),
+                ("/config",          _t("help.config")),
+                ("/config history",  _t("help.config_hist")),
+                ("/config rollback", _t("help.config_roll")),
+                ("/configure",       _t("help.configure")),
+                ("/chain",           _t("help.chain")),
+                ("/doctor",          _t("help.doctor")),
+                ("/clear",           _t("help.clear")),
+                ("exit",             _t("help.exit")),
+            ]
+            for c, d in _cmds:
+                htbl.add_row(c, d)
+            console.print(Panel(htbl, title="Commands", border_style="dim"))
             continue
 
         if cmd == "status":
@@ -154,7 +165,7 @@ def interactive_main():
             continue
 
         if cmd == "scores":
-            cmd_scores()
+            cmd_scores(console)
             continue
 
         if cmd == "doctor":
@@ -170,12 +181,49 @@ def interactive_main():
             continue
 
         if cmd == "cancel":
+            from core.i18n import t as _t
             board = TaskBoard()
-            count = board.cancel_all()
-            if count > 0:
-                console.print(f"  [yellow]Cancelled {count} tasks.[/yellow]\n")
-            else:
-                console.print("  [dim]No active tasks to cancel.[/dim]\n")
+            data = board._read()
+            active = {tid: t for tid, t in data.items()
+                      if t.get("status") in ("pending", "claimed", "review", "paused")}
+            if not active:
+                console.print(f"  [dim]{_t('cmd.no_active')}[/dim]\n")
+                continue
+            # If only 1 active task, cancel directly
+            if len(active) == 1:
+                tid = next(iter(active))
+                board.cancel(tid)
+                console.print(f"  [yellow]{_t('cancel.done', n=1)}[/yellow]\n")
+                continue
+            # Multiple tasks — offer checkbox picker
+            try:
+                import questionary
+                from core.onboard import STYLE
+                choices = []
+                for tid, t in active.items():
+                    agent = t.get("agent_id") or "—"
+                    desc = t.get("description", "")[:40]
+                    st = t.get("status", "?")
+                    label = f"[{st}] {agent}: {desc}"
+                    choices.append(questionary.Choice(label, value=tid, checked=True))
+                selected = questionary.checkbox(
+                    _t("cancel.select"),
+                    choices=choices,
+                    style=STYLE,
+                ).ask()
+                if selected is None:
+                    console.print(f"  [dim]{_t('cmd.cancelled')}[/dim]\n")
+                    continue
+                if not selected:
+                    console.print(f"  [dim]{_t('cancel.none_selected')}[/dim]\n")
+                    continue
+                for tid in selected:
+                    board.cancel(tid)
+                console.print(f"  [yellow]{_t('cancel.done', n=len(selected))}[/yellow]\n")
+            except ImportError:
+                # Fallback: cancel all
+                count = board.cancel_all()
+                console.print(f"  [yellow]{_t('cancel.done', n=count)}[/yellow]\n")
             continue
 
         if cmd == "budget":
@@ -203,67 +251,125 @@ def interactive_main():
             continue
 
         if cmd == "clear":
-            board = TaskBoard()
-            result = board.clear(force=False)
-            if result == -1:
-                # Active tasks exist — confirm
-                confirm = Prompt.ask(
-                    "  [yellow]Active tasks exist. Force clear?[/yellow] [dim](y/N)[/dim]")
-                if confirm.strip().lower() == "y":
-                    board.clear(force=True)
-                    for fp in [".context_bus.json"]:
-                        if os.path.exists(fp):
-                            os.remove(fp)
-                    import glob as _glob
+            from core.i18n import t as _t
+            try:
+                import questionary
+                from core.onboard import STYLE
+                import glob as _glob
+                choices = [
+                    questionary.Choice(_t("clear.tasks"), value="tasks", checked=True),
+                    questionary.Choice(_t("clear.context"), value="context", checked=True),
+                    questionary.Choice(_t("clear.mailboxes"), value="mailboxes", checked=True),
+                    questionary.Choice(_t("clear.usage"), value="usage", checked=False),
+                ]
+                selected = questionary.checkbox(
+                    _t("clear.select"), choices=choices, style=STYLE,
+                ).ask()
+                if not selected:
+                    console.print(f"  [dim]{_t('cmd.cancelled')}[/dim]\n")
+                    continue
+                cleared_parts = []
+                if "tasks" in selected:
+                    board = TaskBoard()
+                    result = board.clear(force=False)
+                    if result == -1:
+                        force = questionary.confirm(
+                            _t("cmd.active_exist"), default=False, style=STYLE,
+                        ).ask()
+                        if force:
+                            board.clear(force=True)
+                            cleared_parts.append(_t("clear.tasks"))
+                    else:
+                        cleared_parts.append(_t("clear.tasks"))
+                if "context" in selected:
+                    if os.path.exists(".context_bus.json"):
+                        os.remove(".context_bus.json")
+                    cleared_parts.append(_t("clear.context"))
+                if "mailboxes" in selected:
                     for fp in _glob.glob(".mailboxes/*.jsonl"):
                         os.remove(fp)
-                    console.print("  [dim]Force cleared.[/dim]\n")
+                    cleared_parts.append(_t("clear.mailboxes"))
+                if "usage" in selected:
+                    if os.path.exists("memory/usage.json"):
+                        os.remove("memory/usage.json")
+                    cleared_parts.append(_t("clear.usage"))
+                if cleared_parts:
+                    console.print(f"  [dim]{_t('cmd.cleared')}: {', '.join(cleared_parts)}[/dim]\n")
                 else:
-                    console.print("  [dim]Cancelled.[/dim]\n")
-            else:
+                    console.print(f"  [dim]{_t('cmd.cancelled')}[/dim]\n")
+            except ImportError:
+                # Fallback: simple clear
+                board = TaskBoard()
+                result = board.clear(force=True)
                 for fp in [".context_bus.json"]:
                     if os.path.exists(fp):
                         os.remove(fp)
                 import glob as _glob
                 for fp in _glob.glob(".mailboxes/*.jsonl"):
                     os.remove(fp)
-                console.print(f"  [dim]Cleared {result} tasks.[/dim]\n")
+                console.print(f"  [dim]{_t('cmd.cleared')} ({result})[/dim]\n")
             continue
 
         if cmd == "config history":
+            from core.i18n import t as _t
             from core.config_manager import history as config_history
             entries = config_history("config/agents.yaml")
             if not entries:
-                console.print("  [dim]No config backups yet.[/dim]\n")
+                console.print(f"  [dim]{_t('config.no_backups')}[/dim]\n")
             else:
                 from rich.table import Table as RichTable
                 tbl = RichTable(box=None, padding=(0, 1), show_header=True)
-                tbl.add_column("#", justify="right")
-                tbl.add_column("Timestamp")
-                tbl.add_column("Hash", style="dim")
+                tbl.add_column("#", justify="right", style="bold", width=3)
+                tbl.add_column("Timestamp", min_width=19)
+                tbl.add_column("Hash", style="dim", width=12)
                 tbl.add_column("Reason")
-                import time as _t
+                import time as _t2
                 for i, e in enumerate(entries):
-                    ts = _t.strftime("%Y-%m-%d %H:%M:%S", _t.localtime(e["timestamp"]))
+                    ts = _t2.strftime("%Y-%m-%d %H:%M:%S", _t2.localtime(e["timestamp"]))
                     tbl.add_row(str(i), ts, e["hash"], e.get("reason", ""))
                 console.print(tbl)
                 console.print()
             continue
 
         if cmd and cmd.startswith("config rollback"):
+            from core.i18n import t as _t
             from core.config_manager import rollback as config_rollback
-            parts = cmd.split()
-            version = int(parts[2]) if len(parts) > 2 else -1
+            from core.config_manager import history as config_hist
+            entries = config_hist("config/agents.yaml")
+            if not entries:
+                console.print(f"  [red]{_t('config.rollback_fail')}[/red]\n")
+                continue
+            # Try interactive select
+            try:
+                import questionary
+                from core.onboard import STYLE
+                import time as _t2
+                choices = []
+                for i, e in enumerate(entries):
+                    ts = _t2.strftime("%Y-%m-%d %H:%M", _t2.localtime(e["timestamp"]))
+                    reason = e.get("reason", "")
+                    label = f"{ts}  {e['hash']}  {reason}"
+                    choices.append(questionary.Choice(label, value=i))
+                selected = questionary.select(
+                    _t("config.select_ver"), choices=choices, style=STYLE,
+                ).ask()
+                if selected is None:
+                    console.print(f"  [dim]{_t('cmd.cancelled')}[/dim]\n")
+                    continue
+                version = selected
+            except ImportError:
+                # Fallback: use version number from command
+                parts = cmd.split()
+                version = int(parts[2]) if len(parts) > 2 else -1
             ok = config_rollback("config/agents.yaml", version=version)
             if ok:
-                # Reload config after rollback
                 import yaml as _yaml
                 with open("config/agents.yaml") as f:
                     config = _yaml.safe_load(f)
                 agents = config.get("agents", [])
-                console.print(f"  [green]Rolled back config.[/green] Agents: {', '.join(a['id'] for a in agents)}\n")
+                console.print(f"  [green]{_t('config.rolled_back')}[/green] Agents: {', '.join(a['id'] for a in agents)}\n")
             else:
-                console.print("  [red]Rollback failed.[/red] Use /config history to see available versions.\n")
+                console.print(f"  [red]{_t('config.rollback_fail')}[/red]\n")
             continue
 
         if cmd and cmd.startswith("chain"):
@@ -289,7 +395,8 @@ def interactive_main():
 
         # If it looks like a slash command but isn't recognized, show help hint
         if cmd is not None:
-            console.print(f"  [yellow]Unknown command: {task_text}[/yellow]  Type [bold]/help[/bold] for commands.\n")
+            from core.i18n import t as _t
+            console.print(f"  [yellow]{_t('cmd.unknown_cmd', cmd=task_text)}[/yellow]  /help\n")
             continue
 
         # ── Submit task to agents ──
@@ -333,6 +440,7 @@ def interactive_main():
                         if t.get("status") == "failed"]
 
             if failures:
+                from core.i18n import t as _t
                 console.print()
                 for desc, flags in failures:
                     reason = ""
@@ -340,11 +448,13 @@ def interactive_main():
                         if f.startswith("failed:"):
                             err = f[7:]
                             if "401" in err:
-                                reason = "API Key 无效或过期"
+                                reason = _t("error.api_key_expired")
                             elif "429" in err:
-                                reason = "请求频率超限"
+                                reason = _t("error.rate_limit")
                             elif "timeout" in err.lower():
-                                reason = "请求超时"
+                                reason = _t("error.timeout")
+                            elif "connect" in err.lower():
+                                reason = _t("error.connect")
                             else:
                                 reason = err.split("\n")[0][:80]
                             break
@@ -360,7 +470,8 @@ def interactive_main():
                     console.print(result_text)
                 console.print()
             elif not failures:
-                console.print(f"\n  [yellow]No result returned.[/yellow] Run [bold]/status[/bold] to check.\n")
+                from core.i18n import t as _t
+                console.print(f"\n  [yellow]{_t('cmd.no_result')}[/yellow] /status\n")
 
         except Exception as e:
             console.print(f"\n  [red]Error: {e}[/red]\n")
@@ -370,33 +481,43 @@ def interactive_main():
 
 def _show_status_rich(console):
     """Show task board with rich formatting."""
+    from core.i18n import t as _t
     if not os.path.exists(".task_board.json"):
-        console.print("  [dim]No tasks yet.[/dim]\n")
+        console.print(f"  [dim]{_t('cmd.no_tasks')}[/dim]\n")
         return
 
     data = json.load(open(".task_board.json"))
     if not data:
-        console.print("  [dim]No tasks yet.[/dim]\n")
+        console.print(f"  [dim]{_t('cmd.no_tasks')}[/dim]\n")
         return
 
     from rich.table import Table
-    table = Table(box=None, padding=(0, 1))
-    table.add_column("Status", style="bold")
-    table.add_column("Agent")
-    table.add_column("Description")
+    table = Table(box=None, padding=(0, 1), show_header=True)
+    table.add_column("Status", style="bold", min_width=10)
+    table.add_column("Agent", min_width=10)
+    table.add_column("Description", min_width=30)
+    table.add_column("ID", style="dim", max_width=8)
 
     status_style = {
         "completed": "green", "failed": "red", "pending": "yellow",
         "claimed": "cyan", "review": "magenta", "blocked": "dim",
+        "cancelled": "dim yellow", "paused": "bold yellow",
     }
 
-    for tid, t in data.items():
+    # Sort: active first, then completed, then failed, then cancelled
+    sort_order = {"claimed": 0, "review": 1, "pending": 2, "paused": 3,
+                  "completed": 4, "failed": 5, "cancelled": 6, "blocked": 7}
+    sorted_items = sorted(data.items(),
+                          key=lambda kv: sort_order.get(kv[1].get("status", ""), 9))
+
+    for tid, t in sorted_items:
         st = t["status"]
         style = status_style.get(st, "")
         table.add_row(
             f"[{style}]{st}[/{style}]",
-            t.get("agent_id") or "-",
-            t["description"][:60],
+            t.get("agent_id") or "—",
+            t["description"][:55],
+            tid[:8],
         )
 
     console.print(table)
@@ -413,9 +534,9 @@ def cmd_init():
 def cmd_run(task: str):
     from core.orchestrator import Orchestrator
     orch = Orchestrator()
-    print(f"\n🚀 Submitting task: {task!r}\n")
+    print(f"\n  Submitting task: {task!r}\n")
     orch.run(task)
-    print("\n✅ All agents finished.\n")
+    print("\n  All agents finished.\n")
     cmd_status()
 
 
@@ -429,24 +550,64 @@ def cmd_status():
     print()
 
 
-def cmd_scores():
+def cmd_scores(console=None):
     path = "memory/reputation_cache.json"
     if not os.path.exists(path):
-        print("No scores yet.")
+        if console:
+            console.print("  [dim]No scores yet.[/dim]\n")
+        else:
+            print("No scores yet.")
         return
     cache = json.load(open(path))
-    print(f"\n{'AGENT':15}  {'SCORE':6}  TREND / STATUS")
-    print("-" * 50)
 
     from reputation.scorer import ScoreAggregator
     sc = ScoreAggregator()
-    for agent_id, data in cache.items():
-        score  = data.get("composite", 0)
-        trend  = sc.trend(agent_id)
-        status = sc.threshold_status(agent_id)
-        icon   = {"healthy": "✅", "watch": "👀", "warning": "⚠️", "evolve": "🔄"}.get(status, "")
-        print(f"{agent_id:15}  {score:6.1f}  {trend:10}  {status} {icon}")
-    print()
+
+    if console is None:
+        try:
+            from rich.console import Console
+            console = Console()
+        except ImportError:
+            pass
+
+    if console:
+        from rich.table import Table
+        console.print()
+        tbl = Table(box=None, padding=(0, 1), show_header=True)
+        tbl.add_column("Agent", style="bold", min_width=12)
+        tbl.add_column("Score", justify="right", min_width=6)
+        tbl.add_column("Trend", min_width=10)
+        tbl.add_column("Status")
+        for agent_id, data in cache.items():
+            score  = data.get("composite", 0)
+            trend  = sc.trend(agent_id)
+            status = sc.threshold_status(agent_id)
+            # Color score by health
+            if score >= 70:
+                sc_style = "green"
+            elif score >= 50:
+                sc_style = "yellow"
+            else:
+                sc_style = "red"
+            status_style = {"healthy": "green", "watch": "yellow",
+                            "warning": "red", "evolve": "bold red"}.get(status, "")
+            tbl.add_row(
+                agent_id,
+                f"[{sc_style}]{score:.1f}[/{sc_style}]",
+                trend,
+                f"[{status_style}]{status}[/{status_style}]",
+            )
+        console.print(tbl)
+        console.print()
+    else:
+        print(f"\n{'AGENT':15}  {'SCORE':6}  TREND / STATUS")
+        print("-" * 50)
+        for agent_id, data in cache.items():
+            score  = data.get("composite", 0)
+            trend  = sc.trend(agent_id)
+            status = sc.threshold_status(agent_id)
+            print(f"{agent_id:15}  {score:6.1f}  {trend:10}  {status}")
+        print()
 
 
 def cmd_doctor(console=None):
@@ -804,19 +965,38 @@ def cmd_evolve_confirm(agent_id: str):
         print(f"No pending model swap for {agent_id}.")
         return
     swap = json.load(open(path))
-    print(f"\nPending model swap for {agent_id}:")
-    print(f"  New model : {swap['new_model']}")
-    print(f"  Reason    : {swap['reason']}\n")
-    confirm = input("Confirm? [y/N] ").strip().lower()
-    if confirm == "y":
-        from reputation.evolution import EvolutionEngine
-        from reputation.scorer import ScoreAggregator
-        from core.task_board import TaskBoard
-        eng = EvolutionEngine(ScoreAggregator(), TaskBoard())
-        eng.apply_model_swap(agent_id)
-        print(f"✅ Model swap applied for {agent_id}.")
-    else:
-        print("Cancelled.")
+    try:
+        import questionary
+        from core.onboard import STYLE
+        from rich.console import Console
+        console = Console()
+        console.print(f"\n  [bold]Pending model swap for {agent_id}[/bold]")
+        console.print(f"  New model : [cyan]{swap['new_model']}[/cyan]")
+        console.print(f"  Reason    : [dim]{swap['reason']}[/dim]\n")
+        ok = questionary.confirm("Apply model swap?", default=False, style=STYLE).ask()
+        if ok:
+            from reputation.evolution import EvolutionEngine
+            from reputation.scorer import ScoreAggregator
+            from core.task_board import TaskBoard
+            eng = EvolutionEngine(ScoreAggregator(), TaskBoard())
+            eng.apply_model_swap(agent_id)
+            console.print(f"  [green]✓[/green] Model swap applied for {agent_id}.\n")
+        else:
+            console.print(f"  [dim]Cancelled.[/dim]\n")
+    except ImportError:
+        print(f"\nPending model swap for {agent_id}:")
+        print(f"  New model : {swap['new_model']}")
+        print(f"  Reason    : {swap['reason']}\n")
+        confirm = input("Confirm? [y/N] ").strip().lower()
+        if confirm == "y":
+            from reputation.evolution import EvolutionEngine
+            from reputation.scorer import ScoreAggregator
+            from core.task_board import TaskBoard
+            eng = EvolutionEngine(ScoreAggregator(), TaskBoard())
+            eng.apply_model_swap(agent_id)
+            print(f"  Model swap applied for {agent_id}.")
+        else:
+            print("  Cancelled.")
 
 
 def main():

@@ -202,7 +202,7 @@ class LiveStatus:
                 desc_text = f"[cyan]{row.description}[/cyan]"
                 working_count += 1
             elif row.status == "review":
-                desc_text = f"[magenta]Reviewing…[/magenta]"
+                desc_text = f"[magenta]{t('status.review')}[/magenta]"
                 working_count += 1
             elif row.status == "done":
                 if row.review_score is not None:
@@ -211,16 +211,16 @@ class LiveStatus:
                     desc_text = f"[green]{row.description}[/green]"
                 done_count += 1
             elif row.status == "failed":
-                reason = row.error_msg or "Failed"
+                reason = row.error_msg or t("status.failed")
                 desc_text = f"[red]{reason}[/red]"
                 fail_count += 1
             elif row.status == "cancelled":
-                desc_text = f"[dim yellow]Cancelled[/dim yellow]"
+                desc_text = f"[dim yellow]{t('status.cancelled')}[/dim yellow]"
                 cancelled_count += 1
             elif row.status == "paused":
-                desc_text = f"[yellow]Paused — {row.description}[/yellow]"
+                desc_text = f"[yellow]{t('status.paused')} — {row.description}[/yellow]"
             else:  # pending
-                desc_text = f"[dim]Waiting…[/dim]"
+                desc_text = f"[dim]{t('status.pending')}[/dim]"
 
             elapsed_str = _fmt_time(row.elapsed) if row.elapsed else "—"
             table.add_row(icon, row.agent_id, desc_text, elapsed_str)
@@ -228,34 +228,35 @@ class LiveStatus:
         # If no rows yet, show agents waiting
         if not self.rows:
             for aid in self.agent_ids:
-                table.add_row(ICON_IDLE, aid, "[dim]等待中…[/dim]", "—")
+                table.add_row(ICON_IDLE, aid, f"[dim]{t('status.pending')}[/dim]", "—")
 
         # Summary row
         table.add_row()
         total_tasks = len(self.rows)
 
         if final:
-            parts = [f"{done_count} done"]
+            parts = [f"{done_count} {t('summary.done').lower()}"]
             if fail_count:
-                parts.append(f"[red]{fail_count} failed[/red]")
+                parts.append(f"[red]{fail_count} {t('summary.failed')}[/red]")
             if cancelled_count:
-                parts.append(f"[yellow]{cancelled_count} cancelled[/yellow]")
+                parts.append(f"[yellow]{cancelled_count} {t('summary.cancelled')}[/yellow]")
             parts.append(_fmt_time(total_elapsed))
             if fail_count or cancelled_count:
-                summary = f"[yellow]Finished[/yellow] · {' · '.join(parts)}"
+                summary = f"[yellow]{t('summary.finished')}[/yellow] · {' · '.join(parts)}"
             else:
-                summary = f"[green]Done[/green] · {' · '.join(parts)}"
+                summary = f"[green]{t('summary.done')}[/green] · {' · '.join(parts)}"
         else:
             parts = []
             if done_count:
-                parts.append(f"{done_count} done")
+                parts.append(f"{done_count} {t('summary.done').lower()}")
             if working_count:
-                parts.append(f"{working_count} working")
+                parts.append(f"{working_count} {t('summary.working')}")
             if fail_count:
-                parts.append(f"[red]{fail_count} failed[/red]")
+                parts.append(f"[red]{fail_count} {t('summary.failed')}[/red]")
             if cancelled_count:
-                parts.append(f"[yellow]{cancelled_count} cancelled[/yellow]")
-            summary = f"[dim]{' · '.join(parts)} · {_fmt_time(total_elapsed)} elapsed[/dim]"
+                parts.append(f"[yellow]{cancelled_count} {t('summary.cancelled')}[/yellow]")
+            parts.append(f"{_fmt_time(total_elapsed)} {t('summary.elapsed')}")
+            summary = f"[dim]{' · '.join(parts)}[/dim]"
 
         table.add_row("", "", summary, "")
 

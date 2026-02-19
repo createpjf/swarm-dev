@@ -363,9 +363,10 @@ def run_doctor_quick(rich_console=None) -> list[tuple[bool, str, str]]:
 
 
 def _print_rich(console, results: list[tuple[bool, str, str]]):
-    """Pretty-print doctor results with rich."""
+    """Pretty-print doctor results with rich, then offer auto-fix for fixable issues."""
     from rich.panel import Panel
     from rich import box
+    from core.i18n import t as _t
 
     lines = []
     ok_count = sum(1 for ok, _, _ in results if ok)
@@ -376,13 +377,89 @@ def _print_rich(console, results: list[tuple[bool, str, str]]):
         lines.append(f"  {icon} [bold]{label:14}[/bold] [dim]{detail}[/dim]")
 
     body = "\n".join(lines)
-    status = "[green]All checks passed[/green]" if ok_count == total else \
-             f"[yellow]{ok_count}/{total} checks passed[/yellow]"
+    if ok_count == total:
+        status = f"[green]{_t('doctor.all_ok')}[/green]"
+    else:
+        status = f"[yellow]{_t('doctor.some_fail', ok=ok_count, total=total)}[/yellow]"
 
     console.print()
     console.print(Panel(
-        f"[bold magenta]Swarm Doctor[/bold magenta]\n\n{body}\n\n  {status}",
+        f"[bold magenta]{_t('doctor.title')}[/bold magenta]\n\n{body}\n\n  {status}",
         border_style="magenta",
         box=box.ROUNDED,
     ))
+    console.print()
+
+    # ── Auto-fix: offer to install missing optional packages ─────────
+    fixable = _detect_fixable(results)
+    if fixable:
+        _offer_auto_fix(console, fixable)
+
+
+# Map of package labels to pip package names for auto-install
+_FIXABLE_PACKAGES = {
+    "chromadb": "chromadb",
+    "web3": "web3",
+    "lit_python_sdk": "lit-python-sdk",
+}
+
+
+def _detect_fixable(results: list[tuple[bool, str, str]]) -> list[str]:
+    """Detect which optional packages could be auto-installed."""
+    fixable = []
+    for ok, label, detail in results:
+        if not ok:
+            detail_lower = detail.lower()
+            if "chromadb" in detail_lower and "not installed" in detail_lower:
+                fixable.append("chromadb")
+            elif "web3" in detail_lower and "not installed" in detail_lower:
+                fixable.append("web3")
+            elif "lit" in detail_lower and "not installed" in detail_lower:
+                fixable.append("lit_python_sdk")
+        elif label == "Memory" and "install chromadb" in detail.lower():
+            fixable.append("chromadb")
+    return fixable
+
+
+def _offer_auto_fix(console, fixable: list[str]):
+    """Offer to install missing packages via questionary."""
+    from core.i18n import t as _t
+    try:
+        import questionary
+        from core.onboard import STYLE
+    except ImportError:
+        return
+
+    # Build checkbox choices
+    choices = []
+    for pkg_key in fixable:
+        pip_name = _FIXABLE_PACKAGES.get(pkg_key, pkg_key)
+        choices.append(questionary.Choice(pip_name, value=pip_name, checked=True))
+
+    selected = questionary.checkbox(
+        _t("doctor.fix_prompt"),
+        choices=choices,
+        style=STYLE,
+    ).ask()
+
+    if not selected:
+        return
+
+    import subprocess
+    for pkg in selected:
+        console.print(f"  [dim]{_t('doctor.installing', pkg=pkg)}[/dim]")
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "install", pkg],
+                capture_output=True, text=True, timeout=120,
+            )
+            if result.returncode == 0:
+                console.print(f"  [green]✓[/green] {_t('doctor.installed', pkg=pkg)}")
+            else:
+                console.print(f"  [red]✗[/red] {_t('doctor.install_fail', pkg=pkg)}")
+                if result.stderr:
+                    console.print(f"    [dim]{result.stderr.strip()[:100]}[/dim]")
+        except Exception as e:
+            console.print(f"  [red]✗[/red] {_t('doctor.install_fail', pkg=pkg)}: {e}")
+
     console.print()
