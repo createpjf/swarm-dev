@@ -1,0 +1,45 @@
+# workflows/research_report.yaml
+# Research and analysis pipeline with approval gate
+
+name: Research Report
+description: Plan research, gather findings, review with approval gate
+
+steps:
+  - id: outline
+    agent: planner
+    prompt: |
+      Create a detailed research outline for: {{task}}
+      Break it down into specific research questions.
+
+  - id: research
+    agent: executor
+    prompt: |
+      Conduct research based on this outline:
+
+      {{outline.result}}
+
+      For each question, provide comprehensive findings with sources.
+    depends_on: [outline]
+
+  - id: synthesize
+    agent: executor
+    prompt: |
+      Synthesize the research findings into a coherent report:
+
+      ## Research Findings
+      {{research.result}}
+
+      Write a professional report with executive summary, key findings,
+      and recommendations.
+    depends_on: [research]
+
+  - id: quality_check
+    agent: reviewer
+    prompt: |
+      Review this research report for accuracy, completeness, and quality:
+
+      {{synthesize.result}}
+
+      Return JSON: {"score": int, "comment": str}
+    depends_on: [synthesize]
+    approval_gate: true

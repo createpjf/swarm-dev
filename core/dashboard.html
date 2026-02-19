@@ -1,0 +1,2534 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Swarm Dashboard</title>
+<style>
+/* ── Reset & Base ─────────────────────────────────────────────── */
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0a0a0f;--bg2:#12121a;--bg3:#1a1a28;--bg4:#22223a;
+  --fg:#e0e0e6;--fg2:#888;--fg3:#555;
+  --accent:#7c6cf0;--accent2:#9d8ff7;
+  --green:#22c55e;--cyan:#06b6d4;--red:#ef4444;--yellow:#eab308;
+  --magenta:#d946ef;--orange:#f97316;
+  --radius:10px;--shadow:0 2px 12px rgba(0,0,0,.4);
+  --font:-apple-system,BlinkMacSystemFont,"SF Pro","PingFang SC","Noto Sans SC",sans-serif;
+  --mono:"SF Mono","Fira Code","JetBrains Mono",Menlo,monospace;
+  --sidebar-w:220px;
+}
+html,body{background:var(--bg);color:var(--fg);font:14px/1.6 var(--font);height:100%;overflow:hidden}
+a{color:var(--accent2);text-decoration:none}
+
+/* ── App Layout: sidebar + content ────────────────────────────── */
+.app{display:flex;height:100vh}
+
+/* ── Sidebar ──────────────────────────────────────────────────── */
+.sidebar{width:var(--sidebar-w);min-width:var(--sidebar-w);background:var(--bg2);border-right:1px solid var(--bg3);display:flex;flex-direction:column;overflow-y:auto}
+.sidebar-logo{padding:16px 18px;font-size:16px;font-weight:700;letter-spacing:-.3px;border-bottom:1px solid var(--bg3);display:flex;align-items:center;gap:8px}
+.sidebar-logo span{color:var(--accent)}
+.status-dot{width:8px;height:8px;border-radius:50%;background:var(--fg3);display:inline-block}
+.status-dot.online{background:var(--green);box-shadow:0 0 6px var(--green)}
+.status-dot.offline{background:var(--red);box-shadow:0 0 6px var(--red)}
+
+/* ── Heartbeat Dot (on agent cards) ──────────────────────────── */
+.hb-dot{width:9px;height:9px;border-radius:50%;display:inline-block;background:var(--fg3);transition:.3s}
+.hb-dot.online{background:var(--green);box-shadow:0 0 6px var(--green);animation:hbPulse 2s infinite}
+.hb-dot.offline{background:var(--fg3)}
+@keyframes hbPulse{0%,100%{opacity:1}50%{opacity:.5}}
+
+/* ── API Key Badge ───────────────────────────────────────────── */
+.key-badge{display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 7px;border-radius:10px;font-family:var(--mono)}
+.key-badge.set{background:rgba(34,197,94,.12);color:var(--green);border:1px solid rgba(34,197,94,.2)}
+.key-badge.unset{background:rgba(239,68,68,.1);color:var(--red);border:1px solid rgba(239,68,68,.2)}
+.key-badge.shared{background:rgba(124,108,240,.1);color:var(--accent2);border:1px solid rgba(124,108,240,.2)}
+
+.nav-section{padding:12px 0 4px}
+.nav-section-title{padding:0 18px 4px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--fg3)}
+.nav-item{display:flex;align-items:center;gap:10px;padding:7px 18px;cursor:pointer;color:var(--fg2);font-size:13px;font-weight:500;transition:.12s;border-left:3px solid transparent}
+.nav-item:hover{color:var(--fg);background:var(--bg3)}
+.nav-item.active{color:var(--accent2);background:rgba(124,108,240,.08);border-left-color:var(--accent)}
+.nav-item .icon{font-size:15px;width:20px;text-align:center}
+
+.sidebar-footer{margin-top:auto;padding:12px 18px;border-top:1px solid var(--bg3);font-size:11px;color:var(--fg3);line-height:1.8}
+.sidebar-footer code{font-family:var(--mono);background:var(--bg3);padding:1px 5px;border-radius:3px;font-size:10px}
+
+/* ── Main Content ─────────────────────────────────────────────── */
+.content{flex:1;overflow-y:auto;padding:20px 28px;min-width:0;min-height:0}
+.panel{display:none}
+.panel.active{display:block}
+
+.page-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+.page-title{font-size:18px;font-weight:700}
+.page-actions{display:flex;gap:8px}
+
+/* ── Cards ────────────────────────────────────────────────────── */
+.card{background:var(--bg2);border:1px solid var(--bg3);border-radius:var(--radius);padding:16px;margin-bottom:12px}
+.card-title{font-size:13px;font-weight:600;color:var(--fg2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px}
+.card-row{display:flex;gap:12px;flex-wrap:wrap}
+.card-row>.card{flex:1;min-width:200px}
+
+/* ── Stats Row ────────────────────────────────────────────────── */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px}
+.stat{background:var(--bg2);border:1px solid var(--bg3);border-radius:var(--radius);padding:12px 14px;text-align:center}
+.stat-value{font-size:24px;font-weight:700;color:var(--fg);font-family:var(--mono)}
+.stat-label{font-size:11px;color:var(--fg2);margin-top:2px}
+.stat-value.green{color:var(--green)}
+.stat-value.red{color:var(--red)}
+.stat-value.cyan{color:var(--cyan)}
+
+/* ── Buttons ──────────────────────────────────────────────────── */
+.btn{background:var(--accent);color:#fff;border:none;padding:7px 16px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;transition:.15s;font-family:var(--font)}
+.btn:hover{background:var(--accent2)}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn-sm{padding:5px 12px;font-size:12px;border-radius:6px}
+.btn-danger{background:var(--red)}
+.btn-danger:hover{background:#dc2626}
+.btn-outline{background:transparent;border:1px solid var(--bg4);color:var(--fg2)}
+.btn-outline:hover{border-color:var(--accent);color:var(--fg)}
+.btn-green{background:var(--green)}
+.btn-green:hover{background:#16a34a}
+
+/* ── Inputs ───────────────────────────────────────────────────── */
+.input{background:var(--bg3);border:1px solid var(--bg4);color:var(--fg);padding:8px 12px;border-radius:8px;font-size:13px;font-family:var(--font);outline:none;width:100%}
+.input:focus{border-color:var(--accent)}
+.input::placeholder{color:var(--fg3)}
+select.input{cursor:pointer}
+textarea.input{resize:vertical;min-height:80px;line-height:1.5}
+textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
+
+/* ── Task Table ───────────────────────────────────────────────── */
+.task-table{width:100%;border-collapse:collapse}
+.task-table th{text-align:left;font-size:11px;font-weight:600;color:var(--fg3);text-transform:uppercase;padding:6px 8px;border-bottom:1px solid var(--bg3)}
+.task-table td{padding:7px 8px;border-bottom:1px solid var(--bg3);font-size:13px;vertical-align:middle}
+.task-table tr:last-child td{border-bottom:none}
+.task-table tbody tr{cursor:pointer;transition:.1s}
+.task-table tbody tr:hover{background:var(--bg3)}
+.status-icon{font-size:14px;width:20px;display:inline-block;text-align:center}
+.status-working{color:var(--cyan)}
+.status-done{color:var(--green)}
+.status-failed{color:var(--red)}
+.status-pending{color:var(--fg3)}
+.status-review{color:var(--magenta)}
+.task-desc{max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.task-time{font-family:var(--mono);font-size:12px;color:var(--fg2)}
+.task-agent{font-weight:500}
+.task-error{color:var(--red);font-size:11px;opacity:.85}
+
+/* ── Task Detail ──────────────────────────────────────────────── */
+.task-detail{background:var(--bg3);padding:12px 14px;font-size:12px;border-radius:0 0 8px 8px;animation:slideDown .15s ease}
+.task-detail pre{background:var(--bg);padding:8px 10px;border-radius:6px;font-family:var(--mono);font-size:11px;line-height:1.5;overflow-x:auto;white-space:pre-wrap;max-height:200px;overflow-y:auto;margin:6px 0}
+.task-detail-row{display:flex;gap:8px;margin:4px 0;align-items:flex-start}
+.task-detail-label{font-weight:600;min-width:90px;color:var(--fg2)}
+.error-badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;background:rgba(239,68,68,.15);color:var(--red)}
+.score-badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600}
+@keyframes slideDown{from{opacity:0;max-height:0}to{opacity:1;max-height:500px}}
+
+/* ── Submit Box ───────────────────────────────────────────────── */
+.submit-box{display:flex;gap:8px;margin-top:12px}
+.submit-box input{flex:1}
+.submit-msg{font-size:12px;color:var(--fg2);margin-top:6px}
+
+/* ── Summary Bar ──────────────────────────────────────────────── */
+.summary-bar{font-size:12px;color:var(--fg2);padding:8px 0;display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+.summary-bar .dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:3px;vertical-align:middle}
+
+/* ── Agent Cards ──────────────────────────────────────────────── */
+.agent-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
+.agent-card{background:var(--bg2);border:1px solid var(--bg3);border-radius:var(--radius);padding:16px;transition:.2s;cursor:pointer}
+.agent-card:hover{border-color:var(--accent);box-shadow:0 0 20px rgba(124,108,240,.1)}
+.agent-card.editing{border-color:var(--accent);box-shadow:0 0 20px rgba(124,108,240,.15)}
+.agent-name{font-size:16px;font-weight:700;margin-bottom:4px}
+.agent-model{font-family:var(--mono);font-size:12px;color:var(--accent2);margin-bottom:8px}
+.agent-meta{font-size:12px;color:var(--fg2);line-height:1.8}
+.agent-meta span{display:inline-block;background:var(--bg3);padding:1px 6px;border-radius:4px;margin:1px 2px;font-size:11px}
+.agent-score{display:flex;align-items:center;gap:8px;margin-top:10px;padding-top:10px;border-top:1px solid var(--bg3)}
+.score-bar{flex:1;height:6px;background:var(--bg4);border-radius:3px;overflow:hidden}
+.score-fill{height:100%;border-radius:3px;transition:width .5s}
+.score-num{font-family:var(--mono);font-size:14px;font-weight:700;min-width:36px;text-align:right}
+
+/* ── Agent Editor (inline below card) ─────────────────────────── */
+.agent-editor{background:var(--bg3);border:1px solid var(--bg4);border-radius:0 0 var(--radius) var(--radius);padding:16px;margin-top:-1px;animation:slideDown .2s ease}
+.agent-editor .field{margin-bottom:12px}
+.agent-editor .field label{display:block;font-size:11px;font-weight:600;color:var(--fg2);text-transform:uppercase;margin-bottom:4px}
+.agent-editor .field-row{display:flex;gap:12px}
+.agent-editor .field-row>.field{flex:1}
+.agent-editor .actions{display:flex;gap:8px;justify-content:flex-end;margin-top:8px}
+
+/* ── Skills Layout ────────────────────────────────────────────── */
+.skills-layout{display:flex;gap:16px;height:calc(100vh - 120px)}
+.skills-list{width:260px;min-width:260px;background:var(--bg2);border:1px solid var(--bg3);border-radius:var(--radius);display:flex;flex-direction:column;overflow:hidden}
+.skills-list-header{padding:10px 12px;border-bottom:1px solid var(--bg3)}
+.skills-list-body{overflow-y:auto;flex:1}
+.skill-group-title{padding:8px 12px 4px;font-size:10px;font-weight:700;text-transform:uppercase;color:var(--fg3);letter-spacing:.5px}
+.skill-item{padding:7px 12px;cursor:pointer;font-size:13px;color:var(--fg2);transition:.1s;border-left:3px solid transparent;display:flex;align-items:center;justify-content:space-between}
+.skill-item:hover{background:var(--bg3);color:var(--fg)}
+.skill-item.active{background:rgba(124,108,240,.08);color:var(--accent2);border-left-color:var(--accent)}
+.skill-item .skill-scope{font-size:10px;padding:1px 5px;border-radius:3px;background:var(--bg4);color:var(--fg3)}
+
+.skills-editor{flex:1;display:flex;flex-direction:column;min-width:0}
+.skills-toolbar{display:flex;align-items:center;gap:8px;padding:10px 0;flex-wrap:wrap}
+.skills-toolbar .skill-filename{font-family:var(--mono);font-size:13px;color:var(--fg2)}
+.skills-editor textarea{flex:1;background:var(--bg2);border:1px solid var(--bg3);border-radius:var(--radius);color:var(--fg);font-family:var(--mono);font-size:12px;line-height:1.6;padding:14px;resize:none;outline:none;min-height:300px}
+.skills-editor textarea:focus{border-color:var(--accent)}
+.skills-empty{display:flex;align-items:center;justify-content:center;flex:1;color:var(--fg3);font-size:14px}
+
+/* ── Health Checks ────────────────────────────────────────────── */
+.checks{list-style:none}
+.checks li{padding:6px 0;border-bottom:1px solid var(--bg3);font-size:13px;display:flex;align-items:center;gap:8px}
+.checks li:last-child{border-bottom:none}
+.check-icon{font-size:14px;width:16px}
+.check-label{font-weight:600;min-width:100px}
+.check-detail{color:var(--fg2);font-size:12px}
+
+/* ── Config View ──────────────────────────────────────────────── */
+.config-pre{background:var(--bg3);border-radius:8px;padding:14px;font-family:var(--mono);font-size:12px;line-height:1.7;overflow-x:auto;color:var(--fg2);white-space:pre-wrap;max-height:400px;overflow-y:auto}
+
+/* ── Gateway Panel ────────────────────────────────────────────── */
+.token-display{display:flex;align-items:center;gap:8px;margin:8px 0}
+.token-display code{flex:1;font-family:var(--mono);font-size:12px;background:var(--bg3);padding:8px 12px;border-radius:6px;word-break:break-all;user-select:all}
+.info-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;margin-top:12px}
+.info-item{padding:10px;background:var(--bg3);border-radius:8px}
+.info-item .info-label{font-size:11px;color:var(--fg3);text-transform:uppercase;margin-bottom:2px}
+.info-item .info-value{font-family:var(--mono);font-size:14px;font-weight:600}
+
+/* ── Logs Panel ───────────────────────────────────────────────── */
+.logs-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.logs-controls select{width:160px}
+.log-levels{display:flex;gap:2px}
+.log-level-btn{padding:4px 10px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;background:var(--bg3);color:var(--fg2);border:1px solid var(--bg4);transition:.12s}
+.log-level-btn:hover{border-color:var(--fg3)}
+.log-level-btn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.log-content{background:var(--bg2);border:1px solid var(--bg3);border-radius:var(--radius);padding:12px;font-family:var(--mono);font-size:11px;line-height:1.6;overflow:auto;max-height:calc(100vh - 220px);white-space:pre-wrap}
+.log-line-error{color:var(--red)}
+.log-line-warn{color:var(--yellow)}
+.log-line-info{color:var(--fg2)}
+.auto-refresh-toggle{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--fg2);cursor:pointer}
+.auto-refresh-toggle input{accent-color:var(--accent)}
+
+/* ── Usage Table ──────────────────────────────────────────────── */
+.usage-table{width:100%;border-collapse:collapse;font-size:13px}
+.usage-table th{text-align:left;font-size:11px;font-weight:600;color:var(--fg3);text-transform:uppercase;padding:6px 10px;border-bottom:1px solid var(--bg3)}
+.usage-table td{padding:6px 10px;border-bottom:1px solid var(--bg3)}
+.usage-table td.mono{font-family:var(--mono)}
+.usage-table tr:hover{background:var(--bg3)}
+
+/* ── Empty State ──────────────────────────────────────────────── */
+.empty{text-align:center;color:var(--fg3);padding:30px 0;font-size:13px}
+
+/* ── Toast ────────────────────────────────────────────────────── */
+.toast{position:fixed;bottom:24px;right:24px;padding:10px 18px;border-radius:8px;font-size:13px;font-weight:500;color:#fff;z-index:999;animation:toastIn .25s ease;pointer-events:none}
+.toast.success{background:var(--green)}
+.toast.error{background:var(--red)}
+.toast.info{background:var(--accent)}
+@keyframes toastIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+
+/* ── Dialog ───────────────────────────────────────────────────── */
+.dialog-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;display:flex;align-items:center;justify-content:center}
+.dialog{background:var(--bg2);border:1px solid var(--bg3);border-radius:12px;padding:24px;min-width:360px;max-width:500px}
+.dialog-title{font-size:16px;font-weight:700;margin-bottom:14px}
+.dialog .field{margin-bottom:12px}
+.dialog .field label{display:block;font-size:11px;font-weight:600;color:var(--fg2);text-transform:uppercase;margin-bottom:4px}
+.dialog .actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
+
+/* ── Overview: Split Layout (top orchestration + bottom chat) ── */
+#panel-overview.active{display:flex!important;flex-direction:column;height:calc(100vh - 44px);gap:0}
+.ov-top{display:flex;flex-direction:column;min-height:120px;max-height:55%;overflow:hidden;border-bottom:none;flex-shrink:0;transition:height .2s}
+.ov-top.collapsed .ov-dispatch{display:none}
+.ov-top.collapsed{min-height:0;max-height:none;height:auto!important}
+.ov-divider{height:4px;background:var(--bg3);cursor:row-resize;flex-shrink:0;position:relative;display:flex;align-items:center;justify-content:center}
+.ov-divider::after{content:'';width:32px;height:3px;border-radius:2px;background:var(--bg4)}
+.ov-divider:hover{background:var(--accent);opacity:.5}
+.ov-bottom{display:flex;flex-direction:column;flex:1;min-height:200px;overflow:hidden}
+.workflow-viz{background:var(--bg2);border:1px solid var(--bg3);border-radius:var(--radius) var(--radius) 0 0;padding:12px 20px 8px;flex-shrink:0}
+.wf-pipeline{display:flex;align-items:center;justify-content:center;gap:0;padding:4px 0 10px}
+.wf-node{display:flex;flex-direction:column;align-items:center;gap:4px;min-width:90px;padding:10px 14px;border-radius:10px;border:1.5px solid var(--bg4);background:var(--bg3);transition:.3s}
+.wf-node.active{border-color:var(--cyan);box-shadow:0 0 18px rgba(6,182,212,.15)}
+.wf-node.active.executor{border-color:var(--green);box-shadow:0 0 18px rgba(34,197,94,.15)}
+.wf-node.active.reviewer{border-color:var(--magenta);box-shadow:0 0 18px rgba(217,70,239,.15)}
+.wf-avatar{font-size:22px;line-height:1}
+.wf-name{font-size:12px;font-weight:700;color:var(--fg)}
+.wf-status{font-size:10px;color:var(--fg3);font-family:var(--mono);transition:.3s}
+.wf-node.active .wf-status{color:var(--cyan)}
+.wf-node.active.executor .wf-status{color:var(--green)}
+.wf-node.active.reviewer .wf-status{color:var(--magenta)}
+.wf-connector{display:flex;align-items:center;width:80px;height:2px;position:relative;margin:0 2px}
+.wf-line{width:100%;height:2px;background:var(--bg4);border-radius:1px;position:relative;overflow:visible}
+.wf-connector.active .wf-line{background:linear-gradient(90deg,var(--cyan),var(--accent))}
+.wf-arrow{position:absolute;right:-3px;top:50%;transform:translateY(-50%);font-size:10px;color:var(--fg3)}
+.wf-connector.active .wf-arrow{color:var(--accent)}
+.wf-stats{text-align:center;font-size:11px;color:var(--fg2);font-family:var(--mono);padding-top:2px}
+
+/* ── Dispatch Log (top panel, compact) ───────────────────────── */
+.ov-dispatch{flex:1;overflow-y:auto;background:var(--bg2);border:1px solid var(--bg3);border-top:none;border-radius:0 0 var(--radius) var(--radius);padding:6px 10px;min-height:0}
+.ov-dispatch::-webkit-scrollbar{width:4px}
+.ov-dispatch::-webkit-scrollbar-thumb{background:var(--bg4);border-radius:2px}
+.dispatch-entry{display:flex;align-items:center;gap:6px;padding:3px 0;font-size:11px;color:var(--fg2);border-bottom:1px solid rgba(255,255,255,.03);animation:chatIn .15s ease}
+.dispatch-entry:last-child{border-bottom:none}
+.dispatch-icon{width:16px;text-align:center;font-size:12px;flex-shrink:0}
+.dispatch-agent{font-weight:600;min-width:56px;flex-shrink:0}
+.dispatch-agent.planner-d{color:var(--cyan)}
+.dispatch-agent.executor-d{color:var(--green)}
+.dispatch-agent.reviewer-d{color:var(--magenta)}
+.dispatch-text{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dispatch-tokens{font-family:var(--mono);font-size:9px;color:var(--fg3);flex-shrink:0}
+.dispatch-tokens .tok-in{color:var(--cyan)}
+.dispatch-tokens .tok-out{color:var(--green)}
+.dispatch-time{font-family:var(--mono);font-size:9px;color:var(--fg3);min-width:36px;text-align:right;flex-shrink:0}
+.dispatch-live{display:inline-flex;align-items:center;gap:3px}
+.dispatch-live-dot{width:5px;height:5px;border-radius:50%;animation:livePulse 1.2s infinite}
+.dispatch-toggle{display:flex;align-items:center;justify-content:center;gap:4px;padding:2px 8px;cursor:pointer;font-size:10px;color:var(--fg3);background:var(--bg2);border:1px solid var(--bg3);border-radius:0 0 6px 6px;margin:-1px auto 0;width:fit-content;transition:.15s}
+.dispatch-toggle:hover{color:var(--fg);border-color:var(--accent)}
+
+/* ── Workflow: Data Packet Animation ─────────────────────────── */
+.wf-packet{position:absolute;top:50%;transform:translate(-50%,-50%);width:10px;height:10px;border-radius:50%;opacity:0;pointer-events:none;filter:blur(0px);z-index:5}
+.wf-packet.animating{animation:wfPacketMove 1s ease-in-out forwards}
+.wf-packet.planner-packet{background:var(--cyan);box-shadow:0 0 10px var(--cyan),0 0 20px rgba(6,182,212,.3)}
+.wf-packet.executor-packet{background:var(--green);box-shadow:0 0 10px var(--green),0 0 20px rgba(34,197,94,.3)}
+.wf-packet.reviewer-packet{background:var(--magenta);box-shadow:0 0 10px var(--magenta),0 0 20px rgba(217,70,239,.3)}
+@keyframes wfPacketMove{0%{left:0;opacity:0;transform:translate(-50%,-50%) scale(.4)}10%{opacity:1;transform:translate(-50%,-50%) scale(1)}50%{transform:translate(-50%,-50%) scale(1.2)}90%{opacity:1;transform:translate(-50%,-50%) scale(1)}100%{left:100%;opacity:0;transform:translate(-50%,-50%) scale(.4)}}
+
+/* ── Workflow: Pulse ring on receiving node ───────────────────── */
+.wf-node.receiving{animation:wfReceivePulse .6s ease}
+@keyframes wfReceivePulse{0%{box-shadow:0 0 0 0 rgba(124,108,240,.4)}50%{box-shadow:0 0 0 12px rgba(124,108,240,0)}100%{box-shadow:none}}
+.wf-node.receiving.executor{animation-name:wfReceivePulseGreen}
+@keyframes wfReceivePulseGreen{0%{box-shadow:0 0 0 0 rgba(34,197,94,.4)}50%{box-shadow:0 0 0 12px rgba(34,197,94,0)}100%{box-shadow:none}}
+.wf-node.receiving.reviewer{animation-name:wfReceivePulseMagenta}
+@keyframes wfReceivePulseMagenta{0%{box-shadow:0 0 0 0 rgba(217,70,239,.4)}50%{box-shadow:0 0 0 12px rgba(217,70,239,0)}100%{box-shadow:none}}
+
+/* ── Overview: Chat Messages (bottom panel) ──────────────────── */
+.chat-messages{flex:1;overflow-y:auto;padding:16px 12px;display:flex;flex-direction:column;gap:12px;min-height:0}
+.chat-messages::-webkit-scrollbar{width:5px}
+.chat-messages::-webkit-scrollbar-track{background:transparent}
+.chat-messages::-webkit-scrollbar-thumb{background:var(--bg4);border-radius:3px}
+.chat-welcome{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;gap:10px;color:var(--fg3);min-height:200px}
+.chat-welcome-icon{font-size:42px;opacity:.4}
+.chat-welcome-text{font-size:20px;font-weight:700;color:var(--fg)}
+.chat-welcome-sub{font-size:13px;max-width:320px;text-align:center;line-height:1.6}
+
+.chat-msg{display:flex;gap:10px;max-width:88%;animation:chatIn .2s ease}
+.chat-msg.user{align-self:flex-end;flex-direction:row-reverse}
+.chat-msg.system{align-self:center;max-width:90%}
+.chat-msg.agent{align-self:flex-start}
+.chat-msg.assistant{align-self:flex-start;max-width:95%}
+@keyframes chatIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+
+.chat-avatar{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;background:var(--bg4)}
+.chat-avatar.planner{background:rgba(6,182,212,.15);border:1px solid rgba(6,182,212,.3)}
+.chat-avatar.executor{background:rgba(34,197,94,.15);border:1px solid rgba(34,197,94,.3)}
+.chat-avatar.reviewer{background:rgba(217,70,239,.15);border:1px solid rgba(217,70,239,.3)}
+.chat-avatar.user-av{background:rgba(124,108,240,.15);border:1px solid rgba(124,108,240,.3)}
+
+.chat-bubble{padding:8px 12px;border-radius:10px;font-size:13px;line-height:1.55;word-break:break-word}
+.chat-bubble.user-bubble{background:var(--accent);color:#fff;border-bottom-right-radius:3px}
+.chat-bubble.agent-bubble{background:var(--bg2);border:1px solid var(--bg3);border-bottom-left-radius:3px}
+.chat-bubble.agent-bubble.planner-bubble{border-left:3px solid var(--cyan)}
+.chat-bubble.agent-bubble.executor-bubble{border-left:3px solid var(--green)}
+.chat-bubble.agent-bubble.reviewer-bubble{border-left:3px solid var(--magenta)}
+.chat-bubble.system-bubble{background:var(--bg3);color:var(--fg2);font-size:12px;padding:5px 12px;border-radius:14px}
+.chat-bubble.assistant-bubble{background:var(--bg2);border:1px solid var(--bg3);border-radius:10px;border-bottom-left-radius:3px;padding:12px 16px;font-size:13px;line-height:1.7}
+.chat-bubble.assistant-bubble .asst-header{display:flex;align-items:center;gap:6px;margin-bottom:8px;font-size:11px;color:var(--fg3)}
+.chat-bubble.assistant-bubble .asst-header .asst-label{font-weight:700;color:var(--accent2)}
+.chat-bubble.assistant-bubble .asst-body{white-space:pre-wrap;word-break:break-word}
+.chat-bubble.assistant-bubble .asst-body h1,.chat-bubble.assistant-bubble .asst-body h2,.chat-bubble.assistant-bubble .asst-body h3{color:var(--fg);margin:8px 0 4px;font-size:14px}
+.chat-bubble.assistant-bubble pre{background:var(--bg);padding:10px 12px;border-radius:6px;font-family:var(--mono);font-size:11px;line-height:1.5;overflow-x:auto;white-space:pre-wrap;max-height:300px;overflow-y:auto;margin:8px 0}
+.chat-bubble.assistant-bubble .asst-tokens{display:flex;gap:8px;margin-top:8px;padding-top:8px;border-top:1px solid var(--bg3);font-family:var(--mono);font-size:9px;color:var(--fg3)}
+
+.chat-bubble pre{background:var(--bg);padding:8px 10px;border-radius:6px;font-family:var(--mono);font-size:11px;line-height:1.5;overflow-x:auto;white-space:pre-wrap;max-height:200px;overflow-y:auto;margin:6px 0 2px}
+.chat-bubble .chat-agent-name{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px}
+.chat-bubble .chat-agent-name.planner-name{color:var(--cyan)}
+.chat-bubble .chat-agent-name.executor-name{color:var(--green)}
+.chat-bubble .chat-agent-name.reviewer-name{color:var(--magenta)}
+.chat-bubble .chat-score{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;margin-top:4px}
+.chat-bubble .chat-task-id{font-family:var(--mono);font-size:10px;color:var(--fg3);margin-top:2px}
+.chat-bubble .chat-tokens{display:inline-flex;align-items:center;gap:4px;font-family:var(--mono);font-size:9px;color:var(--fg3);margin-top:3px;padding:2px 6px;background:var(--bg);border-radius:4px}
+.chat-bubble .chat-tokens .tok-in{color:var(--cyan)}
+.chat-bubble .chat-tokens .tok-out{color:var(--green)}
+.chat-bubble .chat-tokens .tok-sep{color:var(--fg3);margin:0 1px}
+.chat-result-toggle{font-size:11px;color:var(--accent2);cursor:pointer;margin-top:4px;user-select:none}
+.chat-result-toggle:hover{text-decoration:underline}
+.chat-result-content{display:none}
+.chat-result-content.open{display:block}
+
+.chat-typing{display:flex;gap:4px;padding:4px 12px;align-items:center}
+.chat-typing-dot{width:5px;height:5px;border-radius:50%;background:var(--fg3);animation:typingBounce .8s infinite}
+.chat-typing-dot:nth-child(2){animation-delay:.15s}
+.chat-typing-dot:nth-child(3){animation-delay:.3s}
+@keyframes typingBounce{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-5px)}}
+
+/* ── Live agent status indicator ─────────────────────────────── */
+.chat-live-status{display:flex;gap:8px;max-width:85%;animation:chatIn .2s ease;align-self:flex-start}
+.chat-live-inner{display:flex;align-items:center;gap:8px;padding:6px 12px;background:var(--bg2);border:1px solid var(--bg3);border-radius:10px;border-bottom-left-radius:3px;font-size:12px;color:var(--fg2)}
+.chat-live-inner .live-dot{width:7px;height:7px;border-radius:50%;animation:livePulse 1.2s infinite}
+.chat-live-inner.planner-live{border-left:3px solid var(--cyan)}
+.chat-live-inner.planner-live .live-dot{background:var(--cyan)}
+.chat-live-inner.executor-live{border-left:3px solid var(--green)}
+.chat-live-inner.executor-live .live-dot{background:var(--green)}
+.chat-live-inner.reviewer-live{border-left:3px solid var(--magenta)}
+.chat-live-inner.reviewer-live .live-dot{background:var(--magenta)}
+@keyframes livePulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+/* ── Overview: Chat Input ────────────────────────────────────── */
+.chat-input-area{padding:10px 0 4px;border-top:1px solid var(--bg3);flex-shrink:0}
+.chat-attachments{display:flex;gap:6px;flex-wrap:wrap;padding-bottom:6px}
+.chat-attach-thumb{position:relative;width:56px;height:56px;border-radius:8px;overflow:hidden;border:1px solid var(--bg4);background:var(--bg3)}
+.chat-attach-thumb img{width:100%;height:100%;object-fit:cover}
+.chat-attach-thumb .chat-attach-name{position:absolute;bottom:0;left:0;right:0;font-size:8px;background:rgba(0,0,0,.7);color:var(--fg);padding:1px 3px;text-overflow:ellipsis;overflow:hidden;white-space:nowrap}
+.chat-attach-remove{position:absolute;top:-4px;right:-4px;width:16px;height:16px;border-radius:50%;background:var(--red);color:#fff;font-size:10px;display:flex;align-items:center;justify-content:center;cursor:pointer;border:1.5px solid var(--bg);z-index:1}
+.chat-input-row{display:flex;gap:8px;align-items:flex-end}
+.chat-input-actions{display:flex;gap:2px;flex-shrink:0}
+.chat-action-btn{width:34px;height:34px;border-radius:8px;border:1px solid var(--bg4);background:var(--bg3);color:var(--fg2);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:15px;transition:.15s;flex-shrink:0}
+.chat-action-btn:hover{border-color:var(--accent);color:var(--fg)}
+.chat-action-btn.active{background:rgba(124,108,240,.15);border-color:var(--accent);color:var(--accent2)}
+.chat-textarea{flex:1;background:var(--bg3);border:1px solid var(--bg4);color:var(--fg);padding:9px 12px;border-radius:10px;font-size:13px;font-family:var(--font);outline:none;resize:none;line-height:1.5;max-height:120px;overflow-y:auto;min-height:38px}
+.chat-textarea:focus{border-color:var(--accent)}
+.chat-textarea::placeholder{color:var(--fg3)}
+.chat-send{padding:9px 18px;border-radius:10px;height:38px;display:flex;align-items:center;gap:5px}
+.chat-send:disabled{opacity:.3}
+
+/* ── Chat: Search indicator ──────────────────────────────────── */
+.chat-search-indicator{display:flex;align-items:center;gap:6px;padding:4px 10px;margin-bottom:4px;font-size:11px;color:var(--cyan);background:rgba(6,182,212,.06);border:1px solid rgba(6,182,212,.15);border-radius:8px}
+.chat-search-indicator .search-spinner{width:12px;height:12px;border:2px solid rgba(6,182,212,.2);border-top-color:var(--cyan);border-radius:50%;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── Chat: Image in messages ─────────────────────────────────── */
+.chat-bubble .chat-images{display:flex;gap:4px;flex-wrap:wrap;margin-top:6px}
+.chat-bubble .chat-images img{max-width:200px;max-height:150px;border-radius:6px;cursor:pointer;border:1px solid var(--bg4)}
+.chat-bubble .chat-images img:hover{border-color:var(--accent)}
+.chat-bubble .chat-file-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:6px;background:var(--bg3);font-size:11px;color:var(--fg2);margin-top:4px}
+
+/* ── Chat: Search result cards ───────────────────────────────── */
+.chat-search-results{margin-top:6px}
+.chat-search-card{background:var(--bg);border:1px solid var(--bg4);border-radius:6px;padding:8px 10px;margin:3px 0;font-size:12px}
+.chat-search-card a{color:var(--accent2);font-weight:600;font-size:12px}
+.chat-search-card .search-snippet{color:var(--fg2);font-size:11px;margin-top:2px;line-height:1.4}
+
+/* ── Responsive ───────────────────────────────────────────────── */
+@media(max-width:800px){
+  .sidebar{width:56px;min-width:56px}
+  .nav-section-title,.nav-item span:not(.icon),.sidebar-footer,.sidebar-logo span,.sidebar-logo div:not(:first-child){display:none}
+  .nav-item{justify-content:center;padding:10px 0}
+  .nav-item .icon{margin:0}
+  .content{padding:12px 14px}
+  .skills-layout{flex-direction:column;height:auto}
+  .skills-list{width:100%;min-width:0;max-height:200px}
+  .agent-grid{grid-template-columns:1fr}
+  .wf-pipeline{gap:0}
+  .wf-node{min-width:70px;padding:8px 10px}
+  .wf-connector{width:30px}
+  .wf-name{font-size:11px}
+  .chat-msg{max-width:92%}
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+<!-- ═══════════════ Sidebar ═══════════════ -->
+<nav class="sidebar">
+  <div class="sidebar-logo">
+    ⬡ <span>Swarm</span>
+    <span class="status-dot" id="statusDot"></span>
+  </div>
+
+  <div class="nav-section">
+    <div class="nav-section-title">Monitor</div>
+    <div class="nav-item active" data-panel="overview" onclick="switchPanel('overview')">
+      <span class="icon">📊</span><span>Overview</span>
+    </div>
+  </div>
+
+  <div class="nav-section">
+    <div class="nav-section-title">Manage</div>
+    <div class="nav-item" data-panel="agents" onclick="switchPanel('agents')">
+      <span class="icon">🤖</span><span>Agents</span>
+    </div>
+    <div class="nav-item" data-panel="skills" onclick="switchPanel('skills')">
+      <span class="icon">📝</span><span>Skills</span>
+    </div>
+    <div class="nav-item" data-panel="usage" onclick="switchPanel('usage')">
+      <span class="icon">📈</span><span>Usage</span>
+    </div>
+  </div>
+
+  <div class="nav-section">
+    <div class="nav-section-title">System</div>
+    <div class="nav-item" data-panel="config" onclick="switchPanel('config')">
+      <span class="icon">⚙️</span><span>Config</span>
+    </div>
+    <div class="nav-item" data-panel="gateway" onclick="switchPanel('gateway')">
+      <span class="icon">🔑</span><span>Gateway</span>
+    </div>
+    <div class="nav-item" data-panel="health" onclick="switchPanel('health')">
+      <span class="icon">💚</span><span>Health</span>
+    </div>
+    <div class="nav-item" data-panel="logs" onclick="switchPanel('logs')">
+      <span class="icon">📋</span><span>Logs</span>
+    </div>
+    <div class="nav-item" data-panel="chain" onclick="switchPanel('chain')">
+      <span class="icon">⛓️</span><span>Chain</span>
+    </div>
+    <div class="nav-item" data-panel="memory" onclick="switchPanel('memory')">
+      <span class="icon">🧠</span><span>Memory</span>
+    </div>
+  </div>
+
+  <div class="sidebar-footer">
+    <div id="footerAgents">0/0 agents online</div>
+    <div id="footerUptime">uptime —</div>
+    <div><code id="footerPort">:19789</code></div>
+  </div>
+</nav>
+
+<!-- ═══════════════ Main Content ═══════════════ -->
+<main class="content">
+
+<!-- ── Panel: Overview ── -->
+<div class="panel active" id="panel-overview">
+  <!-- ═══ TOP: Orchestration Panel ═══ -->
+  <div class="ov-top" id="ovTop">
+    <div class="workflow-viz">
+      <div class="wf-pipeline">
+        <div class="wf-node" id="wfPlanner">
+          <div class="wf-avatar">📋</div>
+          <div class="wf-name">Planner</div>
+          <div class="wf-status" id="wfPlannerStatus">idle</div>
+        </div>
+        <div class="wf-connector" id="wfConn1"><div class="wf-line"><div class="wf-packet planner-packet" id="wfPacket1"></div></div><span class="wf-arrow">›</span></div>
+        <div class="wf-node" id="wfExecutor">
+          <div class="wf-avatar">⚙️</div>
+          <div class="wf-name">Executor</div>
+          <div class="wf-status" id="wfExecutorStatus">idle</div>
+        </div>
+        <div class="wf-connector" id="wfConn2"><div class="wf-line"><div class="wf-packet executor-packet" id="wfPacket2"></div></div><span class="wf-arrow">›</span></div>
+        <div class="wf-node" id="wfReviewer">
+          <div class="wf-avatar">🔍</div>
+          <div class="wf-name">Reviewer</div>
+          <div class="wf-status" id="wfReviewerStatus">idle</div>
+        </div>
+      </div>
+      <div class="wf-stats" id="wfStats">Ready — submit a task to start</div>
+    </div>
+    <div class="ov-dispatch" id="dispatchLog"></div>
+  </div>
+
+  <!-- ═══ DIVIDER ═══ -->
+  <div class="ov-divider" id="ovDivider"></div>
+
+  <!-- ═══ BOTTOM: ChatBox ═══ -->
+  <div class="ov-bottom">
+    <div class="chat-messages" id="chatMessages">
+      <div class="chat-welcome">
+        <div class="chat-welcome-icon">⬡</div>
+        <div class="chat-welcome-text">What can I help you with?</div>
+        <div class="chat-welcome-sub">Your task will be planned, executed, and reviewed by the Swarm agent team</div>
+      </div>
+    </div>
+    <div class="chat-input-area">
+      <div class="chat-attachments" id="chatAttachments" style="display:none"></div>
+      <div class="chat-input-row">
+        <div class="chat-input-actions">
+          <button class="chat-action-btn" title="Attach file" onclick="document.getElementById('chatFileInput').click()">📎</button>
+          <button class="chat-action-btn" id="searchToggle" title="Web search (Brave)" onclick="toggleSearchMode()">🔍</button>
+          <input type="file" id="chatFileInput" multiple accept="image/*,.pdf,.txt,.md,.json,.csv,.py,.js,.ts" style="display:none" onchange="handleFileSelect(this)">
+        </div>
+        <textarea class="chat-textarea" id="chatInput" rows="1"
+                  placeholder="Message Swarm…"></textarea>
+        <button class="btn chat-send" id="chatSend" onclick="chatSubmit()">Send ↑</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Panel: Agents ── -->
+<div class="panel" id="panel-agents">
+  <div class="page-header">
+    <div class="page-title">Agents</div>
+    <div style="font-size:12px;color:var(--fg3)">Click an agent card to edit</div>
+  </div>
+  <div class="agent-grid" id="agentGrid">
+    <div class="empty">Loading agents…</div>
+  </div>
+</div>
+
+<!-- ── Panel: Skills ── -->
+<div class="panel" id="panel-skills">
+  <div class="page-header">
+    <div class="page-title">Skills</div>
+    <div class="page-actions">
+      <button class="btn btn-sm btn-outline" onclick="showCreateDialog()">+ New Skill</button>
+      <label class="btn btn-sm btn-outline" style="cursor:pointer">
+        ↑ Upload <input type="file" accept=".md" style="display:none" onchange="uploadSkill(this)">
+      </label>
+    </div>
+  </div>
+  <div class="skills-layout">
+    <div class="skills-list">
+      <div class="skills-list-header">
+        <input class="input" type="text" placeholder="Search skills…" id="skillSearch" oninput="filterSkills()">
+      </div>
+      <div class="skills-list-body" id="skillsListBody">
+        <div class="empty">Loading…</div>
+      </div>
+    </div>
+    <div class="skills-editor" id="skillsEditor">
+      <div class="skills-empty">Select a skill from the list</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Panel: Usage ── -->
+<div class="panel" id="panel-usage">
+  <div class="page-header"><div class="page-title">Usage</div></div>
+  <div class="stats" id="usageStats">
+    <div class="stat"><div class="stat-value" id="uCalls">0</div><div class="stat-label">API Calls</div></div>
+    <div class="stat"><div class="stat-value" id="uTokens">0</div><div class="stat-label">Tokens</div></div>
+    <div class="stat"><div class="stat-value green" id="uCost">$0</div><div class="stat-label">Est. Cost</div></div>
+    <div class="stat"><div class="stat-value cyan" id="uRetries">0</div><div class="stat-label">Retries</div></div>
+  </div>
+  <div class="card-row">
+    <div class="card">
+      <div class="card-title">By Agent</div>
+      <div id="usageByAgent"><div class="empty">No usage data</div></div>
+    </div>
+    <div class="card">
+      <div class="card-title">By Model</div>
+      <div id="usageByModel"><div class="empty">No usage data</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Panel: Config ── -->
+<div class="panel" id="panel-config">
+  <div class="page-header"><div class="page-title">Configuration</div></div>
+  <div class="card-row">
+    <div class="card">
+      <div class="card-title">Agent Configuration</div>
+      <pre class="config-pre" id="configView">Loading…</pre>
+    </div>
+    <div class="card">
+      <div class="card-title">Resilience</div>
+      <pre class="config-pre" id="resilienceView">Loading…</pre>
+    </div>
+  </div>
+</div>
+
+<!-- ── Panel: Gateway ── -->
+<div class="panel" id="panel-gateway">
+  <div class="page-header"><div class="page-title">Gateway</div></div>
+  <div class="card">
+    <div class="card-title">API Token</div>
+    <div class="token-display">
+      <code id="gatewayToken">Loading…</code>
+      <button class="btn btn-sm" onclick="copyToken()">Copy</button>
+      <button class="btn btn-sm btn-danger" onclick="regenerateToken()">Regenerate</button>
+    </div>
+    <div style="font-size:11px;color:var(--fg3);margin-top:4px">Use this token in Authorization header: <code>Bearer &lt;token&gt;</code></div>
+  </div>
+  <div class="card">
+    <div class="card-title">Server Info</div>
+    <div class="info-grid" id="gatewayInfo">
+      <div class="info-item"><div class="info-label">Port</div><div class="info-value" id="gwPort">—</div></div>
+      <div class="info-item"><div class="info-label">Uptime</div><div class="info-value" id="gwUptime">—</div></div>
+      <div class="info-item"><div class="info-label">Status</div><div class="info-value" id="gwStatus" style="color:var(--green)">—</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Panel: Health ── -->
+<div class="panel" id="panel-health">
+  <div class="page-header"><div class="page-title">System Health</div></div>
+  <div class="card">
+    <div class="card-title">Health Checks</div>
+    <ul class="checks" id="healthChecks"><li class="empty">Running checks…</li></ul>
+  </div>
+</div>
+
+<!-- ── Panel: Logs ── -->
+<div class="panel" id="panel-logs">
+  <div class="page-header"><div class="page-title">Logs</div></div>
+  <div class="logs-controls">
+    <select class="input" id="logAgentSelect" onchange="loadLogs()" style="width:160px">
+      <option value="">Select agent…</option>
+    </select>
+    <input class="input" type="text" id="logSearch" placeholder="Search…" style="width:180px" oninput="loadLogs()">
+    <div class="log-levels">
+      <div class="log-level-btn active" data-level="" onclick="setLogLevel(this)">All</div>
+      <div class="log-level-btn" data-level="INFO" onclick="setLogLevel(this)">Info</div>
+      <div class="log-level-btn" data-level="WARNING" onclick="setLogLevel(this)">Warn</div>
+      <div class="log-level-btn" data-level="ERROR" onclick="setLogLevel(this)">Error</div>
+    </div>
+    <label class="auto-refresh-toggle">
+      <input type="checkbox" id="logAutoRefresh" onchange="toggleLogAutoRefresh()"> Auto-refresh
+    </label>
+  </div>
+  <div class="log-content" id="logContent">Select an agent to view logs.</div>
+</div>
+
+<!-- ── Panel: Chain ── -->
+<div class="panel" id="panel-chain">
+  <div class="page-header">
+    <div class="page-title">On-Chain Identity</div>
+    <div class="page-actions"><button class="btn" onclick="loadChain()">Refresh</button></div>
+  </div>
+
+  <div class="stat-grid" id="chainStats" style="margin-bottom:18px">
+    <div class="stat-card"><div class="stat-value" id="chainNetwork">—</div><div class="stat-label">Network</div></div>
+    <div class="stat-card"><div class="stat-value" id="chainLitNet">—</div><div class="stat-label">Lit Network</div></div>
+    <div class="stat-card"><div class="stat-value" id="chainAgents">—</div><div class="stat-label">Registered</div></div>
+    <div class="stat-card"><div class="stat-value" id="chainX402">—</div><div class="stat-label">x402</div></div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Agent Identities</div>
+    <table class="data-table">
+      <thead><tr>
+        <th>Agent</th><th>Status</th><th>PKP Address</th><th>Chain ID</th><th>USDC</th><th>Actions</th>
+      </tr></thead>
+      <tbody id="chainAgentsBody"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <div class="card-title">Recent Transactions</div>
+    <div id="chainTxList" style="font-family:var(--mono);font-size:12px;color:var(--fg2)">Loading…</div>
+  </div>
+</div>
+
+<!-- ── Panel: Memory ── -->
+<div class="panel" id="panel-memory">
+  <div class="page-header">
+    <div class="page-title">Agent Memory</div>
+    <div class="page-actions"><button class="btn" onclick="loadMemory()">Refresh</button></div>
+  </div>
+
+  <div class="stat-grid" id="memStats" style="margin-bottom:18px">
+    <div class="stat-card"><div class="stat-value" id="memEpisodes">—</div><div class="stat-label">Episodes</div></div>
+    <div class="stat-card"><div class="stat-value" id="memCases">—</div><div class="stat-label">Cases</div></div>
+    <div class="stat-card"><div class="stat-value" id="memPatterns">—</div><div class="stat-label">Patterns</div></div>
+    <div class="stat-card"><div class="stat-value" id="memNotes">—</div><div class="stat-label">KB Notes</div></div>
+  </div>
+
+  <!-- Per-Agent Memory -->
+  <div class="card">
+    <div class="card-title">Per-Agent Memory</div>
+    <table class="data-table">
+      <thead><tr>
+        <th>Agent</th><th>Episodes</th><th>Cases</th><th>Patterns</th><th>Daily Logs</th>
+      </tr></thead>
+      <tbody id="memAgentsBody"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+
+  <!-- Knowledge Base Notes -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-title">Shared Knowledge Base</div>
+    <div id="memKBList" style="font-family:var(--mono);font-size:12px;color:var(--fg2)">Loading…</div>
+  </div>
+
+  <!-- Recent Insights -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-title">Cross-Agent Insights</div>
+    <div id="memInsightsList" style="font-family:var(--mono);font-size:12px;color:var(--fg2)">Loading…</div>
+  </div>
+</div>
+
+</main>
+</div><!-- .app -->
+
+<!-- ═══════════════ Create Skill Dialog ═══════════════ -->
+<div class="dialog-overlay" id="createDialog" style="display:none" onclick="if(event.target===this)closeCreateDialog()">
+  <div class="dialog">
+    <div class="dialog-title">Create New Skill</div>
+    <div class="field">
+      <label>Skill Name</label>
+      <input class="input" id="newSkillName" placeholder="e.g. planning, code-review">
+    </div>
+    <div class="field">
+      <label>Scope</label>
+      <select class="input" id="newSkillScope">
+        <option value="shared">Shared (all agents)</option>
+      </select>
+    </div>
+    <div class="actions">
+      <button class="btn btn-outline" onclick="closeCreateDialog()">Cancel</button>
+      <button class="btn" onclick="createSkill()">Create</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ══════════════════════════════════════════════════════════════════
+   Swarm Dashboard — Vanilla JS — OpenClaw-inspired Sidebar
+   ══════════════════════════════════════════════════════════════════ */
+
+const API = '';  // same origin
+let TOKEN = localStorage.getItem('swarm_token') || '';
+
+// ── State ───────────────────────────────────────────────────────
+let currentPanel = 'overview';
+let editingAgent = null;
+let currentSkill = null;
+let skillsDirty = false;
+let skillsData = null;
+let logLevel = '';
+let logAutoRefreshTimer = null;
+let expandedTaskId = null;
+let allTasks = {};
+let heartbeatData = {};  // {agent_id: {online, status, task_id, ...}}
+
+// ── Chat state (Overview panel) ──
+let chatMsgs = [];              // {id, type:'user'|'agent'|'system', agent, text, ts, taskId}
+let chatPrevSnapshot = {};      // previous polling snapshot for diff
+let chatTaskMap = {};           // taskId → Set of generated message types (dedup)
+let chatMsgCounter = 0;        // unique msg id counter
+
+// ══════════════════════════════════════════════════════════════════
+//  AUTH & API HELPERS
+// ══════════════════════════════════════════════════════════════════
+
+function authHeaders() {
+  const h = {'Content-Type':'application/json'};
+  if (TOKEN) h['Authorization'] = 'Bearer ' + TOKEN;
+  return h;
+}
+
+async function api(path) {
+  try {
+    const r = await fetch(API + path, {headers: authHeaders()});
+    if (r.status === 401) {
+      const t = prompt('Enter Gateway token:');
+      if (t) { TOKEN = t; localStorage.setItem('swarm_token', t); return api(path); }
+      return null;
+    }
+    return await r.json();
+  } catch(e) { return null; }
+}
+
+async function apiPost(path, body) {
+  try {
+    const r = await fetch(API + path, {method:'POST', headers: authHeaders(), body: JSON.stringify(body)});
+    if (r.status === 401) {
+      const t = prompt('Enter Gateway token:');
+      if (t) { TOKEN = t; localStorage.setItem('swarm_token', t); return apiPost(path, body); }
+      return null;
+    }
+    return await r.json();
+  } catch(e) { return null; }
+}
+
+async function apiPut(path, body) {
+  try {
+    const r = await fetch(API + path, {method:'PUT', headers: authHeaders(), body: JSON.stringify(body)});
+    if (r.status === 401) {
+      const t = prompt('Enter Gateway token:');
+      if (t) { TOKEN = t; localStorage.setItem('swarm_token', t); return apiPut(path, body); }
+      return null;
+    }
+    return await r.json();
+  } catch(e) { return null; }
+}
+
+async function apiDelete(path) {
+  try {
+    const r = await fetch(API + path, {method:'DELETE', headers: authHeaders()});
+    if (r.status === 401) {
+      const t = prompt('Enter Gateway token:');
+      if (t) { TOKEN = t; localStorage.setItem('swarm_token', t); return apiDelete(path); }
+      return null;
+    }
+    return await r.json();
+  } catch(e) { return null; }
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  HELPERS
+// ══════════════════════════════════════════════════════════════════
+
+function fmtTime(s) {
+  if (!s || s <= 0) return '—';
+  if (s < 60) return s.toFixed(1) + 's';
+  const m = Math.floor(s/60), sec = Math.floor(s%60);
+  if (m < 60) return m + 'm' + String(sec).padStart(2,'0') + 's';
+  const h = Math.floor(m/60), rm = m%60;
+  return h + 'h' + String(rm).padStart(2,'0') + 'm';
+}
+function fmtNum(n) { return n != null ? n.toLocaleString() : '0'; }
+function truncate(s, n) { return s && s.length > n ? s.slice(0,n-1)+'…' : (s||''); }
+function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function statusIcon(status) {
+  switch(status) {
+    case 'claimed': return '<span class="status-icon status-working">●</span>';
+    case 'completed': return '<span class="status-icon status-done">✓</span>';
+    case 'failed': return '<span class="status-icon status-failed">✗</span>';
+    case 'review': return '<span class="status-icon status-review">◆</span>';
+    default: return '<span class="status-icon status-pending">○</span>';
+  }
+}
+
+function parseError(flags) {
+  for (const f of (flags||[])) {
+    if (!f.startsWith('failed:')) continue;
+    const err = f.slice(7);
+    if (err.includes('401')) return 'API Key Invalid (401)';
+    if (err.includes('403')) return 'Permission Denied (403)';
+    if (err.includes('429')) return 'Rate Limited (429)';
+    if (/timeout|timed out/i.test(err)) return 'Request Timeout';
+    if (/connect/i.test(err)) return 'Connection Failed';
+    return truncate(err.split('\n')[0], 60);
+  }
+  return '';
+}
+
+function classifyError(err) {
+  if (!err) return null;
+  if (err.includes('401')) return {label:'API Key', color:'var(--red)'};
+  if (err.includes('429')) return {label:'Rate Limit', color:'var(--orange)'};
+  if (/timeout/i.test(err)) return {label:'Timeout', color:'var(--yellow)'};
+  if (/connect/i.test(err)) return {label:'Connection', color:'var(--magenta)'};
+  return {label:'Error', color:'var(--red)'};
+}
+
+function scoreColor(score) {
+  if (score >= 80) return 'var(--green)';
+  if (score >= 60) return 'var(--yellow)';
+  if (score >= 40) return 'var(--orange)';
+  return 'var(--red)';
+}
+
+function toast(msg, type='success') {
+  const el = document.createElement('div');
+  el.className = 'toast ' + type;
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 2500);
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  SIDEBAR NAVIGATION
+// ══════════════════════════════════════════════════════════════════
+
+function switchPanel(name) {
+  currentPanel = name;
+  document.querySelectorAll('.nav-item').forEach(n => {
+    n.classList.toggle('active', n.dataset.panel === name);
+  });
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  const p = document.getElementById('panel-' + name);
+  if (p) p.classList.add('active');
+
+  // Load data for panel
+  if (name === 'agents') loadAgents();
+  if (name === 'skills') loadSkills();
+  if (name === 'usage') loadUsage();
+  if (name === 'config') loadConfig();
+  if (name === 'gateway') loadGatewayInfo();
+  if (name === 'health') loadDoctor();
+  if (name === 'logs') initLogs();
+  if (name === 'chain') loadChain();
+  if (name === 'memory') loadMemory();
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  HEALTH POLLING
+// ══════════════════════════════════════════════════════════════════
+
+async function pollHealth() {
+  const [data, hbData] = await Promise.all([api('/health'), api('/v1/heartbeat')]);
+  const dot = document.getElementById('statusDot');
+  if (data && data.status === 'ok') {
+    dot.className = 'status-dot online';
+    const onlineCount = hbData?.online || 0;
+    const totalCount = data.agents || 0;
+    document.getElementById('footerAgents').textContent = onlineCount + '/' + totalCount + ' agents online';
+    document.getElementById('footerUptime').textContent = 'uptime ' + fmtTime(data.uptime_seconds);
+    document.getElementById('footerPort').textContent = ':' + (data.port || 19789);
+  } else {
+    dot.className = 'status-dot offline';
+  }
+  // Cache heartbeat data for agent cards
+  if (hbData && hbData.agents) {
+    heartbeatData = {};
+    for (const hb of hbData.agents) {
+      heartbeatData[hb.agent_id] = hb;
+    }
+    // Update agent card status dots if panel is visible
+    updateAgentStatusDots();
+  }
+}
+
+function updateAgentStatusDots() {
+  document.querySelectorAll('.agent-card .hb-dot').forEach(dot => {
+    const aid = dot.dataset.agentId;
+    const hb = heartbeatData[aid];
+    if (hb && hb.online) {
+      dot.className = 'hb-dot online';
+      dot.title = hb.status === 'working' ? 'Working on: ' + (hb.task_id||'') : 'Idle';
+    } else {
+      dot.className = 'hb-dot offline';
+      dot.title = 'Offline';
+    }
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  OVERVIEW — Dual Panel (Orchestration + ChatBox)
+// ══════════════════════════════════════════════════════════════════
+
+const AGENT_META = {
+  planner:  {emoji:'📋', color:'var(--cyan)',    cls:'planner'},
+  executor: {emoji:'⚙️', color:'var(--green)',   cls:'executor'},
+  reviewer: {emoji:'🔍', color:'var(--magenta)', cls:'reviewer'},
+  search:   {emoji:'🌐', color:'var(--cyan)',    cls:'planner'},
+};
+
+function agentMeta(agentId) {
+  const id = (agentId||'').toLowerCase();
+  return AGENT_META[id] || {emoji:'🤖', color:'var(--fg2)', cls:'executor'};
+}
+
+// ── State ──
+let chatAttachments = [];
+let searchMode = false;
+let chatLastRenderedIdx = 0;
+let recentUsageCalls = [];
+let liveStatusAgents = {};
+let dispatchEntries = [];   // top panel log entries
+let dispatchLastIdx = 0;
+
+// ══════════════════════════════════════════════════════════════════
+//  DUAL PANEL — Top: Dispatch Log  |  Bottom: ChatBox
+// ══════════════════════════════════════════════════════════════════
+// Top panel (#dispatchLog):  all agent orchestration — scheduling,
+//   claimed, working, intermediate I/O, review scores, tokens, live status
+// Bottom panel (#chatMessages): user messages + final completed results
+//   styled like ChatGPT / Claude — only the polished end product
+
+// ── Add entry to TOP dispatch log ──
+function addDispatch(icon, agentId, text, opts={}) {
+  const meta = agentMeta(agentId);
+  dispatchEntries.push({
+    id: ++chatMsgCounter,
+    icon: icon || '•',
+    agent: agentId,
+    agentCls: meta.cls,
+    text,
+    ts: Date.now(),
+    taskId: opts.taskId || null,
+    promptTokens: opts.promptTokens || null,
+    completionTokens: opts.completionTokens || null,
+    result: opts.result || null,
+    score: opts.score || null,
+    scoreComment: opts.scoreComment || null,
+  });
+}
+
+// ── Add message to BOTTOM chatbox (user msgs + final AI results) ──
+function addChatMsg(type, text, opts={}) {
+  const msg = {
+    id: ++chatMsgCounter,
+    type, // 'user' | 'assistant' | 'system'
+    agent: opts.agent || null,
+    text,
+    ts: Date.now(),
+    taskId: opts.taskId || null,
+    result: opts.result || null,
+    score: opts.score || null,
+    scoreComment: opts.scoreComment || null,
+    images: opts.images || null,
+    files: opts.files || null,
+    searchResults: opts.searchResults || null,
+    promptTokens: opts.promptTokens || null,
+    completionTokens: opts.completionTokens || null,
+  };
+  chatMsgs.push(msg);
+  return msg;
+}
+
+// ── Render a single dispatch entry (compact one-line, top panel) ──
+function renderDispatchHtml(d) {
+  let tokHtml = '';
+  if (d.promptTokens || d.completionTokens) {
+    tokHtml = '<span class="dispatch-tokens"><span class="tok-in">↑' + fmtNum(d.promptTokens||0)
+      + '</span>/<span class="tok-out">↓' + fmtNum(d.completionTokens||0) + '</span></span>';
+  }
+  let text = escHtml(truncate(d.text, 120));
+  // Expandable result for agent output in dispatch
+  if (d.result) {
+    const rid = 'dRes' + d.id;
+    text += ' <span class="chat-result-toggle" onclick="toggleChatResult(\'' + rid + '\',this)" style="font-size:10px">▸ detail</span>'
+      + '<div class="chat-result-content" id="' + rid + '" style="margin-top:3px"><pre style="font-size:10px;max-height:160px;overflow-y:auto;margin:0;padding:4px 6px">' + escHtml(d.result) + '</pre></div>';
+  }
+  if (d.score != null) {
+    const c = scoreColor(d.score);
+    text += ' <span style="font-size:10px;font-weight:700;color:' + c + '">' + d.score + '/100</span>';
+    if (d.scoreComment) text += ' <span style="font-size:10px;color:var(--fg3)">' + escHtml(truncate(d.scoreComment, 60)) + '</span>';
+  }
+  const elapsed = ((Date.now() - d.ts) / 1000)|0;
+  const timeStr = elapsed < 5 ? 'now' : elapsed < 60 ? elapsed + 's' : Math.floor(elapsed/60) + 'm';
+  return '<div class="dispatch-entry" data-d-id="' + d.id + '">'
+    + '<span class="dispatch-icon">' + d.icon + '</span>'
+    + '<span class="dispatch-agent ' + d.agentCls + '-d">' + escHtml(d.agent || 'system') + '</span>'
+    + '<span class="dispatch-text">' + text + '</span>'
+    + tokHtml
+    + '<span class="dispatch-time">' + timeStr + '</span>'
+    + '</div>';
+}
+
+// ── Incremental render for dispatch log (top panel) ──
+function renderDispatch() {
+  const container = document.getElementById('dispatchLog');
+  if (!container) return;
+  const newEntries = dispatchEntries.slice(dispatchLastIdx);
+  if (!newEntries.length) return;
+  const frag = document.createDocumentFragment();
+  for (const d of newEntries) {
+    const wrapper = document.createElement('div');
+    wrapper.innerHTML = renderDispatchHtml(d);
+    while (wrapper.firstChild) frag.appendChild(wrapper.firstChild);
+  }
+  container.appendChild(frag);
+  dispatchLastIdx = dispatchEntries.length;
+  // Auto-scroll dispatch log to bottom
+  container.scrollTop = container.scrollHeight;
+}
+
+// ── Render a single chat message (bottom panel, ChatGPT-style) ──
+function renderChatMsgHtml(m) {
+  if (m.type === 'user') {
+    let content = escHtml(m.text);
+    if (m.images && m.images.length) {
+      content += '<div class="chat-images">';
+      for (const img of m.images) content += '<img src="' + img.dataUrl + '" alt="' + escHtml(img.name) + '" onclick="window.open(this.src)">';
+      content += '</div>';
+    }
+    if (m.files && m.files.length) {
+      for (const f of m.files) content += '<div class="chat-file-badge">📄 ' + escHtml(f.name) + '</div>';
+    }
+    return '<div class="chat-msg user" data-msg-id="' + m.id + '">'
+      + '<div class="chat-avatar user-av">👤</div>'
+      + '<div class="chat-bubble user-bubble">' + content + '</div></div>';
+  }
+  if (m.type === 'system') {
+    return '<div class="chat-msg system" data-msg-id="' + m.id + '">'
+      + '<div class="chat-bubble system-bubble">' + escHtml(m.text) + '</div></div>';
+  }
+  // ── Assistant response (final result, like Claude/ChatGPT) ──
+  if (m.type === 'assistant') {
+    const resultText = m.result || m.text || '';
+    // Format the result nicely
+    let bodyHtml = formatResultBody(resultText);
+    // Score line
+    let scoreHtml = '';
+    if (m.score != null) {
+      const c = scoreColor(m.score);
+      scoreHtml = '<div style="margin-top:8px"><span class="chat-score" style="background:rgba(124,108,240,.1);color:' + c + '">'
+        + m.score + '/100</span>';
+      if (m.scoreComment) scoreHtml += ' <span style="font-size:11px;color:var(--fg2)">' + escHtml(truncate(m.scoreComment, 120)) + '</span>';
+      scoreHtml += '</div>';
+    }
+    // Search results
+    let searchHtml = '';
+    if (m.searchResults && m.searchResults.length) {
+      searchHtml = '<div class="chat-search-results" style="margin-top:8px">';
+      for (const sr of m.searchResults) {
+        searchHtml += '<div class="chat-search-card"><a href="' + escHtml(sr.url) + '" target="_blank">' + escHtml(sr.title) + '</a>';
+        if (sr.snippet) searchHtml += '<div class="search-snippet">' + escHtml(truncate(sr.snippet, 120)) + '</div>';
+        searchHtml += '</div>';
+      }
+      searchHtml += '</div>';
+    }
+    // Token footer
+    let tokenHtml = '';
+    if (m.promptTokens || m.completionTokens) {
+      tokenHtml = '<div class="asst-tokens">'
+        + '<span>↑ ' + fmtNum(m.promptTokens||0) + ' in</span>'
+        + '<span>↓ ' + fmtNum(m.completionTokens||0) + ' out</span>'
+        + '</div>';
+    }
+    return '<div class="chat-msg assistant" data-msg-id="' + m.id + '">'
+      + '<div class="chat-avatar" style="background:linear-gradient(135deg,var(--accent),var(--cyan));border:none;color:#fff;font-size:13px;font-weight:700">S</div>'
+      + '<div class="chat-bubble assistant-bubble">'
+      + '<div class="asst-header"><span class="asst-label">Swarm</span>'
+      + (m.taskId ? '<span>' + m.taskId.slice(0,8) + '…</span>' : '')
+      + '</div>'
+      + '<div class="asst-body">' + bodyHtml + '</div>'
+      + scoreHtml + searchHtml + tokenHtml
+      + '</div></div>';
+  }
+  return '';
+}
+
+// Format result text into nice readable HTML (like ChatGPT)
+function formatResultBody(text) {
+  if (!text) return '';
+  // Try to parse JSON and pretty-print
+  let s = text;
+  try {
+    const obj = JSON.parse(s);
+    s = JSON.stringify(obj, null, 2);
+    return '<pre>' + escHtml(s) + '</pre>';
+  } catch(e) {}
+  // If it looks like code or is very long, wrap in pre
+  if (s.length > 500 || s.includes('\n  ') || s.includes('```')) {
+    // Handle markdown-ish code blocks
+    s = escHtml(s);
+    s = s.replace(/```(\w*)\n/g, '<pre>').replace(/```/g, '</pre>');
+    return '<div style="white-space:pre-wrap">' + s + '</div>';
+  }
+  return escHtml(s);
+}
+
+// ── Incremental render for chat messages (bottom panel) ──
+function renderChat() {
+  const container = document.getElementById('chatMessages');
+  if (!chatMsgs.length) {
+    chatLastRenderedIdx = 0;
+    container.innerHTML = '<div class="chat-welcome"><div class="chat-welcome-icon">⬡</div>'
+      + '<div class="chat-welcome-text">What can I help you with?</div>'
+      + '<div class="chat-welcome-sub">Your task will be planned, executed, and reviewed by the Swarm agent team</div></div>';
+    return;
+  }
+  // First render: replace welcome
+  if (chatLastRenderedIdx === 0 && container.querySelector('.chat-welcome')) {
+    container.innerHTML = '';
+  }
+  const newMsgs = chatMsgs.slice(chatLastRenderedIdx);
+  if (newMsgs.length) {
+    const frag = document.createDocumentFragment();
+    for (const m of newMsgs) {
+      const wrapper = document.createElement('div');
+      wrapper.innerHTML = renderChatMsgHtml(m);
+      while (wrapper.firstChild) frag.appendChild(wrapper.firstChild);
+    }
+    container.appendChild(frag);
+    chatLastRenderedIdx = chatMsgs.length;
+    container.scrollTop = container.scrollHeight;
+  }
+}
+
+function toggleChatResult(id, el) {
+  const div = document.getElementById(id);
+  if (!div) return;
+  div.classList.toggle('open');
+  el.textContent = div.classList.contains('open') ? '▾ hide' : '▸ detail';
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  FILE UPLOAD
+// ══════════════════════════════════════════════════════════════════
+
+function handleFileSelect(input) {
+  const files = Array.from(input.files);
+  files.forEach(file => {
+    const reader = new FileReader();
+    const isImage = file.type.startsWith('image/');
+    reader.onload = () => {
+      chatAttachments.push({
+        name: file.name, type: file.type,
+        dataUrl: reader.result, isImage, size: file.size
+      });
+      renderAttachments();
+    };
+    reader.readAsDataURL(file);
+  });
+  input.value = '';
+}
+
+function removeAttachment(idx) {
+  chatAttachments.splice(idx, 1);
+  renderAttachments();
+}
+
+function renderAttachments() {
+  const container = document.getElementById('chatAttachments');
+  if (!chatAttachments.length) { container.style.display = 'none'; return; }
+  container.style.display = 'flex';
+  let html = '';
+  chatAttachments.forEach((a, i) => {
+    html += '<div class="chat-attach-thumb">';
+    html += '<span class="chat-attach-remove" onclick="removeAttachment(' + i + ')">×</span>';
+    if (a.isImage) {
+      html += '<img src="' + a.dataUrl + '" alt="' + escHtml(a.name) + '">';
+    } else {
+      html += '<div style="display:flex;align-items:center;justify-content:center;height:100%;font-size:18px">📄</div>';
+    }
+    html += '<div class="chat-attach-name">' + escHtml(a.name) + '</div></div>';
+  });
+  container.innerHTML = html;
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  SEARCH MODE (Brave Search)
+// ══════════════════════════════════════════════════════════════════
+
+function toggleSearchMode() {
+  searchMode = !searchMode;
+  const btn = document.getElementById('searchToggle');
+  btn.classList.toggle('active', searchMode);
+  const input = document.getElementById('chatInput');
+  input.placeholder = searchMode ? '🔍 Enter search query…' : 'Message Swarm…';
+}
+
+async function braveSearch(query) {
+  try {
+    const result = await apiPost('/v1/search', {query});
+    if (result && result.results) return result.results;
+    return null;
+  } catch(e) { return null; }
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  SUBMIT TASK — routes user msg → bottom, task creation → top
+// ══════════════════════════════════════════════════════════════════
+
+async function chatSubmit() {
+  const input = document.getElementById('chatInput');
+  const btn = document.getElementById('chatSend');
+  const desc = input.value.trim();
+  if (!desc) return;
+
+  const images = chatAttachments.filter(a => a.isImage);
+  const files = chatAttachments.filter(a => !a.isImage);
+
+  // User message → BOTTOM chatbox
+  addChatMsg('user', desc, {images: images.length ? images : null, files: files.length ? files : null});
+  renderChat();
+  input.value = '';
+  input.style.height = 'auto';
+  btn.disabled = true;
+  chatAttachments = [];
+  renderAttachments();
+
+  // ── Search mode ──
+  if (searchMode) {
+    addDispatch('🔍', 'search', 'Searching: ' + truncate(desc, 60));
+    renderDispatch();
+
+    const results = await braveSearch(desc);
+    if (results && results.length) {
+      addDispatch('✓', 'search', 'Found ' + results.length + ' results');
+      renderDispatch();
+
+      // Show search results in bottom chatbox as assistant message
+      addChatMsg('assistant', 'Found ' + results.length + ' results for "' + truncate(desc, 40) + '"', {
+        agent: 'search', searchResults: results.slice(0, 5)
+      });
+      renderChat();
+
+      // Submit enriched task
+      const context = results.slice(0, 3).map(r => r.title + ': ' + (r.snippet||'')).join('\n');
+      const enrichedDesc = desc + '\n\n[Search Context]\n' + context;
+      const result = await apiPost('/v1/task', {description: enrichedDesc});
+      if (result && result.task_id) {
+        addDispatch('📤', 'system', 'Task created with search context: ' + result.task_id.slice(0,8) + '…', {taskId: result.task_id});
+        chatTaskMap[result.task_id] = new Set(['created']);
+        renderDispatch();
+      }
+    } else {
+      addDispatch('⚠', 'search', 'No results found, submitting without context');
+      const result = await apiPost('/v1/task', {description: desc});
+      if (result && result.task_id) {
+        addDispatch('📤', 'system', 'Task created: ' + result.task_id.slice(0,8) + '…', {taskId: result.task_id});
+        chatTaskMap[result.task_id] = new Set(['created']);
+      }
+      renderDispatch();
+    }
+    btn.disabled = false;
+    setTimeout(pollChatUpdates, 500);
+    return;
+  }
+
+  // ── Normal mode ──
+  let taskDesc = desc;
+  if (files.length) {
+    const fileContexts = files.map(f => {
+      const base64 = f.dataUrl.split(',')[1] || '';
+      try { return '[File: ' + f.name + ']\n' + atob(base64); } catch(e) { return '[File: ' + f.name + ']'; }
+    });
+    taskDesc += '\n\n' + fileContexts.join('\n\n');
+  }
+  if (images.length) {
+    taskDesc += '\n\n[' + images.length + ' image(s) attached]';
+  }
+
+  const result = await apiPost('/v1/task', {description: taskDesc});
+  if (result && result.task_id) {
+    // Task creation goes to TOP dispatch
+    addDispatch('📤', 'system', 'Task submitted: ' + result.task_id.slice(0,8) + '…', {taskId: result.task_id});
+    chatTaskMap[result.task_id] = new Set(['created']);
+  } else {
+    addChatMsg('system', '✗ Failed to submit task');
+    renderChat();
+  }
+  renderDispatch();
+  btn.disabled = false;
+  setTimeout(pollChatUpdates, 500);
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  POLL & DIFF — routes to dual panels
+// ══════════════════════════════════════════════════════════════════
+
+function findTokensForAgent(agentId, claimedAt, completedAt) {
+  const out = {execIn:0, execOut:0, reviewIn:0, reviewOut:0};
+  if (!recentUsageCalls.length) return out;
+  const aid = (agentId||'').toLowerCase();
+  const start = claimedAt || 0;
+  const end = completedAt || (Date.now()/1000 + 60);
+  for (const c of recentUsageCalls) {
+    const ts = c.ts || 0;
+    if (ts < start - 1 || ts > end + 5) continue;
+    const cAid = (c.agent_id||'').toLowerCase();
+    if (cAid === aid || (!aid && cAid)) {
+      out.execIn += c.prompt_tokens || 0;
+      out.execOut += c.completion_tokens || 0;
+    }
+    if (cAid === 'reviewer' && aid !== 'reviewer') {
+      out.reviewIn += c.prompt_tokens || 0;
+      out.reviewOut += c.completion_tokens || 0;
+    }
+  }
+  return out;
+}
+
+async function pollChatUpdates() {
+  const [data, hbData, usageData] = await Promise.all([
+    api('/v1/status'),
+    api('/v1/heartbeat'),
+    api('/v1/usage/recent'),
+  ]);
+  if (!data) return;
+
+  const tasks = data.tasks || {};
+  allTasks = tasks;
+
+  if (usageData && usageData.calls) recentUsageCalls = usageData.calls;
+
+  // Update live agent status from heartbeat
+  if (hbData && hbData.agents) {
+    const prevLive = JSON.stringify(liveStatusAgents);
+    liveStatusAgents = {};
+    for (const hb of hbData.agents) {
+      if (hb.online && hb.status === 'working') {
+        const elapsed = hb.age != null ? hb.age : 0;
+        liveStatusAgents[hb.agent_id] = {
+          status: hb.status, task_id: hb.task_id,
+          elapsed: Math.round(elapsed),
+        };
+      }
+    }
+    if (JSON.stringify(liveStatusAgents) !== prevLive) {
+      renderLiveStatus();
+    }
+  }
+
+  const prevDispLen = dispatchEntries.length;
+  const prevChatLen = chatMsgs.length;
+
+  diffAndRoute(chatPrevSnapshot, tasks);
+  updateWorkflow(tasks);
+  chatPrevSnapshot = JSON.parse(JSON.stringify(tasks));
+
+  if (dispatchEntries.length > prevDispLen) renderDispatch();
+  if (chatMsgs.length > prevChatLen) renderChat();
+  renderLiveStatus();
+}
+
+// ── Live Status → TOP dispatch panel ──
+function renderLiveStatus() {
+  const container = document.getElementById('dispatchLog');
+  if (!container) return;
+  // Remove old live indicators
+  container.querySelectorAll('.dispatch-live-row').forEach(el => el.remove());
+
+  const working = Object.entries(liveStatusAgents);
+  if (!working.length) return;
+
+  for (const [aid, info] of working) {
+    const meta = agentMeta(aid);
+    const el = document.createElement('div');
+    el.className = 'dispatch-entry dispatch-live-row';
+    el.innerHTML = '<span class="dispatch-icon"><span class="dispatch-live-dot" style="background:' + meta.color + '"></span></span>'
+      + '<span class="dispatch-agent ' + meta.cls + '-d">' + escHtml(aid) + '</span>'
+      + '<span class="dispatch-text"><span class="dispatch-live">generating…</span></span>'
+      + '<span class="dispatch-time" style="color:' + meta.color + '">' + info.elapsed + 's</span>';
+    container.appendChild(el);
+  }
+  container.scrollTop = container.scrollHeight;
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  DIFF & ROUTE — agent activity → top, final results → bottom
+// ══════════════════════════════════════════════════════════════════
+
+function diffAndRoute(prev, current) {
+  for (const [taskId, task] of Object.entries(current)) {
+    const old = prev[taskId];
+    const oldStatus = old ? old.status : null;
+    const newStatus = task.status;
+
+    if (oldStatus === newStatus && old) continue;
+
+    if (!chatTaskMap[taskId]) chatTaskMap[taskId] = new Set();
+    const seen = chatTaskMap[taskId];
+    const agent = task.agent_id || 'system';
+
+    // ── New task detected → TOP dispatch ──
+    if (!oldStatus && !seen.has('created')) {
+      seen.add('created');
+      addDispatch('📋', 'system', 'Task: ' + truncate(task.description, 80), {taskId});
+    }
+
+    // ── Agent claimed task → TOP dispatch ──
+    if (newStatus === 'claimed' && oldStatus !== 'claimed' && !seen.has('claimed')) {
+      seen.add('claimed');
+      addDispatch('⚡', agent, 'Working on task…', {taskId});
+      const aidLower = (agent || '').toLowerCase();
+      if (aidLower === 'executor') firePacket(1, 'planner');
+    }
+
+    // ── Sent to review → TOP dispatch (with intermediate result) ──
+    if (newStatus === 'review' && oldStatus !== 'review' && !seen.has('review')) {
+      seen.add('review');
+      const agentTokens = findTokensForAgent(agent, task.claimed_at);
+      if (task.result) {
+        seen.add('result_shown');
+        addDispatch('📝', agent, 'Implementation done → review', {
+          taskId, result: task.result,
+          promptTokens: agentTokens.execIn, completionTokens: agentTokens.execOut,
+        });
+      } else {
+        addDispatch('📤', agent, 'Sent to review', {taskId});
+      }
+      firePacket(2, 'reviewer');
+    }
+
+    // ── Completed → review score → TOP, final result → BOTTOM ──
+    if (newStatus === 'completed' && !seen.has('completed')) {
+      seen.add('completed');
+      const agentTokens = findTokensForAgent(agent, task.claimed_at, task.completed_at);
+
+      // Review score → TOP dispatch
+      const scores = task.review_scores || [];
+      if (scores.length) {
+        const last = scores[scores.length - 1];
+        addDispatch('⭐', last.reviewer || 'reviewer', 'Reviewed', {
+          taskId, score: last.score, scoreComment: last.comment,
+          promptTokens: agentTokens.reviewIn, completionTokens: agentTokens.reviewOut,
+        });
+      }
+
+      // Completion marker → TOP dispatch
+      addDispatch('✓', agent, 'Task completed', {taskId});
+
+      // ── FINAL RESULT → BOTTOM chatbox as assistant message ──
+      if (task.result) {
+        seen.add('result_shown');
+        const totalIn = agentTokens.execIn + agentTokens.reviewIn;
+        const totalOut = agentTokens.execOut + agentTokens.reviewOut;
+        const lastScore = scores.length ? scores[scores.length-1] : null;
+        addChatMsg('assistant', task.result, {
+          agent, taskId, result: task.result,
+          score: lastScore ? lastScore.score : null,
+          scoreComment: lastScore ? lastScore.comment : null,
+          promptTokens: totalIn || null,
+          completionTokens: totalOut || null,
+        });
+      }
+    }
+
+    // ── Failed → TOP dispatch + BOTTOM system msg ──
+    if (newStatus === 'failed' && !seen.has('failed')) {
+      seen.add('failed');
+      const errFlag = (task.evolution_flags||[]).find(f => f.startsWith('failed:'));
+      const errText = errFlag ? errFlag.slice(7) : 'Unknown error';
+      addDispatch('✗', agent, 'Failed: ' + truncate(errText, 80), {taskId});
+      addChatMsg('system', '✗ Task failed: ' + truncate(errText, 100), {taskId});
+    }
+
+    // ── Planner direct completion (pending → completed, no review) ──
+    if (newStatus === 'completed' && oldStatus === 'pending' && !seen.has('review') && task.result && !seen.has('planner_direct')) {
+      seen.add('planner_direct');
+      const agentTokens = findTokensForAgent(agent, task.claimed_at, task.completed_at);
+      addDispatch('📋', agent, 'Plan generated', {
+        taskId, result: task.result,
+        promptTokens: agentTokens.execIn, completionTokens: agentTokens.execOut,
+      });
+      firePacket(1, 'planner');
+    }
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  WORKFLOW PIPELINE + DATA PACKET ANIMATION
+// ══════════════════════════════════════════════════════════════════
+
+function firePacket(connIdx, packetType) {
+  const packet = document.getElementById('wfPacket' + connIdx);
+  if (!packet) return;
+  packet.classList.remove('animating');
+  packet.className = 'wf-packet ' + packetType + '-packet';
+  void packet.offsetWidth;
+  packet.classList.add('animating');
+  const targetNode = connIdx === 1
+    ? document.getElementById('wfExecutor')
+    : document.getElementById('wfReviewer');
+  if (targetNode) {
+    setTimeout(() => {
+      targetNode.classList.add('receiving');
+      setTimeout(() => targetNode.classList.remove('receiving'), 700);
+    }, 900);
+  }
+}
+
+let wfPrevState = {planner:false, executor:false, reviewer:false};
+
+function updateWorkflow(tasks) {
+  const entries = Object.values(tasks);
+  let done=0, working=0, failed=0, total=entries.length;
+  let activePlanner=false, activeExecutor=false, activeReviewer=false;
+
+  entries.forEach(t => {
+    if (t.status === 'completed') done++;
+    else if (t.status === 'failed') failed++;
+    else if (t.status === 'claimed' || t.status === 'review') {
+      working++;
+      const aid = (t.agent_id || '').toLowerCase();
+      if (aid === 'planner') activePlanner = true;
+      else if (aid === 'executor') activeExecutor = true;
+      else if (aid === 'reviewer') activeReviewer = true;
+      if (t.status === 'review') activeReviewer = true;
+    }
+  });
+
+  for (const [aid, hb] of Object.entries(heartbeatData)) {
+    if (hb.online && hb.status === 'working') {
+      if (aid === 'planner') activePlanner = true;
+      if (aid === 'executor') activeExecutor = true;
+      if (aid === 'reviewer') activeReviewer = true;
+    }
+  }
+
+  const pn = document.getElementById('wfPlanner');
+  const en = document.getElementById('wfExecutor');
+  const rn = document.getElementById('wfReviewer');
+  pn.className = 'wf-node' + (activePlanner ? ' active' : '');
+  en.className = 'wf-node' + (activeExecutor ? ' active executor' : '');
+  rn.className = 'wf-node' + (activeReviewer ? ' active reviewer' : '');
+
+  document.getElementById('wfPlannerStatus').textContent = activePlanner ? 'working' : 'idle';
+  document.getElementById('wfExecutorStatus').textContent = activeExecutor ? 'working' : 'idle';
+  document.getElementById('wfReviewerStatus').textContent = activeReviewer ? 'working' : 'idle';
+
+  const c1 = document.getElementById('wfConn1');
+  const c2 = document.getElementById('wfConn2');
+  c1.className = 'wf-connector' + ((activePlanner || activeExecutor) ? ' active' : '');
+  c2.className = 'wf-connector' + ((activeExecutor || activeReviewer) ? ' active' : '');
+
+  if (activeExecutor && !wfPrevState.executor && wfPrevState.planner) firePacket(1, 'planner');
+  if (activeReviewer && !wfPrevState.reviewer && wfPrevState.executor) firePacket(2, 'executor');
+  wfPrevState = {planner:activePlanner, executor:activeExecutor, reviewer:activeReviewer};
+
+  const statsEl = document.getElementById('wfStats');
+  if (!total) {
+    statsEl.textContent = 'Ready — submit a task to start';
+  } else {
+    const parts = [total + ' task' + (total!==1?'s':'')];
+    if (done) parts.push(done + ' done');
+    if (working) parts.push(working + ' working');
+    if (failed) parts.push(failed + ' failed');
+    statsEl.textContent = parts.join(' · ');
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  RESIZABLE DIVIDER (drag to resize top/bottom panels)
+// ══════════════════════════════════════════════════════════════════
+(function initDivider() {
+  const divider = document.getElementById('ovDivider');
+  const top = document.getElementById('ovTop');
+  if (!divider || !top) return;
+  let dragging = false, startY = 0, startH = 0;
+
+  divider.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    dragging = true;
+    startY = e.clientY;
+    startH = top.offsetHeight;
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const delta = e.clientY - startY;
+    const newH = Math.max(80, Math.min(startH + delta, window.innerHeight * 0.7));
+    top.style.height = newH + 'px';
+    top.style.maxHeight = 'none';
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  });
+})();
+
+// ── Backward compat ──
+async function pollTasks() { await pollChatUpdates(); }
+async function submitTask() { await chatSubmit(); }
+
+// ── Textarea auto-height + Enter to send ──
+(function() {
+  const input = document.getElementById('chatInput');
+  if (!input) return;
+  input.addEventListener('input', () => {
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      chatSubmit();
+    }
+  });
+})();
+
+// ══════════════════════════════════════════════════════════════════
+//  AGENTS — View + Edit
+// ══════════════════════════════════════════════════════════════════
+
+async function loadAgents() {
+  const [agentData, scoreData, skillsResp, chainData] = await Promise.all([
+    api('/v1/agents'), api('/v1/scores'), api('/v1/skills'), api('/v1/chain/status')
+  ]);
+  const grid = document.getElementById('agentGrid');
+  const agents = agentData?.agents || [];
+  const scores = scoreData?.scores || {};
+  const allSkills = skillsResp?.shared || [];
+  const chainAgents = chainData?.agents || {};
+
+  if (!agents.length) { grid.innerHTML = '<div class="empty">No agents configured</div>'; return; }
+
+  let html = '';
+  for (const a of agents) {
+    const sc = scores[a.id] || {};
+    const composite = sc.composite || 0;
+    const dims = sc.dimensions || {};
+    const isEditing = editingAgent === a.id;
+    const hb = heartbeatData[a.id];
+    const isOnline = hb && hb.online;
+
+    html += '<div class="agent-card' + (isEditing ? ' editing' : '') + '" onclick="editAgent(\'' + escHtml(a.id) + '\')">';
+    html += '<div class="agent-name">'
+      + '<span class="hb-dot ' + (isOnline ? 'online' : 'offline') + '" data-agent-id="' + escHtml(a.id) + '" title="' + (isOnline ? (hb.status==='working' ? 'Working' : 'Idle') : 'Offline') + '"></span> '
+      + escHtml(a.id);
+    if (isOnline && hb.status === 'working') {
+      html += ' <span style="font-size:10px;color:var(--cyan);font-weight:400">⚡ working</span>';
+    }
+    html += '</div>';
+    html += '<div class="agent-model">' + escHtml(a.model||'—') + '</div>';
+    html += '<div class="agent-meta">';
+    html += 'Provider: <span>' + escHtml(a.provider||'—') + '</span><br>';
+
+    // API Key status
+    const keyEnv = a.api_key_env || '';
+    const isKeySet = a.api_key_set;
+    const maskedKey = a.api_key_masked || '';
+    const baseUrl = a.base_url || '';
+    if (keyEnv) {
+      const globalKeyEnv = agentData.global_key_env || '';
+      const allSameKey = agents.every(ag => (ag.api_key_env||'') === keyEnv);
+      const isShared = allSameKey || (globalKeyEnv && keyEnv === globalKeyEnv);
+      if (isKeySet) {
+        if (isShared) {
+          html += 'API Key: <span class="key-badge shared">🔗 ' + escHtml(maskedKey) + '</span>';
+        } else {
+          html += 'API Key: <span class="key-badge set">✓ ' + escHtml(maskedKey) + '</span>';
+        }
+      } else {
+        html += 'API Key: <span class="key-badge unset">✗ not set</span>';
+      }
+      if (baseUrl) html += ' <span style="font-size:10px;color:var(--fg3)">' + escHtml(baseUrl) + '</span>';
+      html += '<br>';
+    }
+
+    html += 'Skills: ' + (a.skills||[]).map(s=>'<span>'+escHtml(s)+'</span>').join(' ');
+    if (a.fallback_models && a.fallback_models.length) {
+      html += '<br>Fallbacks: ' + a.fallback_models.map(m=>'<span>'+escHtml(m)+'</span>').join(' ');
+    }
+
+    // Chain identity info
+    const chain = chainAgents[a.id];
+    if (chain && chain.registered) {
+      const addr = chain.pkp_address || '';
+      const shortAddr = addr ? addr.slice(0, 6) + '…' + addr.slice(-4) : '';
+      const chainId = chain.erc8004_agent_id != null ? '#' + chain.erc8004_agent_id : '';
+      const scanUrl = 'https://sepolia.basescan.org/address/' + addr;
+      html += '<br><span style="color:var(--green);font-size:11px">⛓ On-chain</span> ';
+      html += '<span style="font-size:11px;color:var(--fg2)">' + chainId + '</span> ';
+      html += '<a href="' + scanUrl + '" target="_blank" rel="noopener" onclick="event.stopPropagation()" '
+        + 'style="font-family:var(--mono);font-size:11px;color:var(--accent2);text-decoration:none" '
+        + 'title="' + escHtml(addr) + '">' + escHtml(shortAddr) + ' ↗</a>';
+    } else if (chainData && chainData.enabled) {
+      html += '<br><span style="color:var(--fg3);font-size:11px">⛓ Not registered</span>';
+    }
+
+    html += '</div>';
+
+    // Score bar
+    if (composite > 0) {
+      html += '<div class="agent-score">'
+        + '<div class="score-bar"><div class="score-fill" style="width:'+composite+'%;background:'+scoreColor(composite)+'"></div></div>'
+        + '<div class="score-num" style="color:'+scoreColor(composite)+'">' + composite.toFixed(1) + '</div>'
+        + '</div>';
+
+      const dimNames = {task_completion:'Completion',output_quality:'Quality',improvement_rate:'Improvement',consistency:'Consistency',review_accuracy:'Review'};
+      html += '<div style="margin-top:8px;font-size:11px;color:var(--fg2)">';
+      for (const [k,label] of Object.entries(dimNames)) {
+        const v = dims[k] || 0;
+        html += '<div style="display:flex;align-items:center;gap:6px;margin:2px 0">'
+          + '<span style="min-width:70px">' + label + '</span>'
+          + '<div style="flex:1;height:3px;background:var(--bg4);border-radius:2px;overflow:hidden">'
+          + '<div style="height:100%;width:'+v+'%;background:'+scoreColor(v)+';border-radius:2px"></div></div>'
+          + '<span style="min-width:28px;text-align:right;font-family:var(--mono)">' + v.toFixed(0) + '</span>'
+          + '</div>';
+      }
+      html += '</div>';
+    }
+
+    html += '</div>'; // .agent-card
+
+    // Inline editor
+    if (isEditing) {
+      html += '<div class="agent-editor" onclick="event.stopPropagation()">';
+      html += '<div class="field-row">';
+      html += '<div class="field"><label>Model</label><input class="input" id="editModel" value="' + escHtml(a.model||'') + '"></div>';
+      html += '<div class="field"><label>Provider</label><select class="input" id="editProvider">';
+      for (const p of ['flock','openai','ollama','anthropic','deepseek','custom']) {
+        html += '<option' + (p===(a.provider||'') ? ' selected' : '') + '>' + p + '</option>';
+      }
+      html += '</select></div>';
+      html += '</div>';
+      html += '<div class="field"><label>Role</label><textarea class="input" id="editRole" rows="2">' + escHtml(a.role||'') + '</textarea></div>';
+      html += '<div class="field"><label>Skills</label><div id="editSkillsBox" style="display:flex;flex-wrap:wrap;gap:6px">';
+      const agentSkills = new Set(a.skills||[]);
+      for (const sk of allSkills) {
+        const checked = agentSkills.has(sk.name) ? ' checked' : '';
+        html += '<label style="font-size:12px;color:var(--fg2);display:flex;align-items:center;gap:3px;cursor:pointer">'
+          + '<input type="checkbox" class="edit-skill-cb" value="' + escHtml(sk.name) + '"' + checked + '>' + escHtml(sk.name) + '</label>';
+      }
+      html += '</div></div>';
+      html += '<div class="field"><label>Fallback Models (comma-separated)</label><input class="input" id="editFallbacks" value="' + escHtml((a.fallback_models||[]).join(', ')) + '"></div>';
+
+      // ── API Key Configuration ──
+      html += '<div style="border-top:1px solid var(--bg4);margin:10px 0;padding-top:10px">';
+      html += '<div style="font-size:11px;font-weight:700;color:var(--fg2);text-transform:uppercase;margin-bottom:8px">🔑 API Key Configuration</div>';
+      html += '<div class="field-row">';
+      const keyPlaceholder = a.api_key_masked ? 'Current: ' + a.api_key_masked : 'sk-xxxxxxxx';
+      html += '<div class="field"><label>API Key</label><input class="input" id="editApiKey" type="password" value="" placeholder="' + escHtml(keyPlaceholder) + '"><div style="font-size:10px;color:var(--fg3);margin-top:2px">Leave empty to keep current key</div></div>';
+      html += '<div class="field"><label>Base URL</label><input class="input" id="editBaseUrl" value="' + escHtml(a.base_url||'') + '" placeholder="https://api.openai.com/v1"></div>';
+      html += '</div>';
+      html += '<div style="font-size:11px;color:var(--fg3);margin-top:4px">💡 Values auto-save to local .env file. Leave API Key empty to keep current value.</div>';
+      html += '</div>';
+
+      html += '<div class="actions">';
+      html += '<button class="btn btn-outline btn-sm" onclick="event.stopPropagation();closeAgentEditor()">Cancel</button>';
+      html += '<button class="btn btn-green btn-sm" onclick="event.stopPropagation();saveAgent(\'' + escHtml(a.id) + '\')">Save</button>';
+      html += '</div>';
+      html += '</div>';
+    }
+  }
+  grid.innerHTML = html;
+}
+
+function editAgent(id) {
+  editingAgent = editingAgent === id ? null : id;
+  loadAgents();
+}
+
+function closeAgentEditor() {
+  editingAgent = null;
+  loadAgents();
+}
+
+async function saveAgent(id) {
+  const model = document.getElementById('editModel').value.trim();
+  const provider = document.getElementById('editProvider').value;
+  const role = document.getElementById('editRole').value.trim();
+  const fallbacks = document.getElementById('editFallbacks').value.split(',').map(s=>s.trim()).filter(Boolean);
+  const skills = Array.from(document.querySelectorAll('.edit-skill-cb:checked')).map(cb => cb.value);
+  const apiKey = document.getElementById('editApiKey').value.trim();
+  const baseUrl = document.getElementById('editBaseUrl').value.trim();
+
+  const body = {model, provider, role, fallback_models: fallbacks, skills};
+  if (apiKey) body.api_key = apiKey;
+  if (baseUrl) body.base_url = baseUrl;
+
+  const res = await apiPut('/v1/agents/' + id, body);
+  if (res && res.ok) {
+    toast('Agent ' + id + ' updated');
+    editingAgent = null;
+    loadAgents();
+  } else {
+    toast(res?.error || 'Failed to update agent', 'error');
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  SKILLS — List + Editor
+// ══════════════════════════════════════════════════════════════════
+
+async function loadSkills() {
+  skillsData = await api('/v1/skills');
+  if (!skillsData) return;
+  renderSkillsList();
+}
+
+function renderSkillsList() {
+  const body = document.getElementById('skillsListBody');
+  const filter = (document.getElementById('skillSearch').value||'').toLowerCase();
+  let html = '';
+
+  // Team skill
+  if (skillsData.team && skillsData.team.exists) {
+    const match = !filter || '_team'.includes(filter) || 'team'.includes(filter);
+    if (match) {
+      html += '<div class="skill-group-title">Team</div>';
+      html += '<div class="skill-item' + (currentSkill?.key === 'team:_team' ? ' active' : '') + '" onclick="selectSkill(\'team\',\'_team\')">';
+      html += '<span>_team</span><span class="skill-scope">team</span></div>';
+    }
+  }
+
+  // Shared
+  const shared = (skillsData.shared || []).filter(s => !filter || s.name.toLowerCase().includes(filter));
+  if (shared.length) {
+    html += '<div class="skill-group-title">Shared</div>';
+    for (const s of shared) {
+      html += '<div class="skill-item' + (currentSkill?.key === 'shared:'+s.name ? ' active' : '') + '" onclick="selectSkill(\'shared\',\'' + escHtml(s.name) + '\')">';
+      html += '<span>' + escHtml(s.name) + '</span><span class="skill-scope">shared</span></div>';
+    }
+  }
+
+  // Agent skills
+  const agents = skillsData.agents || {};
+  for (const [aid, skills] of Object.entries(agents).sort()) {
+    const filtered = skills.filter(s => !filter || s.name.toLowerCase().includes(filter) || aid.includes(filter));
+    if (!filtered.length) continue;
+    html += '<div class="skill-group-title">Agent: ' + escHtml(aid) + '</div>';
+    for (const s of filtered) {
+      const key = 'agent:' + aid + ':' + s.name;
+      html += '<div class="skill-item' + (currentSkill?.key === key ? ' active' : '') + '" onclick="selectSkill(\'agent\',\'' + escHtml(s.name) + '\',\'' + escHtml(aid) + '\')">';
+      html += '<span>' + escHtml(s.name) + '</span><span class="skill-scope">' + escHtml(aid) + '</span></div>';
+    }
+  }
+
+  if (!html) html = '<div class="empty">No skills found</div>';
+  body.innerHTML = html;
+}
+
+function filterSkills() { renderSkillsList(); }
+
+async function selectSkill(scope, name, agentId) {
+  // Check unsaved changes
+  if (skillsDirty && !confirm('You have unsaved changes. Discard?')) return;
+  skillsDirty = false;
+
+  let path, key;
+  if (scope === 'team') {
+    path = '/v1/skills/team';
+    key = 'team:_team';
+  } else if (scope === 'agent') {
+    path = '/v1/skills/agents/' + agentId + '/' + name;
+    key = 'agent:' + agentId + ':' + name;
+  } else {
+    path = '/v1/skills/' + name;
+    key = 'shared:' + name;
+  }
+
+  const data = await api(path);
+  if (!data) { toast('Failed to load skill', 'error'); return; }
+
+  currentSkill = {scope, name, agentId, key, data};
+
+  const editor = document.getElementById('skillsEditor');
+  let h = '<div class="skills-toolbar">';
+  h += '<span class="skill-filename">' + escHtml(data.file || name + '.md') + '</span>';
+  h += '<span style="font-size:11px;color:var(--fg3);margin-left:4px">(' + (data.size||0) + ' bytes)</span>';
+  h += '<span style="flex:1"></span>';
+
+  // Save button
+  h += '<button class="btn btn-green btn-sm" onclick="saveSkill()">Save</button>';
+
+  // Download button
+  h += '<button class="btn btn-outline btn-sm" onclick="downloadSkill()">↓ Download</button>';
+
+  // Delete button (not for team or system skills)
+  if (scope !== 'team' && !name.startsWith('_')) {
+    h += '<button class="btn btn-danger btn-sm" onclick="deleteSkill()">Delete</button>';
+  }
+
+  // Regen button for team
+  if (scope === 'team') {
+    h += '<button class="btn btn-outline btn-sm" onclick="regenerateTeamSkill()">↻ Regenerate</button>';
+  }
+
+  h += '</div>';
+  h += '<textarea class="mono" id="skillContent" oninput="skillsDirty=true">' + escHtml(data.content||'') + '</textarea>';
+  editor.innerHTML = h;
+
+  // Mark active in list
+  renderSkillsList();
+}
+
+async function saveSkill() {
+  if (!currentSkill) return;
+  const content = document.getElementById('skillContent').value;
+
+  let path;
+  if (currentSkill.scope === 'team') {
+    path = '/v1/skills/team';
+  } else if (currentSkill.scope === 'agent') {
+    path = '/v1/skills/agents/' + currentSkill.agentId + '/' + currentSkill.name;
+  } else {
+    path = '/v1/skills/' + currentSkill.name;
+  }
+
+  const res = await apiPut(path, {content});
+  if (res && res.ok) {
+    toast('Skill saved');
+    skillsDirty = false;
+  } else {
+    toast(res?.error || 'Failed to save', 'error');
+  }
+}
+
+async function deleteSkill() {
+  if (!currentSkill) return;
+  if (!confirm('Delete skill "' + currentSkill.name + '"? This cannot be undone.')) return;
+
+  let path;
+  if (currentSkill.scope === 'agent') {
+    path = '/v1/skills/agents/' + currentSkill.agentId + '/' + currentSkill.name;
+  } else {
+    path = '/v1/skills/' + currentSkill.name;
+  }
+
+  const res = await apiDelete(path);
+  if (res && res.ok) {
+    toast('Skill deleted');
+    currentSkill = null;
+    skillsDirty = false;
+    document.getElementById('skillsEditor').innerHTML = '<div class="skills-empty">Select a skill from the list</div>';
+    loadSkills();
+  } else {
+    toast(res?.error || 'Failed to delete', 'error');
+  }
+}
+
+function downloadSkill() {
+  if (!currentSkill) return;
+  const content = document.getElementById('skillContent').value;
+  const blob = new Blob([content], {type: 'text/markdown'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = (currentSkill.name || 'skill') + '.md';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function uploadSkill(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = async function() {
+    const content = reader.result;
+    const name = file.name.replace(/\.md$/, '');
+
+    // Create as shared skill
+    const res = await apiPut('/v1/skills/' + name, {content});
+    if (res && res.ok) {
+      toast('Skill "' + name + '" uploaded');
+      loadSkills();
+      // Select the uploaded skill
+      setTimeout(() => selectSkill('shared', name), 300);
+    } else {
+      toast(res?.error || 'Upload failed', 'error');
+    }
+  };
+  reader.readAsText(file);
+  input.value = '';
+}
+
+async function regenerateTeamSkill() {
+  const res = await apiPost('/v1/skills/team/regenerate', {});
+  if (res && res.ok) {
+    toast('Team skill regenerated');
+    if (currentSkill?.scope === 'team') {
+      selectSkill('team', '_team');
+    }
+  } else {
+    toast(res?.error || 'Failed to regenerate', 'error');
+  }
+}
+
+function showCreateDialog() {
+  // Populate agent scope options
+  const sel = document.getElementById('newSkillScope');
+  sel.innerHTML = '<option value="shared">Shared (all agents)</option>';
+  if (skillsData?.agents) {
+    for (const aid of Object.keys(skillsData.agents).sort()) {
+      sel.innerHTML += '<option value="agent:' + escHtml(aid) + '">Agent: ' + escHtml(aid) + '</option>';
+    }
+  }
+  // Also add agents from /v1/agents
+  api('/v1/agents').then(d => {
+    if (!d?.agents) return;
+    for (const a of d.agents) {
+      if (!skillsData?.agents?.[a.id]) {
+        sel.innerHTML += '<option value="agent:' + escHtml(a.id) + '">Agent: ' + escHtml(a.id) + '</option>';
+      }
+    }
+  });
+  document.getElementById('newSkillName').value = '';
+  document.getElementById('createDialog').style.display = 'flex';
+}
+
+function closeCreateDialog() {
+  document.getElementById('createDialog').style.display = 'none';
+}
+
+async function createSkill() {
+  const name = document.getElementById('newSkillName').value.trim().replace(/[^a-zA-Z0-9_-]/g, '');
+  if (!name) { toast('Please enter a skill name', 'error'); return; }
+
+  const scopeVal = document.getElementById('newSkillScope').value;
+  const template = '---\nname: ' + name + '\ndescription: \ntags: []\n---\n\n# ' + name + '\n\nSkill content here.\n';
+
+  let path;
+  if (scopeVal.startsWith('agent:')) {
+    const aid = scopeVal.slice(6);
+    path = '/v1/skills/agents/' + aid + '/' + name;
+  } else {
+    path = '/v1/skills/' + name;
+  }
+
+  const res = await apiPut(path, {content: template});
+  if (res && res.ok) {
+    toast('Skill "' + name + '" created');
+    closeCreateDialog();
+    loadSkills();
+    // Select the new skill
+    if (scopeVal.startsWith('agent:')) {
+      const aid = scopeVal.slice(6);
+      setTimeout(() => selectSkill('agent', name, aid), 300);
+    } else {
+      setTimeout(() => selectSkill('shared', name), 300);
+    }
+  } else {
+    toast(res?.error || 'Failed to create', 'error');
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  USAGE
+// ══════════════════════════════════════════════════════════════════
+
+async function loadUsage() {
+  const data = await api('/v1/usage');
+  if (!data) return;
+
+  const agg = data.aggregate || {};
+  document.getElementById('uCalls').textContent = fmtNum(agg.total_calls);
+  document.getElementById('uTokens').textContent = fmtNum(agg.total_tokens);
+  document.getElementById('uCost').textContent = '$' + (agg.total_cost_usd||0).toFixed(4);
+  document.getElementById('uRetries').textContent = fmtNum(agg.total_retries);
+
+  // By agent
+  const byAgent = data.by_agent || {};
+  const agentEl = document.getElementById('usageByAgent');
+  if (Object.keys(byAgent).length) {
+    let h = '<table class="usage-table"><thead><tr><th>Agent</th><th>Calls</th><th>Tokens</th><th>Cost</th></tr></thead><tbody>';
+    for (const [id, s] of Object.entries(byAgent).sort((a,b)=>b[1].tokens-a[1].tokens)) {
+      h += '<tr><td style="font-weight:600">'+escHtml(id)+'</td><td class="mono">'+fmtNum(s.calls)+'</td><td class="mono">'+fmtNum(s.tokens)+'</td><td class="mono">$'+s.cost.toFixed(4)+'</td></tr>';
+    }
+    h += '</tbody></table>';
+    agentEl.innerHTML = h;
+  } else { agentEl.innerHTML = '<div class="empty">No usage data</div>'; }
+
+  // By model
+  const byModel = data.by_model || {};
+  const modelEl = document.getElementById('usageByModel');
+  if (Object.keys(byModel).length) {
+    let h = '<table class="usage-table"><thead><tr><th>Model</th><th>Calls</th><th>Tokens</th><th>Cost</th></tr></thead><tbody>';
+    for (const [id, s] of Object.entries(byModel).sort((a,b)=>b[1].tokens-a[1].tokens)) {
+      h += '<tr><td style="font-weight:600">'+escHtml(id)+'</td><td class="mono">'+fmtNum(s.calls)+'</td><td class="mono">'+fmtNum(s.tokens)+'</td><td class="mono">$'+s.cost.toFixed(4)+'</td></tr>';
+    }
+    h += '</tbody></table>';
+    modelEl.innerHTML = h;
+  } else { modelEl.innerHTML = '<div class="empty">No usage data</div>'; }
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  CONFIG (read-only)
+// ══════════════════════════════════════════════════════════════════
+
+async function loadConfig() {
+  const data = await api('/v1/config');
+  if (!data) return;
+
+  // Agent config
+  const cfg = data.config || {};
+  const agents = cfg.agents || [];
+  let agentText = '';
+  for (const a of agents) {
+    agentText += '- ' + (a.id||'?') + '\n'
+      + '  model: ' + (a.model||'—') + '\n'
+      + '  provider: ' + ((a.llm||{}).provider||'—') + '\n'
+      + '  skills: [' + (a.skills||[]).join(', ') + ']\n'
+      + '  fallbacks: [' + (a.fallback_models||[]).join(', ') + ']\n\n';
+  }
+  document.getElementById('configView').textContent = agentText || 'No agents configured';
+
+  // Resilience
+  const res = cfg.resilience || {};
+  const compact = cfg.compaction || {};
+  const mem = cfg.memory || {};
+  let resText = 'Resilience:\n'
+    + '  max_retries: ' + (res.max_retries ?? 3) + '\n'
+    + '  base_delay: ' + (res.base_delay ?? 1.0) + 's\n'
+    + '  max_delay: ' + (res.max_delay ?? 30.0) + 's\n'
+    + '  jitter: ' + (res.jitter ?? 0.5) + '\n'
+    + '  circuit_breaker_threshold: ' + (res.circuit_breaker_threshold ?? 3) + '\n'
+    + '  circuit_breaker_cooldown: ' + (res.circuit_breaker_cooldown ?? 120) + 's\n\n'
+    + 'Compaction:\n'
+    + '  enabled: ' + (compact.enabled ?? true) + '\n'
+    + '  max_context_tokens: ' + (compact.max_context_tokens ?? 8000) + '\n'
+    + '  keep_recent_turns: ' + (compact.keep_recent_turns ?? 4) + '\n\n'
+    + 'Memory:\n'
+    + '  backend: ' + (mem.backend ?? 'chroma') + '\n';
+  document.getElementById('resilienceView').textContent = resText;
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  GATEWAY — Token Management
+// ══════════════════════════════════════════════════════════════════
+
+async function loadGatewayInfo() {
+  const data = await apiPut('/v1/config/gateway', {action:'get_token'});
+  if (!data) return;
+
+  document.getElementById('gatewayToken').textContent = data.token || '—';
+  document.getElementById('gwPort').textContent = data.port || '—';
+  document.getElementById('gwUptime').textContent = fmtTime(data.uptime_seconds);
+  document.getElementById('gwStatus').textContent = 'Online';
+}
+
+function copyToken() {
+  const token = document.getElementById('gatewayToken').textContent;
+  navigator.clipboard.writeText(token).then(() => toast('Token copied')).catch(() => {
+    // Fallback
+    const ta = document.createElement('textarea');
+    ta.value = token;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    ta.remove();
+    toast('Token copied');
+  });
+}
+
+async function regenerateToken() {
+  if (!confirm('Regenerate token? All existing clients will be disconnected.')) return;
+  const data = await apiPut('/v1/config/gateway', {action:'regenerate_token'});
+  if (data && data.ok) {
+    TOKEN = data.token;
+    localStorage.setItem('swarm_token', TOKEN);
+    toast('Token regenerated');
+    loadGatewayInfo();
+  } else {
+    toast(data?.error || 'Failed to regenerate', 'error');
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  HEALTH
+// ══════════════════════════════════════════════════════════════════
+
+async function loadDoctor() {
+  const data = await api('/v1/doctor');
+  const el = document.getElementById('healthChecks');
+  if (!data || !data.checks) { el.innerHTML = '<li class="empty">Could not run health checks</li>'; return; }
+
+  let html = '';
+  for (const c of data.checks) {
+    const ok = c.ok !== undefined ? c.ok : c[0];
+    const label = c.label || c[1] || '';
+    const detail = c.detail || c[2] || '';
+    const icon = ok ? '<span class="check-icon" style="color:var(--green)">✓</span>' : '<span class="check-icon" style="color:var(--red)">✗</span>';
+    html += '<li>' + icon + '<span class="check-label">' + escHtml(label) + '</span><span class="check-detail">' + escHtml(detail) + '</span></li>';
+  }
+  el.innerHTML = html;
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  LOGS
+// ══════════════════════════════════════════════════════════════════
+
+async function initLogs() {
+  // Populate agent selector
+  const sel = document.getElementById('logAgentSelect');
+  const prev = sel.value;
+  const data = await api('/v1/agents');
+  if (!data) return;
+
+  sel.innerHTML = '<option value="">Select agent…</option>';
+  for (const a of (data.agents||[])) {
+    sel.innerHTML += '<option value="' + escHtml(a.id) + '"' + (a.id===prev?' selected':'') + '>' + escHtml(a.id) + '</option>';
+  }
+  // Add "all" option for general logs
+  sel.innerHTML += '<option value="gateway"' + ('gateway'===prev?' selected':'') + '>gateway</option>';
+  sel.innerHTML += '<option value="orchestrator"' + ('orchestrator'===prev?' selected':'') + '>orchestrator</option>';
+
+  if (sel.value) loadLogs();
+}
+
+async function loadLogs() {
+  const agentId = document.getElementById('logAgentSelect').value;
+  if (!agentId) {
+    document.getElementById('logContent').textContent = 'Select an agent to view logs.';
+    return;
+  }
+
+  const search = document.getElementById('logSearch').value;
+  let url = '/v1/logs/' + agentId + '?lines=300';
+  if (logLevel) url += '&level=' + logLevel;
+  if (search) url += '&search=' + encodeURIComponent(search);
+
+  const data = await api(url);
+  const el = document.getElementById('logContent');
+
+  if (!data || data.error) {
+    el.textContent = data?.error || 'Failed to load logs';
+    if (data?.available) {
+      el.textContent += '\n\nAvailable logs: ' + data.available.join(', ');
+    }
+    return;
+  }
+
+  if (!data.lines || !data.lines.length) {
+    el.textContent = 'No log entries found.';
+    return;
+  }
+
+  // Render with color-coded lines
+  let html = '';
+  for (const line of data.lines) {
+    let cls = 'log-line-info';
+    if (/ERROR|CRITICAL/i.test(line)) cls = 'log-line-error';
+    else if (/WARN/i.test(line)) cls = 'log-line-warn';
+    html += '<div class="' + cls + '">' + escHtml(line) + '</div>';
+  }
+  el.innerHTML = html;
+
+  // Auto-scroll to bottom
+  el.scrollTop = el.scrollHeight;
+}
+
+function setLogLevel(btn) {
+  document.querySelectorAll('.log-level-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  logLevel = btn.dataset.level;
+  loadLogs();
+}
+
+function toggleLogAutoRefresh() {
+  const checked = document.getElementById('logAutoRefresh').checked;
+  if (logAutoRefreshTimer) { clearInterval(logAutoRefreshTimer); logAutoRefreshTimer = null; }
+  if (checked) {
+    logAutoRefreshTimer = setInterval(loadLogs, 3000);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  CHAIN PANEL
+// ══════════════════════════════════════════════════════════════════
+
+async function loadChain() {
+  const data = await api('/v1/chain/status');
+  if (!data) {
+    document.getElementById('chainNetwork').textContent = 'Disabled';
+    document.getElementById('chainLitNet').textContent = '—';
+    document.getElementById('chainAgents').textContent = '—';
+    document.getElementById('chainX402').textContent = '—';
+    document.getElementById('chainAgentsBody').innerHTML = '<tr><td colspan="6" class="empty">Chain not enabled</td></tr>';
+    document.getElementById('chainTxList').textContent = 'Chain not enabled';
+    return;
+  }
+
+  // Stats cards
+  document.getElementById('chainNetwork').textContent = data.network || '—';
+  document.getElementById('chainLitNet').textContent = data.lit_network || '—';
+  const agents = data.agents || {};
+  const registered = Object.values(agents).filter(a => a.registered).length;
+  document.getElementById('chainAgents').textContent = registered + '/' + Object.keys(agents).length;
+  document.getElementById('chainX402').textContent = data.x402_enabled ? 'Enabled' : 'Disabled';
+
+  // Agent table
+  const tbody = document.getElementById('chainAgentsBody');
+  if (Object.keys(agents).length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">No agents initialized on-chain</td></tr>';
+  } else {
+    let html = '';
+    for (const [aid, info] of Object.entries(agents)) {
+      const status = info.registered
+        ? '<span style="color:var(--green)">Registered</span>'
+        : '<span style="color:var(--fg3)">Not registered</span>';
+      const pkp = info.pkp_address
+        ? '<span style="font-family:var(--mono);font-size:11px">' + escHtml(info.pkp_address.slice(0,6)) + '...' + escHtml(info.pkp_address.slice(-4)) + '</span>'
+        : '—';
+      const chainId = info.erc8004_agent_id != null ? '#' + info.erc8004_agent_id : '—';
+      const bal = info.usdc_balance || '0.00';
+      const initBtn = info.registered
+        ? '<span style="color:var(--fg3);font-size:11px">initialized</span>'
+        : '<button class="btn btn-sm" onclick="chainInit(\'' + escHtml(aid) + '\')">Init</button>';
+      html += '<tr><td><strong>' + escHtml(aid) + '</strong></td><td>' + status + '</td><td>' + pkp + '</td><td>' + chainId + '</td><td>$' + escHtml(bal) + '</td><td>' + initBtn + '</td></tr>';
+    }
+    tbody.innerHTML = html;
+  }
+
+  // Recent transactions
+  const txList = document.getElementById('chainTxList');
+  const txs = data.recent_transactions || [];
+  if (txs.length === 0) {
+    txList.textContent = 'No transactions yet';
+  } else {
+    let html = '';
+    for (const tx of txs.slice(-10).reverse()) {
+      const ts = tx.timestamp ? new Date(tx.timestamp * 1000).toLocaleString() : '—';
+      const hash = tx.tx_hash ? tx.tx_hash.slice(0, 10) + '...' : '—';
+      html += '<div style="padding:3px 0;border-bottom:1px solid var(--bg3)">'
+            + '<span style="color:var(--accent2)">' + escHtml(tx.action || '?') + '</span>'
+            + ' <span style="color:var(--fg3)">' + escHtml(tx.agent_id || '') + '</span>'
+            + ' <span>' + hash + '</span>'
+            + ' <span style="color:var(--fg3);float:right">' + ts + '</span></div>';
+    }
+    txList.innerHTML = html;
+  }
+}
+
+async function chainInit(agentId) {
+  if (!confirm('Initialize ' + agentId + ' on-chain? This will mint a PKP and register on ERC-8004.')) return;
+  const btn = event.target;
+  btn.disabled = true;
+  btn.textContent = 'Working...';
+  try {
+    const data = await api('/v1/chain/init/' + agentId, 'POST');
+    if (data && data.status === 'initialized') {
+      alert('Agent ' + agentId + ' initialized successfully!');
+    } else {
+      alert('Error: ' + JSON.stringify(data));
+    }
+  } catch(e) {
+    alert('Init failed: ' + e);
+  }
+  loadChain();
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  MEMORY PANEL
+// ══════════════════════════════════════════════════════════════════
+
+async function loadMemory() {
+  const [statusData, kbData, insightsData] = await Promise.all([
+    api('/v1/memory/status'),
+    api('/v1/memory/kb/notes'),
+    api('/v1/memory/kb/insights'),
+  ]);
+
+  // Stat cards
+  if (statusData) {
+    const agents = statusData.agents || {};
+    let totalEps = 0, totalCases = 0, totalPats = 0;
+    Object.values(agents).forEach(a => {
+      totalEps += a.episodes || 0;
+      totalCases += a.cases || 0;
+      totalPats += a.patterns || 0;
+    });
+    document.getElementById('memEpisodes').textContent = totalEps;
+    document.getElementById('memCases').textContent = totalCases;
+    document.getElementById('memPatterns').textContent = totalPats;
+    const kb = statusData.knowledge_base || {};
+    document.getElementById('memNotes').textContent = kb.notes || 0;
+
+    // Per-agent table
+    const body = document.getElementById('memAgentsBody');
+    let html = '';
+    for (const [aid, info] of Object.entries(agents)) {
+      html += '<tr>';
+      html += '<td><strong>' + escHtml(aid) + '</strong></td>';
+      html += '<td>' + (info.episodes || 0) + '</td>';
+      html += '<td>' + (info.cases || 0) + '</td>';
+      html += '<td>' + (info.patterns || 0) + '</td>';
+      html += '<td>' + (info.daily_logs || 0) + '</td>';
+      html += '</tr>';
+    }
+    body.innerHTML = html || '<tr><td colspan="5" class="empty">No memory data</td></tr>';
+  }
+
+  // Knowledge Base notes
+  const kbList = document.getElementById('memKBList');
+  if (kbData && kbData.notes && kbData.notes.length > 0) {
+    let html = '<div style="display:flex;flex-direction:column;gap:8px">';
+    kbData.notes.forEach(note => {
+      const tags = (note.tags || []).map(t => '<span style="background:var(--surface);padding:1px 6px;border-radius:3px;font-size:10px">' + escHtml(t) + '</span>').join(' ');
+      const contributors = (note.contributors || []).join(', ');
+      const content = (note.content || '').substring(0, 200);
+      html += '<div style="border-left:2px solid var(--accent1);padding-left:10px">';
+      html += '<div><strong>' + escHtml(note.topic || note.slug) + '</strong> ' + tags + '</div>';
+      html += '<div style="color:var(--fg3);font-size:11px">' + escHtml(content) + '</div>';
+      html += '<div style="color:var(--fg3);font-size:10px;margin-top:2px">by ' + escHtml(contributors) + ' · ' + (note.update_count || 1) + ' updates</div>';
+      html += '</div>';
+    });
+    html += '</div>';
+    kbList.innerHTML = html;
+  } else {
+    kbList.innerHTML = '<span class="empty">No knowledge notes yet. Notes are created as agents learn from tasks.</span>';
+  }
+
+  // Insights feed
+  const insList = document.getElementById('memInsightsList');
+  if (insightsData && insightsData.insights && insightsData.insights.length > 0) {
+    let html = '';
+    insightsData.insights.slice(-15).reverse().forEach(ins => {
+      const ts = new Date(ins.ts * 1000).toLocaleString();
+      const tags = (ins.tags || []).join(', ');
+      html += '<div style="margin-bottom:6px;border-left:2px solid var(--accent2);padding-left:8px">';
+      html += '<span style="color:var(--accent1)">[' + escHtml(ins.agent_id) + ']</span> ';
+      html += escHtml(ins.insight);
+      html += '<div style="color:var(--fg3);font-size:10px">' + ts;
+      if (tags) html += ' · ' + escHtml(tags);
+      html += '</div></div>';
+    });
+    insList.innerHTML = html;
+  } else {
+    insList.innerHTML = '<span class="empty">No cross-agent insights yet. Insights are generated after task completion.</span>';
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  INIT & POLLING
+// ══════════════════════════════════════════════════════════════════
+
+pollHealth();
+pollChatUpdates();
+setInterval(pollHealth, 5000);
+setInterval(pollChatUpdates, 2000);
+</script>
+</body>
+</html>

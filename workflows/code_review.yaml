@@ -1,0 +1,35 @@
+# workflows/code_review.yaml
+# Standard code review pipeline: plan → implement → review
+
+name: Code Review Pipeline
+description: Plan a task, implement it, then run peer review
+
+steps:
+  - id: plan
+    agent: planner
+    prompt: "Decompose this task into implementation subtasks: {{task}}"
+
+  - id: implement
+    agent: executor
+    prompt: |
+      Based on this plan, implement the solution:
+
+      ## Plan
+      {{plan.result}}
+
+      Write clean, working code with clear reasoning.
+    depends_on: [plan]
+
+  - id: review
+    agent: reviewer
+    prompt: |
+      Review the following implementation for correctness and quality:
+
+      ## Task Plan
+      {{plan.result}}
+
+      ## Implementation
+      {{implement.result}}
+
+      Return JSON: {"score": int, "comment": str}
+    depends_on: [implement]

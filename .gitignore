@@ -1,0 +1,60 @@
+# ── Python ──
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# ── Environment ──
+.env
+.venv/
+venv/
+env/
+
+# ── Runtime state (auto-created) ──
+.task_board.json
+.task_board.lock
+.context_bus.json
+.context_bus.lock
+.heartbeats/
+.mailboxes/
+.logs/
+chain_state.json
+chain_state.lock
+
+# ── Memory (runtime data) ──
+memory/agents/
+memory/shared/
+memory/chroma/
+memory/reputation_cache.json
+memory/reputation_cache.json.lock
+memory/usage_stats.json
+memory/usage_stats.lock
+memory/score_log.jsonl
+memory/pending_evolution/
+memory/pending_swaps/
+memory/pending_votes/
+
+# ── macOS ──
+.DS_Store
+._*
+.AppleDouble
+.LSOverride
+Icon?
+
+# ── IDE ──
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── Claude Code ──
+.claude/
+
+# ── Logs ──
+logs/
+*.log

@@ -1,0 +1,268 @@
+"""
+core/live_status.py
+Claude Code-style live status display for agent orchestration.
+Shows per-task status rows, elapsed time, and summary.
+"""
+
+from __future__ import annotations
+import time
+from typing import Optional
+
+from rich.console import Console, Group
+from rich.live import Live
+from rich.table import Table
+from rich.text import Text
+
+
+# ── Status icons ─────────────────────────────────────────────────────────────
+
+ICON_WORKING = "[bold cyan]●[/bold cyan]"
+ICON_DONE    = "[bold green]✓[/bold green]"
+ICON_IDLE    = "[dim]○[/dim]"
+ICON_FAIL    = "[bold red]✗[/bold red]"
+ICON_REVIEW  = "[bold magenta]◆[/bold magenta]"
+
+
+# ── Task row ─────────────────────────────────────────────────────────────────
+
+class TaskRow:
+    """One row in the status display, representing a single task."""
+    __slots__ = ("task_id", "agent_id", "status", "description",
+                 "elapsed", "error_msg", "review_score")
+
+    def __init__(self, task_id: str):
+        self.task_id     = task_id
+        self.agent_id    = ""
+        self.status      = "pending"   # pending/working/review/done/failed
+        self.description = ""
+        self.elapsed:      Optional[float] = None
+        self.error_msg   = ""
+        self.review_score: Optional[int] = None
+
+
+# ── Live Status Display ──────────────────────────────────────────────────────
+
+class LiveStatus:
+    """
+    Polls .task_board.json and renders a Claude Code-style live panel.
+
+    Shows one row per task (not per agent), so you can see:
+      ✓ planner   分解任务                              6.8s
+      ● executor  implement a modern responsive HTML…   12s
+      ○ reviewer  等待中…                                —
+    """
+
+    def __init__(self, console: Console, agents_config: list[dict]):
+        self.console    = console
+        self.start_time = time.time()
+        self.agent_ids  = [a["id"] for a in agents_config]
+        self.rows: dict[str, TaskRow] = {}   # task_id → TaskRow
+        self._live: Optional[Live] = None
+
+    # ── Lifecycle ─────────────────────────────────────────────────────────
+
+    def start(self):
+        self._live = Live(
+            self._build_display(),
+            console=self.console,
+            refresh_per_second=2,
+            transient=True,
+        )
+        self._live.start()
+
+    def stop(self):
+        if self._live:
+            self._live.stop()
+            self._live = None
+        # Print final (permanent) display
+        self.console.print(self._build_display(final=True))
+
+    # ── Poll task board ───────────────────────────────────────────────────
+
+    def poll(self, board):
+        """Read task board and update task rows."""
+        now = time.time()
+
+        try:
+            data = board._read()
+        except Exception:
+            return
+
+        for tid, t in data.items():
+            # Get or create row
+            if tid not in self.rows:
+                self.rows[tid] = TaskRow(tid)
+            row = self.rows[tid]
+
+            agent_id = t.get("agent_id") or ""
+            status   = t.get("status", "pending")
+            row.agent_id    = agent_id
+            row.description = _truncate(t.get("description", ""), 42)
+
+            if status == "claimed":
+                row.status  = "working"
+                claimed_at  = t.get("claimed_at")
+                row.elapsed = (now - claimed_at) if claimed_at else None
+
+            elif status == "review":
+                row.status  = "review"
+                claimed_at  = t.get("claimed_at")
+                row.elapsed = (now - claimed_at) if claimed_at else None
+
+            elif status == "completed":
+                row.status = "done"
+                started = t.get("claimed_at")
+                ended   = t.get("completed_at")
+                if started and ended:
+                    row.elapsed = ended - started
+                # Review score
+                scores = t.get("review_scores", [])
+                if scores:
+                    avg = sum(r["score"] for r in scores) / len(scores)
+                    row.review_score = int(avg)
+
+            elif status == "failed":
+                row.status = "failed"
+                started    = t.get("claimed_at")
+                row.elapsed = (now - started) if started else None
+                # Extract error reason
+                flags = t.get("evolution_flags", [])
+                for f in flags:
+                    if f.startswith("failed:"):
+                        err = f[7:]
+                        # Simplify common errors
+                        if "401" in err:
+                            row.error_msg = "API Key 无效 (401)"
+                        elif "403" in err:
+                            row.error_msg = "权限不足 (403)"
+                        elif "429" in err:
+                            row.error_msg = "请求过多 (429)"
+                        elif "timeout" in err.lower() or "timed out" in err.lower():
+                            row.error_msg = "请求超时"
+                        elif "connect" in err.lower():
+                            row.error_msg = "无法连接 API"
+                        else:
+                            row.error_msg = _truncate(err, 40)
+                        break
+
+            elif status == "pending":
+                row.status = "pending"
+
+        # Update live display
+        if self._live:
+            self._live.update(self._build_display())
+
+    # ── Build display ─────────────────────────────────────────────────────
+
+    def _build_display(self, final: bool = False) -> Table:
+        """Build the status table showing one row per task."""
+        now = time.time()
+        total_elapsed = now - self.start_time
+
+        table = Table(
+            show_header=False,
+            show_edge=False,
+            box=None,
+            padding=(0, 1),
+            expand=False,
+        )
+        table.add_column("icon", width=2, no_wrap=True)
+        table.add_column("agent", width=10, style="bold")
+        table.add_column("desc", min_width=30, max_width=50)
+        table.add_column("time", width=8, justify="right", style="dim")
+
+        # Sort: working first, then done, then failed, then pending
+        order = {"working": 0, "review": 1, "done": 2, "failed": 3, "pending": 4}
+        sorted_rows = sorted(self.rows.values(),
+                             key=lambda r: (order.get(r.status, 9),
+                                            r.elapsed or 0))
+
+        done_count = 0
+        fail_count = 0
+        working_count = 0
+
+        for row in sorted_rows:
+            icon = _icon_for(row.status)
+
+            if row.status == "working":
+                desc_text = f"[cyan]{row.description}[/cyan]"
+                working_count += 1
+            elif row.status == "review":
+                desc_text = f"[magenta]审查中…[/magenta]"
+                working_count += 1
+            elif row.status == "done":
+                if row.review_score is not None:
+                    desc_text = f"[green]{row.description} ({row.review_score}/100)[/green]"
+                else:
+                    desc_text = f"[green]{row.description}[/green]"
+                done_count += 1
+            elif row.status == "failed":
+                reason = row.error_msg or "执行失败"
+                desc_text = f"[red]{reason}[/red]"
+                fail_count += 1
+            else:  # pending
+                desc_text = f"[dim]等待中…[/dim]"
+
+            elapsed_str = _fmt_time(row.elapsed) if row.elapsed else "—"
+            table.add_row(icon, row.agent_id, desc_text, elapsed_str)
+
+        # If no rows yet, show agents waiting
+        if not self.rows:
+            for aid in self.agent_ids:
+                table.add_row(ICON_IDLE, aid, "[dim]等待中…[/dim]", "—")
+
+        # Summary row
+        table.add_row()
+        total_tasks = len(self.rows)
+
+        if final:
+            if fail_count:
+                summary = (f"[yellow]完成[/yellow] · "
+                           f"{done_count} 成功 · "
+                           f"[red]{fail_count} 失败[/red] · "
+                           f"{_fmt_time(total_elapsed)}")
+            else:
+                summary = (f"[green]Done[/green] · "
+                           f"{total_tasks} tasks · "
+                           f"{_fmt_time(total_elapsed)}")
+        else:
+            parts = []
+            if done_count:
+                parts.append(f"{done_count} done")
+            if working_count:
+                parts.append(f"{working_count} working")
+            if fail_count:
+                parts.append(f"[red]{fail_count} failed[/red]")
+            summary = f"[dim]{' · '.join(parts)} · {_fmt_time(total_elapsed)} elapsed[/dim]"
+
+        table.add_row("", "", summary, "")
+
+        return table
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+def _icon_for(status: str) -> str:
+    return {
+        "working": ICON_WORKING,
+        "done":    ICON_DONE,
+        "pending": ICON_IDLE,
+        "failed":  ICON_FAIL,
+        "review":  ICON_REVIEW,
+    }.get(status, ICON_IDLE)
+
+
+def _fmt_time(seconds: float | None) -> str:
+    if seconds is None:
+        return "—"
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    m, s = divmod(int(seconds), 60)
+    return f"{m}m{s:02d}s"
+
+
+def _truncate(text: str, maxlen: int) -> str:
+    text = text.replace("\n", " ").strip()
+    if len(text) > maxlen:
+        return text[:maxlen - 1] + "…"
+    return text
