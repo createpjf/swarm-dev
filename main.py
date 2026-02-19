@@ -1464,22 +1464,83 @@ AGENT_TEMPLATES = {
     "researcher": {
         "role": "Research specialist — finds information, analyzes sources, synthesizes findings",
         "skills": ["_base", "web_search", "summarize"],
-        "cognition": "# Researcher Cognition\n\n## Role\nYou are a meticulous researcher. Your job is to find accurate, relevant information and present it clearly.\n\n## Approach\n1. Understand the question scope\n2. Search multiple sources\n3. Cross-reference findings\n4. Synthesize into a clear summary\n\n## Quality Standards\n- Always cite sources\n- Distinguish facts from opinions\n- Flag conflicting information\n",
+        "soul": (
+            "# Researcher\n\n"
+            "## Identity\n"
+            "You are a meticulous researcher. You find accurate, relevant information and present it clearly.\n\n"
+            "## Style\n"
+            "- Analytical and precise\n"
+            "- Always cite sources\n"
+            "- Distinguish facts from opinions\n\n"
+            "## Values\n"
+            "- Accuracy over speed\n"
+            "- Cross-reference multiple sources\n"
+            "- Flag conflicting information\n\n"
+            "## Boundaries\n"
+            "- Never fabricate citations\n"
+            "- Clearly state when information is uncertain\n"
+        ),
     },
     "coder": {
         "role": "Software engineer — writes, reviews, and debugs code",
         "skills": ["_base", "code_write", "code_review"],
-        "cognition": "# Coder Cognition\n\n## Role\nYou are a pragmatic software engineer. Write clean, tested, maintainable code.\n\n## Approach\n1. Understand requirements before coding\n2. Follow existing code patterns\n3. Write minimal, focused changes\n4. Consider edge cases\n\n## Quality Standards\n- No unnecessary complexity\n- Clear variable/function names\n- Handle errors gracefully\n",
+        "soul": (
+            "# Coder\n\n"
+            "## Identity\n"
+            "You are a pragmatic software engineer. You write clean, tested, maintainable code.\n\n"
+            "## Style\n"
+            "- Minimal and focused\n"
+            "- Follow existing code patterns\n"
+            "- Clear variable/function names\n\n"
+            "## Values\n"
+            "- Simplicity over cleverness\n"
+            "- Understand requirements before coding\n"
+            "- Consider edge cases\n\n"
+            "## Boundaries\n"
+            "- No unnecessary complexity\n"
+            "- Handle errors gracefully\n"
+            "- Never commit secrets or credentials\n"
+        ),
     },
     "debugger": {
         "role": "Debug specialist — diagnoses issues, traces root causes, proposes fixes",
         "skills": ["_base", "code_review", "code_write"],
-        "cognition": "# Debugger Cognition\n\n## Role\nYou are a systematic debugger. Your job is to find and fix the root cause, not just the symptom.\n\n## Approach\n1. Reproduce the issue\n2. Form hypotheses\n3. Test each hypothesis\n4. Identify root cause\n5. Propose minimal fix\n\n## Quality Standards\n- Never guess — verify\n- Explain your reasoning chain\n- Prevent regression\n",
+        "soul": (
+            "# Debugger\n\n"
+            "## Identity\n"
+            "You are a systematic debugger. You find and fix root causes, not just symptoms.\n\n"
+            "## Style\n"
+            "- Methodical hypothesis-driven investigation\n"
+            "- Show your reasoning chain\n"
+            "- Propose minimal, targeted fixes\n\n"
+            "## Values\n"
+            "- Never guess — verify\n"
+            "- Reproduce before fixing\n"
+            "- Prevent regression\n\n"
+            "## Boundaries\n"
+            "- Never apply patches blindly\n"
+            "- Explain why, not just what\n"
+        ),
     },
     "doc_writer": {
         "role": "Documentation writer — creates clear, structured technical docs",
         "skills": ["_base", "summarize"],
-        "cognition": "# Documentation Writer Cognition\n\n## Role\nYou write clear, user-friendly documentation. Make complex topics accessible.\n\n## Approach\n1. Identify the target audience\n2. Outline the structure\n3. Write concisely with examples\n4. Review for completeness\n\n## Quality Standards\n- Use simple language\n- Include practical examples\n- Keep sections focused\n",
+        "soul": (
+            "# Documentation Writer\n\n"
+            "## Identity\n"
+            "You write clear, user-friendly documentation. Make complex topics accessible.\n\n"
+            "## Style\n"
+            "- Simple language, practical examples\n"
+            "- Structured with clear headings\n"
+            "- Scannable and concise\n\n"
+            "## Values\n"
+            "- Completeness without verbosity\n"
+            "- Target audience awareness\n"
+            "- Keep sections focused\n\n"
+            "## Boundaries\n"
+            "- Never assume reader knowledge\n"
+            "- Always include a quick-start path\n"
+        ),
     },
 }
 
@@ -1569,7 +1630,7 @@ def cmd_agents_add(name: str, template: str | None = None):
     from core.config_manager import safe_write_yaml
     safe_write_yaml("config/agents.yaml", config, reason=f"add agent {name}")
 
-    # Auto-generate skill override and cognition files
+    # Auto-generate skill override and soul.md files
     override_dir = os.path.join("skills", "agent_overrides")
     os.makedirs(override_dir, exist_ok=True)
     override_path = os.path.join(override_dir, f"{name}.md")
@@ -1578,25 +1639,108 @@ def cmd_agents_add(name: str, template: str | None = None):
             f.write(f"# {name} — Skill Overrides\n\n"
                     f"<!-- Add agent-specific instructions here -->\n")
 
-    cognition_dir = os.path.join("docs", name)
-    os.makedirs(cognition_dir, exist_ok=True)
-    cognition_path = os.path.join(cognition_dir, "cognition.md")
-    if not os.path.exists(cognition_path):
-        # Use template cognition if available
+    # Soul.md — OpenClaw-style personality file (replaces cognition.md)
+    agent_doc_dir = os.path.join("docs", name)
+    os.makedirs(agent_doc_dir, exist_ok=True)
+    soul_path = os.path.join(agent_doc_dir, "soul.md")
+    if not os.path.exists(soul_path):
         if template and template in AGENT_TEMPLATES:
-            content = AGENT_TEMPLATES[template]["cognition"]
+            content = AGENT_TEMPLATES[template]["soul"]
         else:
-            content = (f"# {name} Cognition\n\n"
-                       f"## Role\n{role}\n\n"
-                       f"## Approach\n<!-- Define how this agent should think -->\n\n"
-                       f"## Quality Standards\n<!-- Define quality criteria -->\n")
-        with open(cognition_path, "w") as f:
+            content = (f"# {name}\n\n"
+                       f"## Identity\n{role}\n\n"
+                       f"## Style\n"
+                       f"<!-- How this agent communicates -->\n\n"
+                       f"## Values\n"
+                       f"<!-- What this agent prioritizes -->\n\n"
+                       f"## Boundaries\n"
+                       f"<!-- What this agent won't do -->\n")
+        with open(soul_path, "w") as f:
             f.write(content)
 
     print(f"\n  ✓ Agent '{name}' created → {PROVIDERS[provider]['label']}/{model}")
     print(f"  ✓ {override_path}")
-    print(f"  ✓ {cognition_path}")
+    print(f"  ✓ {soul_path}")
     print(f"  Team: {', '.join(a['id'] for a in config['agents'])}\n")
+
+
+def cmd_cron(action: str, name: str = "", act: str = "", payload: str = "",
+             schedule_type: str = "", schedule: str = "", job_id: str = "",
+             console=None):
+    """Cron scheduler management CLI."""
+    try:
+        from rich.console import Console
+        from rich.table import Table
+        console = console or Console()
+    except ImportError:
+        console = None
+
+    from core.cron import list_jobs, add_job, remove_job, get_job, _execute_job
+
+    if action == "list":
+        jobs = list_jobs()
+        if not jobs:
+            print("  No cron jobs.")
+            return
+        if console:
+            table = Table(title="Cron Jobs", show_lines=True)
+            table.add_column("ID", style="cyan", width=12)
+            table.add_column("Name", style="bold")
+            table.add_column("Action")
+            table.add_column("Schedule")
+            table.add_column("Next Run")
+            table.add_column("Runs", justify="right")
+            table.add_column("Enabled")
+            for j in jobs:
+                next_run = j.get("next_run", "—")
+                if next_run and len(next_run) > 19:
+                    next_run = next_run[:19]
+                table.add_row(
+                    j["id"], j["name"], j["action"],
+                    f"{j['schedule_type']}: {j['schedule']}",
+                    next_run or "—",
+                    str(j.get("run_count", 0)),
+                    "✓" if j.get("enabled") else "✗",
+                )
+            console.print(table)
+        else:
+            for j in jobs:
+                print(f"  {j['id']}  {j['name']}  {j['action']}:{j['payload'][:30]}  "
+                      f"{j['schedule_type']}:{j['schedule']}  "
+                      f"runs={j.get('run_count', 0)}")
+
+    elif action == "add":
+        if not all([name, act, payload, schedule_type, schedule]):
+            print("Usage: swarm cron add --name NAME --action task|exec|webhook "
+                  "--payload PAYLOAD --type once|interval|cron --schedule SCHEDULE")
+            return
+        job = add_job(name, act, payload, schedule_type, schedule)
+        print(f"  ✓ Job created: {job['id']} ({job['name']})")
+        print(f"    Next run: {job.get('next_run', '—')}")
+
+    elif action == "remove":
+        if not job_id:
+            print("Usage: swarm cron remove --id JOB_ID")
+            return
+        if remove_job(job_id):
+            print(f"  ✓ Job {job_id} removed")
+        else:
+            print(f"  ✗ Job {job_id} not found")
+
+    elif action == "run":
+        if not job_id:
+            print("Usage: swarm cron run --id JOB_ID")
+            return
+        job = get_job(job_id)
+        if not job:
+            print(f"  ✗ Job {job_id} not found")
+            return
+        print(f"  Running job: {job['name']}...")
+        ok, msg = _execute_job(job)
+        print(f"  {'✓' if ok else '✗'} {msg}")
+
+    else:
+        print("Usage: swarm cron <list|add|remove|run>")
 
 
 def cmd_chain(action: str, agent_id: str = None, console=None):
@@ -2096,6 +2240,22 @@ def main():
     p_export.add_argument("--format", "-f", choices=["md", "json"], default="md",
                           help="Output format (default: md)")
 
+    p_cron = sub.add_parser("cron", help="Scheduled job management")
+    p_cron.add_argument("action", choices=["list", "add", "remove", "run"],
+                         help="Cron action")
+    p_cron.add_argument("--name", default="", help="Job name (for add)")
+    p_cron.add_argument("--action-type", dest="cron_action", default="",
+                         choices=["task", "exec", "webhook", ""],
+                         help="Job action type (for add)")
+    p_cron.add_argument("--payload", default="",
+                         help="Task description, shell cmd, or webhook URL")
+    p_cron.add_argument("--type", dest="cron_type", default="",
+                         choices=["once", "interval", "cron", ""],
+                         help="Schedule type: once, interval, or cron")
+    p_cron.add_argument("--schedule", default="",
+                         help="ISO timestamp, seconds, or cron expression")
+    p_cron.add_argument("--id", dest="job_id", default="", help="Job ID")
+
     p_gw = sub.add_parser("gateway", help="Gateway management")
     p_gw.add_argument("action", nargs="?", default="start",
                        choices=["start", "stop", "restart", "status",
@@ -2163,6 +2323,10 @@ def main():
         cmd_doctor(repair=args.repair, deep=args.deep)
     elif args.cmd == "export":
         cmd_export(args.task_id, fmt=args.format)
+    elif args.cmd == "cron":
+        cmd_cron(action=args.action, name=args.name, act=args.cron_action,
+                 payload=args.payload, schedule_type=args.cron_type,
+                 schedule=args.schedule, job_id=args.job_id)
     elif args.cmd == "gateway":
         cmd_gateway(action=args.action, port=args.port,
                     token=args.token, force=args.force)

@@ -10,6 +10,13 @@ Endpoints:
   GET  /v1/status                   Full task board
   POST /v1/agents                   Create a new agent
   DELETE /v1/agents/:id             Delete an agent
+  POST /v1/exec                     Execute shell command (approval-gated)
+  GET  /v1/exec/approvals           List exec approval patterns
+  POST /v1/exec/approve             Add command pattern to allowlist
+  GET  /v1/cron                     List scheduled jobs
+  POST /v1/cron                     Create a scheduled job
+  DELETE /v1/cron/:id               Remove a scheduled job
+  POST /v1/cron/:id/run             Manually trigger a job
   GET  /v1/scores                   Reputation scores
   GET  /v1/agents                   Agent team info
   GET  /v1/usage                    Usage statistics
@@ -214,6 +221,12 @@ class _Handler(BaseHTTPRequestHandler):
             self._handle_get_budget()
         elif path == "/v1/alerts":
             self._handle_get_alerts()
+        # ── Cron route ──
+        elif path == "/v1/cron":
+            self._handle_cron_list()
+        # ── Exec approvals ──
+        elif path == "/v1/exec/approvals":
+            self._handle_exec_approvals()
         # ── Logs route ──
         elif path.startswith("/v1/logs/"):
             agent_id = path[len("/v1/logs/"):]
@@ -242,6 +255,10 @@ class _Handler(BaseHTTPRequestHandler):
 
         if path == "/v1/task":
             self._handle_submit_task()
+        elif path == "/v1/exec":
+            self._handle_exec()
+        elif path == "/v1/exec/approve":
+            self._handle_exec_add_approval()
         elif path == "/v1/agents":
             self._handle_create_agent()
         elif path == "/v1/search":
@@ -272,6 +289,12 @@ class _Handler(BaseHTTPRequestHandler):
         # ── Budget management ──
         elif path == "/v1/budget":
             self._handle_set_budget()
+        # ── Cron management ──
+        elif path == "/v1/cron":
+            self._handle_cron_add()
+        elif path.startswith("/v1/cron/") and path.endswith("/run"):
+            job_id = path[len("/v1/cron/"):-len("/run")]
+            self._handle_cron_run(job_id)
         else:
             self._json_response(404, {"error": "Not found"})
 
@@ -308,7 +331,10 @@ class _Handler(BaseHTTPRequestHandler):
 
         path = self.path.rstrip("/")
 
-        if path.startswith("/v1/agents/"):
+        if path.startswith("/v1/cron/"):
+            job_id = path[len("/v1/cron/"):]
+            self._handle_cron_remove(job_id)
+        elif path.startswith("/v1/agents/"):
             agent_id = path[len("/v1/agents/"):]
             self._handle_delete_agent(agent_id)
         elif path.startswith("/v1/skills/agents/"):
@@ -814,14 +840,17 @@ class _Handler(BaseHTTPRequestHandler):
                 f.write(f"# {agent_id} — Skill Overrides\n\n"
                         f"<!-- Add agent-specific instructions here -->\n")
 
-        cognition_dir = os.path.join("docs", agent_id)
-        os.makedirs(cognition_dir, exist_ok=True)
-        cognition_path = os.path.join(cognition_dir, "cognition.md")
-        if not os.path.exists(cognition_path):
-            with open(cognition_path, "w") as f:
-                f.write(f"# {agent_id} Cognition\n\n"
-                        f"## Role\n{role}\n\n"
-                        f"## Approach\n<!-- Define thinking approach -->\n")
+        # Soul.md — OpenClaw-style personality file
+        agent_doc_dir = os.path.join("docs", agent_id)
+        os.makedirs(agent_doc_dir, exist_ok=True)
+        soul_path = os.path.join(agent_doc_dir, "soul.md")
+        if not os.path.exists(soul_path):
+            with open(soul_path, "w") as f:
+                f.write(f"# {agent_id}\n\n"
+                        f"## Identity\n{role}\n\n"
+                        f"## Style\n<!-- Communication approach -->\n\n"
+                        f"## Values\n<!-- Priorities -->\n\n"
+                        f"## Boundaries\n<!-- Limits -->\n")
 
         # Regenerate team skill
         try:
@@ -1357,6 +1386,128 @@ class _Handler(BaseHTTPRequestHandler):
         self._json_response(200, {"alerts": alerts, "total": len(alerts)})
 
     # ══════════════════════════════════════════════════════════════════════════
+    #  EXEC HANDLERS
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _handle_exec(self):
+        """POST /v1/exec — execute a shell command (approval-gated).
+
+        Body: {command, agent_id?, timeout?, cwd?, force?}
+        """
+        from core.exec_tool import execute
+        body = self._read_body()
+        if not body:
+            self._json_response(400, {"error": "Empty body"})
+            return
+        command = body.get("command", "").strip()
+        if not command:
+            self._json_response(400, {"error": "Missing 'command'"})
+            return
+        result = execute(
+            command=command,
+            agent_id=body.get("agent_id", "api"),
+            timeout=min(int(body.get("timeout", 300)), 600),
+            cwd=body.get("cwd"),
+            force=body.get("force", False),
+        )
+        code = 200 if result["ok"] else (403 if result.get("blocked") else 500)
+        self._json_response(code, result)
+
+    def _handle_exec_approvals(self):
+        """GET /v1/exec/approvals — list exec approval patterns."""
+        from core.exec_tool import list_approved_patterns
+        self._json_response(200, list_approved_patterns())
+
+    def _handle_exec_add_approval(self):
+        """POST /v1/exec/approve — add a pattern to the exec allowlist.
+
+        Body: {pattern}
+        """
+        from core.exec_tool import add_approval
+        body = self._read_body()
+        pattern = body.get("pattern", "").strip()
+        if not pattern:
+            self._json_response(400, {"error": "Missing 'pattern'"})
+            return
+        add_approval(pattern)
+        self._json_response(200, {"ok": True, "pattern": pattern})
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  CRON HANDLERS
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _handle_cron_list(self):
+        """GET /v1/cron — list all scheduled jobs."""
+        from core.cron import list_jobs
+        jobs = list_jobs()
+        self._json_response(200, {"jobs": jobs, "total": len(jobs)})
+
+    def _handle_cron_add(self):
+        """POST /v1/cron — create a scheduled job.
+
+        Body: {name, action, payload, schedule_type, schedule, agent_id?, enabled?}
+        """
+        from core.cron import add_job
+        body = self._read_body()
+        if not body:
+            self._json_response(400, {"error": "Empty body"})
+            return
+
+        name = body.get("name", "").strip()
+        action = body.get("action", "").strip()
+        payload = body.get("payload", "").strip()
+        schedule_type = body.get("schedule_type", "").strip()
+        schedule = body.get("schedule", "").strip()
+
+        if not all([name, action, payload, schedule_type, schedule]):
+            self._json_response(400, {
+                "error": "Required: name, action, payload, schedule_type, schedule"})
+            return
+        if action not in ("task", "exec", "webhook"):
+            self._json_response(400, {
+                "error": "action must be: task, exec, or webhook"})
+            return
+        if schedule_type not in ("once", "interval", "cron"):
+            self._json_response(400, {
+                "error": "schedule_type must be: once, interval, or cron"})
+            return
+
+        job = add_job(
+            name=name, action=action, payload=payload,
+            schedule_type=schedule_type, schedule=schedule,
+            agent_id=body.get("agent_id", ""),
+            enabled=body.get("enabled", True))
+        self._json_response(201, {"ok": True, "job": job})
+
+    def _handle_cron_remove(self, job_id: str):
+        """DELETE /v1/cron/:id — remove a scheduled job."""
+        from core.cron import remove_job
+        if remove_job(job_id):
+            self._json_response(200, {"ok": True, "deleted": job_id})
+        else:
+            self._json_response(404, {"error": f"Job '{job_id}' not found"})
+
+    def _handle_cron_run(self, job_id: str):
+        """POST /v1/cron/:id/run — manually trigger a job now."""
+        from core.cron import get_job, _execute_job, _load_jobs, _save_jobs
+        job = get_job(job_id)
+        if not job:
+            self._json_response(404, {"error": f"Job '{job_id}' not found"})
+            return
+        ok, msg = _execute_job(job)
+        # Update run tracking
+        from datetime import datetime, timezone as tz
+        jobs = _load_jobs()
+        for j in jobs:
+            if j["id"] == job_id:
+                j["last_run"] = datetime.now(tz.utc).isoformat()
+                j["run_count"] = j.get("run_count", 0) + 1
+                j["last_error"] = None if ok else msg
+                break
+        _save_jobs(jobs)
+        self._json_response(200, {"ok": ok, "message": msg})
+
+    # ══════════════════════════════════════════════════════════════════════════
     #  SSE EVENT STREAM
     # ══════════════════════════════════════════════════════════════════════════
 
@@ -1655,6 +1806,13 @@ def start_gateway(port: int = 0, token: str = "",
         thread.start()
         logger.info("Gateway started on http://127.0.0.1:%d", port)
         logger.info("Dashboard: http://127.0.0.1:%d/", port)
+
+        # Start cron scheduler alongside gateway
+        try:
+            from core.cron import start_scheduler
+            start_scheduler(interval=30)
+        except Exception as e:
+            logger.warning("Cron scheduler failed to start: %s", e)
     else:
         logger.info("Gateway running on http://127.0.0.1:%d (foreground)",
                      port)

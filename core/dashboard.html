@@ -654,6 +654,9 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
     <div class="skills-list">
       <div class="skills-list-header">
         <input class="input" type="text" placeholder="Search skills…" id="skillSearch" oninput="filterSkills()">
+        <select class="input" id="skillAgentFilter" onchange="filterSkills()" style="margin-top:6px;font-size:11px">
+          <option value="">All agents</option>
+        </select>
       </div>
       <div class="skills-list-body" id="skillsListBody">
         <div class="empty">Loading…</div>
@@ -2433,19 +2436,45 @@ async function deleteAgent(id) {
 // ══════════════════════════════════════════════════════════════════
 
 async function loadSkills() {
-  skillsData = await api('/v1/skills');
+  const [skills, agentData] = await Promise.all([api('/v1/skills'), api('/v1/agents')]);
+  skillsData = skills;
   if (!skillsData) return;
+
+  // Populate agent filter dropdown
+  const sel = document.getElementById('skillAgentFilter');
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">All agents</option>';
+  const agents = agentData?.agents || [];
+  for (const a of agents) {
+    const agentSkills = (a.skills || []);
+    sel.innerHTML += '<option value="' + escHtml(a.id) + '">' + escHtml(a.id) + ' (' + agentSkills.length + ' skills)</option>';
+  }
+  sel.value = prev; // preserve selection across reloads
+  // Store agent skill assignments for filtering
+  skillsData._agentAssignments = {};
+  for (const a of agents) {
+    skillsData._agentAssignments[a.id] = new Set(a.skills || []);
+  }
   renderSkillsList();
 }
 
 function renderSkillsList() {
   const body = document.getElementById('skillsListBody');
   const filter = (document.getElementById('skillSearch').value||'').toLowerCase();
+  const agentFilter = (document.getElementById('skillAgentFilter')?.value||'');
+  const assignments = skillsData._agentAssignments || {};
   let html = '';
 
-  // Team skill
+  // Helper: check if a skill name is assigned to the filtered agent
+  function agentHasSkill(skillName) {
+    if (!agentFilter) return true;  // no filter = show all
+    const agentSkills = assignments[agentFilter];
+    return agentSkills && (agentSkills.has(skillName) || agentSkills.has('_base'));
+  }
+
+  // Team skill (always visible if _base is in scope)
   if (skillsData.team && skillsData.team.exists) {
-    const match = !filter || '_team'.includes(filter) || 'team'.includes(filter);
+    const match = (!filter || '_team'.includes(filter) || 'team'.includes(filter)) && agentHasSkill('_team');
     if (match) {
       html += '<div class="skill-group-title">Team</div>';
       html += '<div class="skill-item' + (currentSkill?.key === 'team:_team' ? ' active' : '') + '" onclick="selectSkill(\'team\',\'_team\')">';
@@ -2453,19 +2482,24 @@ function renderSkillsList() {
     }
   }
 
-  // Shared
-  const shared = (skillsData.shared || []).filter(s => !filter || s.name.toLowerCase().includes(filter));
+  // Shared skills — highlight which ones are assigned to filtered agent
+  const shared = (skillsData.shared || []).filter(s =>
+    (!filter || s.name.toLowerCase().includes(filter)) && agentHasSkill(s.name)
+  );
   if (shared.length) {
-    html += '<div class="skill-group-title">Shared</div>';
+    html += '<div class="skill-group-title">Shared' + (agentFilter ? ' → ' + escHtml(agentFilter) : '') + '</div>';
     for (const s of shared) {
+      const isAssigned = agentFilter && assignments[agentFilter]?.has(s.name);
+      const badge = isAssigned ? ' <span style="color:var(--green);font-size:9px">●</span>' : '';
       html += '<div class="skill-item' + (currentSkill?.key === 'shared:'+s.name ? ' active' : '') + '" onclick="selectSkill(\'shared\',\'' + escHtml(s.name) + '\')">';
-      html += '<span>' + escHtml(s.name) + '</span><span class="skill-scope">shared</span></div>';
+      html += '<span>' + escHtml(s.name) + badge + '</span><span class="skill-scope">shared</span></div>';
     }
   }
 
-  // Agent skills
+  // Agent-specific skill files
   const agents = skillsData.agents || {};
   for (const [aid, skills] of Object.entries(agents).sort()) {
+    if (agentFilter && aid !== agentFilter) continue;  // skip agents not matching filter
     const filtered = skills.filter(s => !filter || s.name.toLowerCase().includes(filter) || aid.includes(filter));
     if (!filtered.length) continue;
     html += '<div class="skill-group-title">Agent: ' + escHtml(aid) + '</div>';

@@ -126,7 +126,7 @@ cat > "$COMP_SCRIPT" <<'COMPEOF'
 _swarm_completions() {
     local cur="${COMP_WORDS[COMP_CWORD]}"
     local prev="${COMP_WORDS[COMP_CWORD-1]}"
-    local cmds="onboard run status scores doctor gateway agents workflow chain export install uninstall update"
+    local cmds="onboard run status scores doctor gateway agents workflow chain export cron install uninstall update"
     case "$prev" in
         swarm)
             COMPREPLY=( $(compgen -W "$cmds" -- "$cur") ) ;;
@@ -138,12 +138,18 @@ _swarm_completions() {
             COMPREPLY=( $(compgen -W "list run" -- "$cur") ) ;;
         chain)
             COMPREPLY=( $(compgen -W "status balance init register health" -- "$cur") ) ;;
+        cron)
+            COMPREPLY=( $(compgen -W "list add remove run" -- "$cur") ) ;;
         doctor)
             COMPREPLY=( $(compgen -W "--repair --deep" -- "$cur") ) ;;
         export)
             COMPREPLY=( $(compgen -W "--format" -- "$cur") ) ;;
         --format|-f)
             COMPREPLY=( $(compgen -W "md json" -- "$cur") ) ;;
+        --action-type)
+            COMPREPLY=( $(compgen -W "task exec webhook" -- "$cur") ) ;;
+        --type)
+            COMPREPLY=( $(compgen -W "once interval cron" -- "$cur") ) ;;
         --template)
             COMPREPLY=( $(compgen -W "researcher coder debugger doc_writer" -- "$cur") ) ;;
     esac

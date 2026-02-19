@@ -215,6 +215,11 @@ _STRINGS = {
     # ── Doctor repair ─────────────────────────────────────────────────
     "doctor.repair_title": {"en": "Auto-Repair",             "zh": "自动修复"},
     "doctor.deep_title":   {"en": "Deep Diagnostics",        "zh": "深度诊断"},
+    # ── Cron & Exec ───────────────────────────────────────────────────
+    "cron.title":          {"en": "Cron Scheduler",          "zh": "定时调度器"},
+    "cron.no_jobs":        {"en": "No scheduled jobs",       "zh": "没有定时任务"},
+    "exec.blocked":        {"en": "Command blocked",         "zh": "命令被拦截"},
+    "exec.allowed":        {"en": "Command executed",        "zh": "命令已执行"},
 }
 
 

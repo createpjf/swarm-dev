@@ -67,7 +67,8 @@ class AgentConfig:
     # Episodic + knowledge base memory settings
     episodic_recall_budget: int  = 1500   # token budget for episodic recall
     kb_recall_budget:       int  = 800    # token budget for knowledge base recall
-    cognition_file:         str  = ""     # path to cognition.md (optional)
+    cognition_file:         str  = ""     # path to cognition.md (legacy, optional)
+    soul_file:              str  = ""     # path to soul.md (OpenClaw pattern, optional)
 
 
 class BaseAgent:
@@ -94,25 +95,55 @@ class BaseAgent:
         self.kb           = kb
         self._short_term: list[dict] = []  # conversation window
         self._cognition: str = ""          # cached cognition profile
+        self._soul: str = ""               # cached soul.md (OpenClaw pattern)
         os.makedirs(MAILBOX_DIR, exist_ok=True)
-        # Load cognition profile if configured
-        self._load_cognition()
+        # Load soul + cognition profiles
+        self._load_soul()
 
-    def _load_cognition(self):
-        """Load the agent's cognition profile from docs/{agent_id}/cognition.md."""
-        paths_to_try = [
+    def _load_soul(self):
+        """Load agent personality — prefers soul.md (OpenClaw pattern), falls back to cognition.md.
+
+        Search order for soul.md:
+          1. Explicit soul_file path from config
+          2. docs/{agent_id}/soul.md
+          3. docs/shared/soul.md
+
+        Fallback to cognition.md (legacy):
+          1. Explicit cognition_file path from config
+          2. docs/{agent_id}/cognition.md
+          3. docs/shared/cognition.md
+        """
+        # Try soul.md first (OpenClaw pattern)
+        soul_paths = [
+            self.cfg.soul_file,
+            os.path.join("docs", self.cfg.agent_id, "soul.md"),
+            os.path.join("docs", "shared", "soul.md"),
+        ]
+        for p in soul_paths:
+            if p and os.path.exists(p):
+                try:
+                    with open(p) as f:
+                        self._soul = f.read().strip()
+                    logger.info("[%s] loaded soul from %s",
+                                self.cfg.agent_id, p)
+                    break
+                except OSError:
+                    continue
+
+        # Fallback: cognition.md (legacy)
+        cognition_paths = [
             self.cfg.cognition_file,
             os.path.join("docs", self.cfg.agent_id, "cognition.md"),
             os.path.join("docs", "shared", "cognition.md"),
         ]
-        for p in paths_to_try:
+        for p in cognition_paths:
             if p and os.path.exists(p):
                 try:
                     with open(p) as f:
                         self._cognition = f.read().strip()
                     logger.info("[%s] loaded cognition from %s",
                                 self.cfg.agent_id, p)
-                    return
+                    break
                 except OSError:
                     continue
 
@@ -143,14 +174,18 @@ class BaseAgent:
 
         # 5. System prompt with all layers
         docs_section = f"\n\n## Reference Documents\n{docs_text}" if docs_text else ""
-        cognition_section = (f"\n\n## Cognitive Profile\n{self._cognition}"
-                             if self._cognition else "")
+        # Soul.md (OpenClaw pattern) takes precedence; cognition.md is fallback
+        soul_section = ""
+        if self._soul:
+            soul_section = f"\n\n## Soul\n{self._soul}"
+        elif self._cognition:
+            soul_section = f"\n\n## Cognitive Profile\n{self._cognition}"
         memory_block = f"\n\n{memory_section}" if memory_section else ""
 
         system_prompt = (
             f"You are {self.cfg.agent_id}.\n\n"
             f"## Role\n{self.cfg.role}"
-            f"{cognition_section}\n\n"
+            f"{soul_section}\n\n"
             f"## Skills\n{skills_text}"
             f"{docs_section}"
             f"{memory_block}\n\n"
