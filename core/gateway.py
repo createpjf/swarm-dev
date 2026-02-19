@@ -443,6 +443,35 @@ class _Handler(BaseHTTPRequestHandler):
                 masked_key = raw_key[:3] + "…"
             else:
                 masked_key = ""
+            # Current task (from task board)
+            current_task = None
+            try:
+                if os.path.exists(".task_board.json"):
+                    with open(".task_board.json") as tb:
+                        tasks = json.load(tb)
+                    for tid, t in tasks.items():
+                        if t.get("agent_id") == a["id"] and t.get("status") in ("claimed", "critique"):
+                            current_task = {
+                                "id": tid[:8],
+                                "description": t.get("description", "")[:80],
+                                "status": t.get("status", ""),
+                            }
+                            break
+            except Exception:
+                pass
+
+            # Recent logs (last 5 lines)
+            recent_logs = []
+            try:
+                log_path = os.path.join(".logs", f"{a['id']}.log")
+                if os.path.exists(log_path):
+                    with open(log_path, "r", encoding="utf-8", errors="ignore") as lf:
+                        all_lines = lf.readlines()
+                    for line in all_lines[-5:]:
+                        recent_logs.append(line.rstrip()[:120])
+            except Exception:
+                pass
+
             agents.append({
                 "id": a["id"],
                 "model": a.get("model", "?"),
@@ -456,6 +485,8 @@ class _Handler(BaseHTTPRequestHandler):
                 "fallback_models": a.get("fallback_models", []),
                 "role": a.get("role", ""),
                 "autonomy_level": a.get("autonomy_level", 1),
+                "current_task": current_task,
+                "recent_logs": recent_logs,
             })
         self._json_response(200, {"agents": agents, "global_key_env": global_key_env, "global_url_env": global_url_env})
 

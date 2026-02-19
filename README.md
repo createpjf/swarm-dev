@@ -1,31 +1,41 @@
 # ⬡ Swarm
 
+![version](https://img.shields.io/badge/version-0.1.0-blue)
+![python](https://img.shields.io/badge/python-3.10%2B-green)
+![license](https://img.shields.io/badge/license-MIT-grey)
+
 **Multi-agent orchestration that plans, executes, and quality-checks your tasks.**
 
 Agents collaborate through file-backed channels, self-claim tasks, peer-review each other, and evolve when performance drops. Process-native, model-agnostic, zero infrastructure.
 
+<!-- demo gif placeholder: record a 30s walkthrough and replace this comment -->
+
 ---
 
-## Quick Start
+## Install
 
 ```bash
-# 1. Install & configure (one command)
+# One-liner (recommended)
+curl -fsSL https://raw.githubusercontent.com/createpjf/swarm-dev/main/install.sh | bash
+
+# Or: clone manually
 git clone https://github.com/createpjf/swarm-dev.git && cd swarm-dev
-bash setup.sh          # installs deps → launches setup wizard
-
-# 2. Use it
-swarm                  # interactive chat
-swarm run "your task"  # one-shot
-
-# 3. Dashboard (optional)
-swarm gateway start    # opens http://127.0.0.1:19789
+bash setup.sh
 ```
 
 > Only one API key needed. `setup.sh` auto-detects local Ollama if running.
 
 ---
 
-## What Happens When You Submit a Task
+## Quick Start
+
+```bash
+swarm                  # interactive chat
+swarm run "your task"  # one-shot
+swarm gateway start    # opens dashboard at http://127.0.0.1:19789
+```
+
+### What Happens
 
 ```
 You: "Build a REST API for user management"
@@ -47,23 +57,33 @@ The dashboard shows this in real-time: streaming output, subtask tree, agent sta
 
 ---
 
-## CLI Cheat Sheet
+## CLI
+
+```bash
+swarm --version                  # show version
+swarm --json status              # machine-readable output
+```
 
 | Command | What it does |
 |---------|-------------|
 | `swarm` | Interactive chat mode |
 | `swarm onboard` | Setup wizard (re-run anytime) |
 | `swarm run "..."` | One-shot task |
-| `swarm status` | Task board |
-| `swarm scores` | Reputation scores |
-| `swarm doctor` | System health check |
+| `swarm status` | Task board (`--json` for JSON output) |
+| `swarm scores` | Reputation scores (`--json`) |
+| `swarm doctor` | System health check (`--json` / `--repair` / `--deep`) |
 | `swarm gateway start` | Start dashboard |
 | `swarm agents create <name>` | Create agent (`--template coder\|researcher\|debugger\|doc_writer`) |
 | `swarm workflow list` | List available workflows |
-| `swarm workflow run <name>` | Run a workflow (e.g., `code_review`, `bug_fix`, `brainstorm`) |
+| `swarm workflow run <name>` | Run a workflow |
+| `swarm export <task_id>` | Export task results (`--format md\|json`) |
+| `swarm cron list` | Scheduled jobs |
 | `swarm chain status` | On-chain identity status |
+| `swarm update` | Pull latest from GitHub |
+| `swarm install` | Install from GitHub |
+| `swarm uninstall` | Remove CLI & daemon |
 
-**Chat commands** (inside interactive mode): `/status` `/scores` `/config` `/configure` `/doctor` `/workflows` `/cancel` `/clear` `/help`
+**Chat commands** (inside interactive mode): `/status` `/scores` `/config` `/configure` `/doctor` `/workflows` `/save` `/templates` `/cancel` `/clear` `/help`
 
 ---
 
@@ -78,6 +98,33 @@ The dashboard shows this in real-time: streaming output, subtask tree, agent sta
 | **Skills** | Hot-reload markdown files in `skills/`. Edit → next task picks up changes |
 | **Workflows** | YAML pipelines with dependency graphs, variable passing, approval gates |
 | **Memory** | 3-layer episodic (L0 index → L1 summary → L2 full) + shared Zettelkasten KB |
+| **Tools** | 18 built-in tools across 6 groups (web, fs, memory, task, automation, messaging) |
+
+---
+
+## Agent Tools
+
+Agents can invoke tools during task execution. 18 built-in tools organized by group:
+
+| Group | Tools |
+|-------|-------|
+| **Web** | `web_search`, `web_fetch` |
+| **Filesystem** | `read_file`, `write_file`, `edit_file`, `list_dir` |
+| **Memory** | `memory_search`, `memory_save`, `kb_search`, `kb_write` |
+| **Task** | `task_create`, `task_status` |
+| **Automation** | `exec`, `cron`, `process` |
+| **Media** | `screenshot`, `notify` |
+| **Messaging** | `send_mail` |
+
+Access control via profiles (`minimal`, `coding`, `full`) and per-agent allow/deny lists:
+
+```yaml
+agents:
+  - id: researcher
+    tools:
+      profile: "full"
+      deny: ["exec", "write_file"]
+```
 
 ---
 
@@ -102,8 +149,9 @@ Create your own: drop a YAML file in `workflows/`. See existing templates for th
 `swarm gateway start` opens the web dashboard at `http://127.0.0.1:19789`:
 
 - **Overview** — Real-time streaming output, subtask tree, agent status chips
-- **Agents** — Cards with model, skills, reputation sparkline, inline editor
+- **Agents** — Cards with model, skills, reputation sparkline; click for detail popup (Overview + Edit tabs)
 - **Skills** — Full CRUD for skill documents
+- **Tools** — 18 built-in tools across 6 groups with availability status
 - **Usage** — Token counts, cost breakdown by agent and model
 - **Logs** — Per-agent logs with level filter
 - **Health** — Diagnostic checks (same as `swarm doctor`)
@@ -127,13 +175,15 @@ agents:
     role: "Implementation agent — writes solutions"
     model: minimax-m2.1
     skills: [_base, coding]
+    tools:
+      profile: coding
   - id: reviewer
     role: "Advisor — reviews quality"
     model: deepseek-v3.2
     skills: [_base, review]
 ```
 
-Each agent can have its own provider, API key, model, fallback chain, and skills.
+Each agent can have its own provider, API key, model, fallback chain, skills, and tool profile.
 
 ---
 
@@ -165,12 +215,16 @@ Gateway runs on port **19789** (`SWARM_GATEWAY_PORT`). Auth: `Authorization: Bea
 | `GET` | `/v1/status` | Full task board |
 | `GET` | `/v1/scores` | Reputation scores |
 | `GET` | `/v1/scores/history` | Score trend data |
-| `GET` | `/v1/agents` | Team info |
+| `GET` | `/v1/agents` | Team info + current task + recent logs |
+| `POST` | `/v1/agents` | Create a new agent |
+| `PUT` | `/v1/agents/:id` | Update agent config |
+| `DELETE` | `/v1/agents/:id` | Delete an agent |
 | `GET` | `/v1/heartbeat` | Agent liveness |
 | `GET` | `/v1/usage` | Token usage stats |
 | `GET` | `/v1/doctor` | Health check |
 | `GET` | `/v1/skills` | List skills |
 | `PUT` | `/v1/skills/:name` | Create/update skill |
+| `GET` | `/v1/tools` | List available tools |
 | `POST` | `/v1/search` | Web search |
 
 ---
@@ -195,6 +249,11 @@ Gateway runs on port **19789** (`SWARM_GATEWAY_PORT`). Auth: `Authorization: Bea
  └──────────────────┬──────────────────────────┘
                     │
  ┌──────────────────▼──────────────────────────┐
+ │  Tools (18 built-in)  ·  Cron Scheduler     │
+ │  Memory (episodic + KB)  ·  Skills          │  Capabilities
+ └──────────────────┬──────────────────────────┘
+                    │
+ ┌──────────────────▼──────────────────────────┐
  │  Reputation Scorer  ·  Peer Review          │
  │  Evolution Engine (Path A / B / C)          │  Reputation
  └──────────────────┬──────────────────────────┘
@@ -210,14 +269,18 @@ Gateway runs on port **19789** (`SWARM_GATEWAY_PORT`). Auth: `Authorization: Bea
 ```
 swarm-dev/
 ├── main.py                     # CLI entry point
+├── install.sh                  # Remote one-liner installer
+├── setup.sh                    # Local dev setup
 ├── config/agents.yaml          # Team definition
 ├── core/
 │   ├── orchestrator.py         # Process launcher
-│   ├── agent.py                # Task execution loop
+│   ├── agent.py                # Task execution loop + tool loop
 │   ├── task_board.py           # File-locked task lifecycle
+│   ├── tools.py                # 18 built-in agent tools
 │   ├── gateway.py              # HTTP API + dashboard
 │   ├── workflow.py             # Declarative workflow engine
 │   ├── onboard.py              # Setup wizard
+│   ├── cron.py                 # Scheduled job engine
 │   └── doctor.py               # Health checks
 ├── adapters/
 │   ├── llm/                    # FLock · OpenAI · Ollama

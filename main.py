@@ -46,6 +46,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 
 
@@ -836,8 +837,11 @@ def cmd_run(task: str):
     cmd_status()
 
 
-def cmd_status():
+def cmd_status(json_output: bool = False):
     data = json.load(open(".task_board.json")) if os.path.exists(".task_board.json") else {}
+    if json_output:
+        print(json.dumps(data, indent=2, default=str))
+        return
     print(f"\n{'ID':36}  {'STATUS':12}  {'AGENT':12}  DESCRIPTION")
     print("-" * 110)
     for tid, t in data.items():
@@ -846,15 +850,21 @@ def cmd_status():
     print()
 
 
-def cmd_scores(console=None):
+def cmd_scores(console=None, json_output: bool = False):
     path = "memory/reputation_cache.json"
     if not os.path.exists(path):
+        if json_output:
+            print(json.dumps({"agents": {}}, indent=2))
+            return
         if console:
             console.print("  [dim]No scores yet.[/dim]\n")
         else:
             print("No scores yet.")
         return
     cache = json.load(open(path))
+    if json_output:
+        print(json.dumps(cache, indent=2, default=str))
+        return
 
     from reputation.scorer import ScoreAggregator
     sc = ScoreAggregator()
@@ -906,8 +916,12 @@ def cmd_scores(console=None):
         print()
 
 
-def cmd_doctor(console=None, repair: bool = False, deep: bool = False):
-    if console is None:
+def cmd_doctor(console=None, repair: bool = False, deep: bool = False,
+               json_output: bool = False):
+    if json_output:
+        console = None  # force plain mode for structured capture
+
+    if console is None and not json_output:
         try:
             from rich.console import Console
             console = Console()
@@ -923,6 +937,13 @@ def cmd_doctor(console=None, repair: bool = False, deep: bool = False):
     else:
         from core.doctor import run_doctor
         results = run_doctor(rich_console=console)
+
+    if json_output:
+        checks = [{"ok": ok, "label": label, "detail": detail}
+                  for ok, label, detail in results]
+        all_ok = all(c["ok"] for c in checks)
+        print(json.dumps({"ok": all_ok, "checks": checks}, indent=2))
+        return
 
     if console is None:
         # Plain text fallback
@@ -2217,8 +2238,46 @@ def cmd_update(branch: str = "", console=None):
     _print(f"  [green]✓[/green] {_t('update.updated', summary=summary)}\n")
 
 
+def _get_version() -> str:
+    """Read version from pyproject.toml, fallback to '0.1.0'."""
+    try:
+        import tomllib  # Python 3.11+
+    except ImportError:
+        try:
+            import tomli as tomllib  # type: ignore[no-redef]
+        except ImportError:
+            tomllib = None  # type: ignore[assignment]
+
+    pyproject = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pyproject.toml")
+    if tomllib and os.path.exists(pyproject):
+        try:
+            with open(pyproject, "rb") as f:
+                data = tomllib.load(f)
+            return data.get("project", {}).get("version", "0.1.0")
+        except Exception:
+            pass
+
+    # Fallback: simple regex parse
+    if os.path.exists(pyproject):
+        try:
+            with open(pyproject) as f:
+                for line in f:
+                    if line.strip().startswith("version"):
+                        m = re.search(r'"([^"]+)"', line)
+                        if m:
+                            return m.group(1)
+        except Exception:
+            pass
+    return "0.1.0"
+
+
 def main():
-    parser = argparse.ArgumentParser(prog="swarm")
+    parser = argparse.ArgumentParser(prog="swarm",
+                                     description="Multi-agent orchestration CLI")
+    parser.add_argument("-V", "--version", action="version",
+                        version=f"swarm {_get_version()}")
+    parser.add_argument("--json", action="store_true", default=False,
+                        help="Output in JSON format (for scripting)")
     sub    = parser.add_subparsers(dest="cmd")
 
     sub.add_parser("onboard", help="Interactive setup wizard")
@@ -2318,11 +2377,11 @@ def main():
     elif args.cmd == "run":
         cmd_run(args.task)
     elif args.cmd == "status":
-        cmd_status()
+        cmd_status(json_output=args.json)
     elif args.cmd == "scores":
-        cmd_scores()
+        cmd_scores(json_output=args.json)
     elif args.cmd == "doctor":
-        cmd_doctor(repair=args.repair, deep=args.deep)
+        cmd_doctor(repair=args.repair, deep=args.deep, json_output=args.json)
     elif args.cmd == "export":
         cmd_export(args.task_id, fmt=args.format)
     elif args.cmd == "cron":

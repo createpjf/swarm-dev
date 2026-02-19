@@ -118,9 +118,10 @@ class Tool:
 # ══════════════════════════════════════════════════════════════════════════════
 
 TOOL_PROFILES = {
-    "minimal": {"web_search", "web_fetch"},
+    "minimal": {"web_search", "web_fetch", "memory_search", "kb_search"},
     "coding": {"web_search", "web_fetch", "exec", "read_file", "write_file",
-               "list_dir", "process"},
+               "edit_file", "list_dir", "process", "memory_search", "memory_save",
+               "kb_search", "kb_write", "task_create", "task_status"},
     "full": None,  # None = all tools allowed
 }
 
@@ -129,7 +130,10 @@ TOOL_GROUPS = {
     "group:web": ["web_search", "web_fetch"],
     "group:automation": ["exec", "cron", "process"],
     "group:media": ["screenshot", "notify"],
-    "group:fs": ["read_file", "write_file", "list_dir"],
+    "group:fs": ["read_file", "write_file", "edit_file", "list_dir"],
+    "group:memory": ["memory_search", "memory_save", "kb_search", "kb_write"],
+    "group:task": ["task_create", "task_status"],
+    "group:messaging": ["send_mail"],
 }
 
 
@@ -344,6 +348,164 @@ def _handle_list_dir(path: str = ".", **_) -> dict:
         return {"ok": False, "error": str(e)}
 
 
+def _handle_edit_file(path: str, old_str: str, new_str: str, **_) -> dict:
+    """Find-and-replace edit in a file (safe, project-scoped)."""
+    abs_path = os.path.abspath(path)
+    cwd = os.path.abspath(".")
+    if not abs_path.startswith(cwd):
+        return {"ok": False, "error": "Cannot edit files outside project"}
+
+    if not os.path.exists(abs_path):
+        return {"ok": False, "error": f"File not found: {path}"}
+
+    try:
+        with open(abs_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+
+        count = content.count(old_str)
+        if count == 0:
+            return {"ok": False, "error": "old_str not found in file"}
+        if count > 1:
+            return {"ok": False, "error": f"old_str found {count} times — must be unique (include more context)"}
+
+        new_content = content.replace(old_str, new_str, 1)
+        with open(abs_path, "w", encoding="utf-8") as f:
+            f.write(new_content)
+
+        return {"ok": True, "path": path, "replacements": 1}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _handle_memory_search(query: str, limit: int = 5, agent_id: str = "tool", **_) -> dict:
+    """Search episodic memory for past cases (problem→solution pairs)."""
+    try:
+        from adapters.memory.episodic import EpisodicMemory
+        mem = EpisodicMemory(agent_id=agent_id)
+        cases = mem.search_cases(query, limit=int(limit))
+        return {"ok": True, "results": cases, "total": len(cases)}
+    except ImportError:
+        return {"ok": False, "error": "Episodic memory module not available"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _handle_memory_save(problem: str, solution: str,
+                        tags: str = "", agent_id: str = "tool", **_) -> dict:
+    """Save a problem→solution case to episodic memory."""
+    try:
+        from adapters.memory.episodic import EpisodicMemory
+        mem = EpisodicMemory(agent_id=agent_id)
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
+        case_id = mem.save_case(problem, solution, tags=tag_list)
+        return {"ok": True, "case_id": case_id}
+    except ImportError:
+        return {"ok": False, "error": "Episodic memory module not available"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _handle_kb_search(query: str, limit: int = 5, **_) -> dict:
+    """Search the shared knowledge base for notes."""
+    try:
+        from adapters.memory.knowledge_base import KnowledgeBase
+        kb = KnowledgeBase()
+        notes = kb.search_notes(query, limit=int(limit))
+        # Trim content for return
+        results = []
+        for n in notes:
+            results.append({
+                "topic": n.get("topic", ""),
+                "slug": n.get("slug", ""),
+                "content": n.get("content", "")[:500],
+                "tags": n.get("tags", []),
+                "author": n.get("author", ""),
+            })
+        return {"ok": True, "results": results, "total": len(results)}
+    except ImportError:
+        return {"ok": False, "error": "Knowledge base module not available"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _handle_kb_write(topic: str, content: str, tags: str = "",
+                     agent_id: str = "tool", **_) -> dict:
+    """Create or update a note in the shared knowledge base."""
+    try:
+        from adapters.memory.knowledge_base import KnowledgeBase
+        kb = KnowledgeBase()
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
+        slug = kb.create_note(topic, content, tags=tag_list, author=agent_id)
+        return {"ok": True, "slug": slug, "topic": topic}
+    except ImportError:
+        return {"ok": False, "error": "Knowledge base module not available"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _handle_task_create(description: str, **_) -> dict:
+    """Create a new task on the task board."""
+    try:
+        from core.task_board import TaskBoard
+        board = TaskBoard()
+        task = board.create(description)
+        return {"ok": True, "task_id": task.id, "description": task.description,
+                "status": task.status}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _handle_task_status(task_id: str = "", **_) -> dict:
+    """Get task status from the task board. If no task_id, list recent tasks."""
+    try:
+        if not os.path.exists(".task_board.json"):
+            return {"ok": True, "tasks": [], "total": 0}
+
+        with open(".task_board.json") as f:
+            data = json.load(f)
+
+        if task_id:
+            # Find by prefix match
+            matches = {tid: t for tid, t in data.items()
+                       if tid.startswith(task_id)}
+            if not matches:
+                return {"ok": False, "error": f"No task matching '{task_id}'"}
+            return {"ok": True, "tasks": matches}
+
+        # Return last 10 tasks
+        items = list(data.items())[-10:]
+        recent = {tid: {"status": t["status"],
+                        "agent_id": t.get("agent_id", ""),
+                        "description": t["description"][:80]}
+                  for tid, t in items}
+        return {"ok": True, "tasks": recent, "total": len(data)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _handle_send_mail(to: str, content: str,
+                      agent_id: str = "tool", msg_type: str = "message",
+                      **_) -> dict:
+    """Send a message to another agent's mailbox."""
+    try:
+        mailbox_dir = ".mailbox"
+        os.makedirs(mailbox_dir, exist_ok=True)
+        mailbox_file = os.path.join(mailbox_dir, f"{to}.jsonl")
+
+        entry = {
+            "from": agent_id,
+            "type": msg_type,
+            "content": content,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+        with open(mailbox_file, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+
+        return {"ok": True, "to": to, "from": agent_id}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  REGISTRY
 # ══════════════════════════════════════════════════════════════════════════════
@@ -410,6 +572,59 @@ _BUILTIN_TOOLS: list[Tool] = [
          "List directory contents.",
          {"path": {"type": "string", "description": "Directory path (default: project root)", "required": False}},
          _handle_list_dir, group="fs"),
+
+    Tool("edit_file",
+         "Find-and-replace edit in a project file. The old_str must be unique in the file.",
+         {"path": {"type": "string", "description": "File path relative to project root", "required": True},
+          "old_str": {"type": "string", "description": "Exact text to find (must be unique)", "required": True},
+          "new_str": {"type": "string", "description": "Replacement text", "required": True}},
+         _handle_edit_file, group="fs"),
+
+    # ── Memory tools ──
+    Tool("memory_search",
+         "Search episodic memory for past problem→solution cases.",
+         {"query": {"type": "string", "description": "Search query", "required": True},
+          "limit": {"type": "integer", "description": "Max results (default 5)", "required": False}},
+         _handle_memory_search, group="memory"),
+
+    Tool("memory_save",
+         "Save a problem→solution case to episodic memory for future recall.",
+         {"problem": {"type": "string", "description": "Problem description", "required": True},
+          "solution": {"type": "string", "description": "Solution description", "required": True},
+          "tags": {"type": "string", "description": "Comma-separated tags", "required": False}},
+         _handle_memory_save, group="memory"),
+
+    Tool("kb_search",
+         "Search the shared knowledge base for notes and insights.",
+         {"query": {"type": "string", "description": "Search query", "required": True},
+          "limit": {"type": "integer", "description": "Max results (default 5)", "required": False}},
+         _handle_kb_search, group="memory"),
+
+    Tool("kb_write",
+         "Create or update a note in the shared knowledge base (Zettelkasten).",
+         {"topic": {"type": "string", "description": "Note topic/title", "required": True},
+          "content": {"type": "string", "description": "Note content", "required": True},
+          "tags": {"type": "string", "description": "Comma-separated tags", "required": False}},
+         _handle_kb_write, group="memory"),
+
+    # ── Task tools ──
+    Tool("task_create",
+         "Create a new task on the task board.",
+         {"description": {"type": "string", "description": "Task description", "required": True}},
+         _handle_task_create, group="task"),
+
+    Tool("task_status",
+         "Get task status. Without task_id, lists recent tasks.",
+         {"task_id": {"type": "string", "description": "Task ID or prefix (optional)", "required": False}},
+         _handle_task_status, group="task"),
+
+    # ── Messaging tools ──
+    Tool("send_mail",
+         "Send a message to another agent's mailbox for inter-agent communication.",
+         {"to": {"type": "string", "description": "Target agent ID", "required": True},
+          "content": {"type": "string", "description": "Message content", "required": True},
+          "msg_type": {"type": "string", "description": "Message type (default: message)", "required": False}},
+         _handle_send_mail, group="messaging"),
 ]
 
 # Keyed registry for fast lookup
