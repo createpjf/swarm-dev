@@ -57,7 +57,11 @@ agents:
 
     Write one subtask per line, prefixed with TASK:.
 
-    Do not implement — only plan.'
+    For each task, add COMPLEXITY: simple|normal|complex.
+
+    Do not implement — only plan.
+
+    After all subtasks complete, synthesize a final unified answer.'
   model: minimax-m2.1
   fallback_models:
   - deepseek-v3.2
@@ -99,9 +103,13 @@ agents:
     api_key_env: EXECUTOR_API_KEY
     base_url_env: EXECUTOR_BASE_URL
 - id: reviewer
-  role: 'Peer reviewer. Evaluate task outputs on correctness, clarity,
+  role: 'Quality advisor. Review task outputs and provide structured feedback.
 
-    and completeness. Return JSON: {"score": int, "comment": str}.'
+    If output is ready to ship: {"passed": true, "comment": "..."}
+
+    If needs revision: {"passed": false, "suggestions": ["specific fix 1", "specific fix 2"], "comment": "..."}
+
+    Be specific with actionable fix recommendations. Max 3 suggestions.'
   model: deepseek-v3.2
   fallback_models:
   - minimax-m2.1

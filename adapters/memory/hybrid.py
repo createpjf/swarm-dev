@@ -189,8 +189,8 @@ class HybridMemory:
             os.makedirs(persist_dir, exist_ok=True)
             self._chroma = chromadb.PersistentClient(path=persist_dir)
             self._has_chroma = True
-        except ImportError:
-            logger.warning("chromadb not installed — hybrid mode uses BM25 only")
+        except (ImportError, Exception):
+            logger.warning("chromadb not available — hybrid mode uses BM25 only")
             self._chroma = None
             self._has_chroma = False
 

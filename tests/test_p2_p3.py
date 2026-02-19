@@ -62,6 +62,25 @@ class TestPeerReviewAntiCheating:
         stats = pr.get_reviewer_stats("r1")
         assert stats["total_reviews"] == 2
         assert stats["avg_score"] == 75.0
+        assert "always_pass_bias" in stats
+
+    def test_critique_recording(self, tmp_workdir):
+        from reputation.peer_review import PeerReviewAggregator
+        pr = PeerReviewAggregator()
+        pr.record_critique("reviewer", "executor", True, 0)
+        pr.record_critique("reviewer", "executor", False, 2)
+        stats = pr.get_reviewer_stats("reviewer")
+        assert stats["total_reviews"] == 2
+
+    def test_always_pass_bias(self, tmp_workdir):
+        from reputation.peer_review import PeerReviewAggregator
+        pr = PeerReviewAggregator()
+        # Record many passes (high scores = passed)
+        for i in range(10):
+            pr.record_review("lenient_reviewer", f"target_{i}", 100)
+        history = pr._read_history()
+        detected = pr._detect_always_pass_bias("lenient_reviewer", history)
+        assert detected is True
 
     def test_aggregate_with_weights(self, tmp_workdir):
         from reputation.peer_review import PeerReviewAggregator

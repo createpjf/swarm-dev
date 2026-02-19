@@ -113,13 +113,12 @@ def _agent_process(agent_cfg_dict: dict, agent_def: dict, config: dict):
         hb.stop()  # clean up heartbeat file on exit
 
 
-# ── Review request handler (Phase 4 fix) ───────────────────────────────────
+# ── Critique request handler (replaces review_request) ─────────────────────
 
-async def _handle_review_request(agent, board: TaskBoard, mail: dict, sched):
+async def _handle_critique_request(agent, board: TaskBoard, mail: dict, sched):
     """
-    Process a review_request: call LLM to evaluate the task result,
-    then submit the review score to the task board.
-    The REVIEWER is responsible for calling board.complete() — not the executor.
+    Advisor mode: structured critique instead of numeric scoring.
+    Returns pass/fail with actionable fix suggestions.
     """
     try:
         payload = json.loads(mail["content"])
@@ -127,51 +126,64 @@ async def _handle_review_request(agent, board: TaskBoard, mail: dict, sched):
         description = payload["description"]
         result      = payload["result"]
     except (KeyError, json.JSONDecodeError) as e:
-        logger.error("[%s] bad review_request: %s", agent.cfg.agent_id, e)
+        logger.error("[%s] bad critique_request: %s", agent.cfg.agent_id, e)
         return
 
-    # Build review prompt
-    review_prompt = (
+    critique_prompt = (
         f"Review the following task output.\n\n"
         f"## Task\n{description}\n\n"
         f"## Output\n{result}\n\n"
-        f"Rate the output 0-100 and provide a brief comment.\n"
-        f'Respond with JSON: {{"score": <int>, "comment": "<str>"}}'
+        f"Decide: is this ready to deliver?\n"
+        f'If YES: {{"passed": true, "comment": "brief praise"}}\n'
+        f'If NO: {{"passed": false, "suggestions": ["fix1", "fix2"], "comment": "why"}}\n'
+        f"Max 3 suggestions, each must be specific and actionable."
     )
     messages = [
         {"role": "system", "content": agent.cfg.role},
-        {"role": "user",   "content": review_prompt},
+        {"role": "user",   "content": critique_prompt},
     ]
 
     try:
         raw = await agent.llm.chat(messages, agent.cfg.model)
-        # Try to parse JSON from the response
-        review_data = json.loads(raw)
-        score   = int(review_data.get("score", 50))
-        score   = max(0, min(100, score))  # clamp
-        comment = review_data.get("comment", "")
+        # Extract JSON from response (may have markdown wrapping)
+        json_str = raw.strip()
+        if "```" in json_str:
+            start = json_str.find("{")
+            end = json_str.rfind("}") + 1
+            if start >= 0 and end > start:
+                json_str = json_str[start:end]
+        critique_data = json.loads(json_str)
+        passed      = critique_data.get("passed", True)
+        suggestions = critique_data.get("suggestions", [])
+        comment     = critique_data.get("comment", "")
     except Exception as e:
-        logger.error("[%s] review LLM call failed: %s", agent.cfg.agent_id, e)
-        score, comment = 50, f"Review failed: {e}"
+        logger.error("[%s] critique LLM call failed: %s", agent.cfg.agent_id, e)
+        # On failure, pass the task through
+        passed, suggestions, comment = True, [], f"Critique failed: {e}"
 
-    # Submit review to task board
-    board.add_review(task_id, agent.cfg.agent_id, score, comment)
-    logger.info("[%s] reviewed task %s: score=%d", agent.cfg.agent_id, task_id, score)
+    board.add_critique(task_id, agent.cfg.agent_id, passed, suggestions, comment)
+    await sched.on_critique(agent.cfg.agent_id, passed)
 
-    # Update reviewer's own reputation
-    await sched.on_review(agent.cfg.agent_id, score)
-
-    # Update the reviewed agent's output_quality with the actual score
     task_obj = board.get(task_id)
     if task_obj and task_obj.agent_id:
-        await sched.on_review_score(task_obj.agent_id, score)
+        await sched.on_critique_result(
+            task_obj.agent_id,
+            passed_first_time=passed,
+            had_revision=False,
+        )
 
-    # Reviewer completes the task after review (Phase 4 fix)
-    if task_obj and task_obj.status.value == "review":
-        completed = board.complete(task_id)
-        if completed and "review_failed" in completed.evolution_flags:
-            logger.info("[%s] review REJECTED task %s — sent back to PENDING",
-                        agent.cfg.agent_id, task_id)
+    if not passed:
+        logger.info("[%s] critique REJECTED task %s with %d suggestions",
+                    agent.cfg.agent_id, task_id, len(suggestions))
+    else:
+        logger.info("[%s] critique APPROVED task %s",
+                    agent.cfg.agent_id, task_id)
+
+
+# Legacy handler: forward old review_request to critique handler
+async def _handle_review_request(agent, board: TaskBoard, mail: dict, sched):
+    """Backward-compatible wrapper: treat review_request as critique_request."""
+    await _handle_critique_request(agent, board, mail, sched)
 
 
 # ── Subtask extraction (Phase 5) ──────────────────────────────────────────
@@ -179,42 +191,88 @@ async def _handle_review_request(agent, board: TaskBoard, mail: dict, sched):
 def _extract_and_create_subtasks(board: TaskBoard, planner_output: str,
                                   parent_task_id: str) -> list[str]:
     """
-    Parse planner output for lines starting with 'TASK:'.
+    Parse planner output for lines starting with 'TASK:' and optional 'COMPLEXITY:'.
     Creates subtasks as immediately PENDING (no blocked_by) so agents
     can claim them right away after planner finishes.
     Returns list of created subtask IDs.
     """
     lines = planner_output.strip().split("\n")
     subtask_ids: list[str] = []
+    pending_description: str | None = None
+    pending_role: str | None = None
+
+    def _create_subtask(desc: str, role: str, complexity: str):
+        new_task = board.create(
+            desc,
+            blocked_by=[],
+            required_role=role,
+        )
+        # Set complexity on the task
+        with board.lock:
+            data = board._read()
+            t = data.get(new_task.task_id)
+            if t:
+                t["complexity"] = complexity
+                board._write(data)
+        subtask_ids.append(new_task.task_id)
+        logger.info("Created subtask %s [role=%s, complexity=%s]: %s",
+                     new_task.task_id, role or "any", complexity,
+                     desc[:60])
 
     for line in lines:
         stripped = line.strip()
-        # Match lines like "TASK: implement user login" or "- TASK: ..."
-        # Strip common list prefixes
         for prefix in ("- ", "* ", "• "):
             if stripped.startswith(prefix):
                 stripped = stripped[len(prefix):]
                 break
 
+        # Check for COMPLEXITY: line (follows a TASK: line)
+        if stripped.upper().startswith("COMPLEXITY:") and pending_description:
+            complexity = stripped[11:].strip().lower()
+            if complexity not in ("simple", "normal", "complex"):
+                complexity = _infer_complexity(pending_description)
+            _create_subtask(pending_description, pending_role, complexity)
+            pending_description = None
+            pending_role = None
+            continue
+
+        # If we had a pending TASK without COMPLEXITY, create it now
+        if pending_description:
+            complexity = _infer_complexity(pending_description)
+            _create_subtask(pending_description, pending_role, complexity)
+            pending_description = None
+            pending_role = None
+
         if stripped.upper().startswith("TASK:"):
             description = stripped[5:].strip()
             if description:
-                role = _infer_role(description)
-                new_task = board.create(
-                    description,
-                    blocked_by=[],  # No blocker — ready immediately
-                    required_role=role,
-                )
-                subtask_ids.append(new_task.task_id)
-                logger.info("Created subtask %s [role=%s]: %s",
-                            new_task.task_id, role or "any",
-                            description[:60])
+                pending_description = description
+                pending_role = _infer_role(description)
+
+    # Flush last pending task
+    if pending_description:
+        complexity = _infer_complexity(pending_description)
+        _create_subtask(pending_description, pending_role, complexity)
 
     if subtask_ids:
         logger.info("Planner extracted %d subtasks from task %s",
                      len(subtask_ids), parent_task_id)
 
     return subtask_ids
+
+
+def _infer_complexity(description: str) -> str:
+    """Infer task complexity from description keywords."""
+    desc_lower = description.lower()
+    if any(kw in desc_lower for kw in [
+        "review", "audit", "verify", "analyze", "evaluate", "compare",
+    ]):
+        return "complex"
+    if any(kw in desc_lower for kw in [
+        "list", "show", "get", "fetch", "read", "display", "print",
+    ]):
+        return "simple"
+    return "normal"
 
 
 # ── Role inference (Phase 6) ──────────────────────────────────────────────
@@ -248,9 +306,9 @@ def _infer_role(description: str) -> str:
 # ── Helper: check if any tasks are still active ───────────────────────────
 
 def _has_active_tasks(board: TaskBoard) -> bool:
-    """Return True if any tasks are still pending, claimed, in review, or paused."""
+    """Return True if any tasks are still pending, claimed, in review/critique, or paused."""
     data = board._read()
-    active_states = {"pending", "claimed", "review", "blocked", "paused"}
+    active_states = {"pending", "claimed", "review", "critique", "blocked", "paused"}
     return any(t.get("status") in active_states for t in data.values())
 
 
@@ -299,9 +357,56 @@ async def _agent_loop(agent, bus: ContextBus, board: TaskBoard,
                             agent.cfg.agent_id, mail.get("from"))
                 return
 
-            # Phase 4 fix: handle review requests from other agents
-            elif mail.get("type") == "review_request":
-                await _handle_review_request(agent, board, mail, sched)
+            # Handle critique/review requests from other agents
+            elif mail.get("type") in ("critique_request", "review_request"):
+                await _handle_critique_request(agent, board, mail, sched)
+
+        # --- check for CRITIQUE tasks to fix (executor picks up own revisions) ---
+        critique_task = board.claim_critique(agent.cfg.agent_id)
+        if critique_task:
+            logger.info("[%s] claimed critique revision for task %s",
+                        agent.cfg.agent_id, critique_task.task_id)
+            if heartbeat:
+                heartbeat.beat("working", critique_task.task_id,
+                               progress="revising based on feedback...")
+            try:
+                suggestions = (critique_task.critique or {}).get("suggestions", [])
+                fix_prompt = (
+                    f"You previously submitted this result:\n{critique_task.result}\n\n"
+                    f"The advisor gave these revision suggestions:\n"
+                    + "\n".join(f"- {s}" for s in suggestions)
+                    + "\n\nPlease fix only the parts that need changing based on these suggestions."
+                )
+                from core.context_bus import ContextBus as _CB
+                fix_result = await agent.run_with_prompt(fix_prompt, _CB())
+
+                # After revision: if already at max critique rounds, force complete
+                if critique_task.critique_round >= 1:
+                    board.submit_for_review(critique_task.task_id, fix_result)
+                    board.complete(critique_task.task_id)
+                    logger.info("[%s] revision done (max rounds), auto-completed task %s",
+                                agent.cfg.agent_id, critique_task.task_id)
+                else:
+                    # Resubmit for another critique round
+                    board.submit_for_review(critique_task.task_id, fix_result)
+                    reviewers = config.get("reputation", {}).get(
+                        "peer_review_agents", [])
+                    for r_id in reviewers:
+                        if r_id != agent.cfg.agent_id:
+                            agent.send_mail(r_id,
+                                            _json_critique_request(critique_task, fix_result),
+                                            msg_type="critique_request")
+
+                await sched.on_critique_result(
+                    agent.cfg.agent_id,
+                    passed_first_time=False,
+                    had_revision=True,
+                )
+            except Exception as exc:
+                logger.exception("[%s] critique revision failed: %s",
+                                 agent.cfg.agent_id, exc)
+                board.complete(critique_task.task_id)  # force complete on error
+            continue
 
         # --- try to claim a task (Phase 6: pass role for routing) ---
         rep   = sched.get_score(agent.cfg.agent_id)
@@ -373,45 +478,71 @@ async def _agent_loop(agent, bus: ContextBus, board: TaskBoard,
 
             is_planner = "planner" in agent.cfg.agent_id.lower()
 
-            # Phase 5: planner subtask extraction
+            # Planner: extract subtasks and enter waiting state for close-out
             if is_planner:
                 subtask_ids = _extract_and_create_subtasks(
                     board, result, task.task_id)
-                # Planner auto-completes: its job is decomposition, not implementation
-                board.submit_for_review(task.task_id, result)
-                board.complete(task.task_id)
-                logger.info("[%s] planner auto-completed task %s, created %d subtasks",
-                            agent.cfg.agent_id, task.task_id, len(subtask_ids))
+                if subtask_ids:
+                    # Store subtask mapping for close-out tracking
+                    _register_subtasks(bus, task.task_id, subtask_ids)
+                    # Keep planner result but mark as review (waiting for close-out)
+                    board.submit_for_review(task.task_id, result)
+                    logger.info("[%s] planner created %d subtasks for task %s, waiting for close-out",
+                                agent.cfg.agent_id, task.task_id, len(subtask_ids))
+                else:
+                    # No subtasks extracted — auto-complete
+                    board.submit_for_review(task.task_id, result)
+                    board.complete(task.task_id)
+                    logger.info("[%s] planner auto-completed task %s (no subtasks)",
+                                agent.cfg.agent_id, task.task_id)
                 await sched.on_task_complete(agent.cfg.agent_id, task, result)
                 _extract_and_store_memories(agent, task, result)
-                continue  # immediately try to claim next task
 
-            # Non-planner agents: submit for review
+                # Check if any pending close-outs are ready
+                await _check_planner_closeouts(agent, bus, board, config)
+                continue
+
+            # Executor: complexity-based routing after task completion
             board.submit_for_review(task.task_id, result)
 
-            # --- peer review (call designated reviewer agents via mailbox) ---
-            reviewers = config.get("reputation", {}).get(
-                "peer_review_agents", [])
-            review_sent = False
-            for r_id in reviewers:
-                if r_id != agent.cfg.agent_id:
-                    agent.send_mail(r_id,
-                                    _json_review_request(task, result),
-                                    msg_type="review_request")
-                    review_sent = True
+            # Get task complexity
+            task_data = board.get(task.task_id)
+            task_complexity = "normal"
+            if task_data:
+                # Read complexity from task dict
+                raw_data = board._read()
+                raw_t = raw_data.get(task.task_id, {})
+                task_complexity = raw_t.get("complexity", "normal")
+
+            if task_complexity == "simple":
+                # Simple tasks: skip review, auto-complete
+                board.complete(task.task_id)
+                logger.info("[%s] simple task %s auto-completed (skip review)",
+                            agent.cfg.agent_id, task.task_id)
+            else:
+                # Normal/complex tasks: send critique request to advisor
+                reviewers = config.get("reputation", {}).get(
+                    "peer_review_agents", [])
+                critique_sent = False
+                for r_id in reviewers:
+                    if r_id != agent.cfg.agent_id:
+                        agent.send_mail(r_id,
+                                        _json_critique_request(task, result),
+                                        msg_type="critique_request")
+                        critique_sent = True
+
+                if not critique_sent:
+                    logger.warning(
+                        "[%s] no advisors available, auto-completing task %s",
+                        agent.cfg.agent_id, task.task_id)
+                    board.complete(task.task_id)
 
             # --- score & evolve ---
             await sched.on_task_complete(agent.cfg.agent_id, task, result)
             _extract_and_store_memories(agent, task, result)
 
-            # Phase 4 fix: DO NOT call board.complete() here.
-            # The REVIEWER will call board.complete() after reviewing.
-            # If no reviewers were contacted, auto-complete to avoid deadlock.
-            if not review_sent:
-                logger.warning(
-                    "[%s] no reviewers available, auto-completing task %s",
-                    agent.cfg.agent_id, task.task_id)
-                board.complete(task.task_id)
+            # Check if planner close-outs are now possible
+            await _check_planner_closeouts(agent, bus, board, config)
 
         except Exception as exc:
             logger.exception("[%s] task %s failed: %s",
@@ -427,12 +558,131 @@ async def _agent_loop(agent, bus: ContextBus, board: TaskBoard,
                 )
 
 
-def _json_review_request(task, result: str) -> str:
+def _json_critique_request(task, result: str) -> str:
+    """Build JSON payload for a critique/review request."""
     return json.dumps({
         "task_id":     task.task_id,
         "description": task.description,
         "result":      result,
     }, ensure_ascii=False)
+
+
+# Legacy alias
+_json_review_request = _json_critique_request
+
+
+# ── Planner close-out helpers ──────────────────────────────────────────────
+
+# File-based subtask registry for planner close-out tracking
+_SUBTASK_MAP_FILE = ".planner_subtasks.json"
+_SUBTASK_MAP_LOCK = ".planner_subtasks.lock"
+
+
+def _register_subtasks(bus: "ContextBus", parent_task_id: str,
+                       subtask_ids: list[str]):
+    """Register parent→subtask mapping for planner close-out."""
+    lock = FileLock(_SUBTASK_MAP_LOCK)
+    with lock:
+        try:
+            with open(_SUBTASK_MAP_FILE, "r") as f:
+                mapping = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            mapping = {}
+        mapping[parent_task_id] = subtask_ids
+        with open(_SUBTASK_MAP_FILE, "w") as f:
+            json.dump(mapping, f, ensure_ascii=False, indent=2)
+
+
+async def _check_planner_closeouts(agent, bus, board: TaskBoard, config: dict):
+    """Check if any planner parent tasks have all subtasks completed.
+    If so, synthesize a final answer and complete the parent task."""
+    lock = FileLock(_SUBTASK_MAP_LOCK)
+    with lock:
+        try:
+            with open(_SUBTASK_MAP_FILE, "r") as f:
+                mapping = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return
+
+    if not mapping:
+        return
+
+    data = board._read()
+    completed_ids = set()
+    for parent_id, subtask_ids in list(mapping.items()):
+        parent = data.get(parent_id)
+        if not parent:
+            completed_ids.add(parent_id)
+            continue
+        # Already completed?
+        if parent.get("status") == "completed":
+            completed_ids.add(parent_id)
+            continue
+
+        # Check if ALL subtasks are completed
+        all_done = all(
+            data.get(sid, {}).get("status") == "completed"
+            for sid in subtask_ids
+        )
+        if not all_done:
+            continue
+
+        # All subtasks done — synthesize final answer
+        logger.info("All %d subtasks completed for parent %s, synthesizing close-out",
+                     len(subtask_ids), parent_id)
+        results_text = board.collect_results(parent_id)
+        parent_desc = parent.get("description", "")
+
+        close_prompt = (
+            f"You previously decomposed this task into subtasks.\n\n"
+            f"## Original Task\n{parent_desc}\n\n"
+            f"## Subtask Results\n{results_text}\n\n"
+            f"Please synthesize these results into a single, coherent, "
+            f"user-facing final answer. Remove internal task references."
+        )
+        try:
+            messages = [
+                {"role": "system", "content": agent.cfg.role},
+                {"role": "user",   "content": close_prompt},
+            ]
+            final_answer = await agent.llm.chat(messages, agent.cfg.model)
+
+            # Update parent task with synthesized result and complete
+            with board.lock:
+                data = board._read()
+                t = data.get(parent_id)
+                if t:
+                    t["result"] = final_answer
+                    t["status"] = "completed"
+                    t["completed_at"] = time.time()
+                    board._write(data)
+            logger.info("Planner close-out completed for task %s", parent_id)
+        except Exception as e:
+            logger.error("Planner close-out failed for %s: %s", parent_id, e)
+            # On failure, just complete with collected results
+            with board.lock:
+                data = board._read()
+                t = data.get(parent_id)
+                if t:
+                    t["result"] = results_text
+                    t["status"] = "completed"
+                    t["completed_at"] = time.time()
+                    board._write(data)
+
+        completed_ids.add(parent_id)
+
+    # Clean up completed entries from mapping
+    if completed_ids:
+        with lock:
+            try:
+                with open(_SUBTASK_MAP_FILE, "r") as f:
+                    mapping = json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError):
+                mapping = {}
+            for pid in completed_ids:
+                mapping.pop(pid, None)
+            with open(_SUBTASK_MAP_FILE, "w") as f:
+                json.dump(mapping, f, ensure_ascii=False, indent=2)
 
 
 # ── Adapter factories ───────────────────────────────────────────────────────

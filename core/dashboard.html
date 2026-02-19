@@ -111,6 +111,7 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .status-failed{color:var(--red)}
 .status-pending{color:var(--fg3)}
 .status-review{color:var(--magenta)}
+.status-critique{color:var(--yellow,#f59e0b)}
 .task-desc{max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .task-time{font-family:var(--mono);font-size:12px;color:var(--fg2)}
 .task-agent{font-weight:500}
@@ -135,15 +136,23 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .summary-bar .dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:3px;vertical-align:middle}
 
 /* ── Agent Cards ──────────────────────────────────────────────── */
-.agent-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
-.agent-card{background:var(--bg2);border:1px solid var(--bg3);border-radius:var(--radius);padding:16px;transition:.2s;cursor:pointer}
+.agent-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
+.agent-card{background:var(--bg2);border:1px solid var(--bg3);border-radius:var(--radius);padding:14px 16px;transition:.2s;cursor:pointer;display:flex;flex-direction:column;gap:6px}
 .agent-card:hover{border-color:var(--accent);box-shadow:0 0 20px rgba(124,108,240,.1)}
-.agent-card.editing{border-color:var(--accent);box-shadow:0 0 20px rgba(124,108,240,.15)}
-.agent-name{font-size:16px;font-weight:700;margin-bottom:4px}
-.agent-model{font-family:var(--mono);font-size:12px;color:var(--accent2);margin-bottom:8px}
-.agent-meta{font-size:12px;color:var(--fg2);line-height:1.8}
-.agent-meta span{display:inline-block;background:var(--bg3);padding:1px 6px;border-radius:4px;margin:1px 2px;font-size:11px}
-.agent-score{display:flex;align-items:center;gap:8px;margin-top:10px;padding-top:10px;border-top:1px solid var(--bg3)}
+.agent-card.editing{border-color:var(--accent);box-shadow:0 0 20px rgba(124,108,240,.15);border-bottom-left-radius:0;border-bottom-right-radius:0}
+.agent-card-header{display:flex;align-items:center;gap:6px}
+.agent-name{font-size:15px;font-weight:700}
+.agent-working{font-size:10px;color:var(--cyan);font-weight:400;background:rgba(6,182,212,.1);padding:1px 6px;border-radius:4px}
+.agent-card-model{font-family:var(--mono);font-size:12px;color:var(--accent2)}
+.agent-provider{color:var(--fg3);font-size:11px}
+.agent-card-skills{display:flex;flex-wrap:wrap;gap:4px}
+.skill-tag{display:inline-block;background:var(--bg3);color:var(--fg2);padding:2px 8px;border-radius:4px;font-size:11px}
+.agent-card-chain{font-size:11px;color:var(--fg2)}
+.agent-card-chain a{font-family:var(--mono);color:var(--accent2);text-decoration:none;font-size:11px}
+.key-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.key-dot.set{background:var(--green)}
+.key-dot.unset{background:var(--red)}
+.agent-score{display:flex;align-items:center;gap:8px;padding-top:6px;border-top:1px solid var(--bg3)}
 .score-bar{flex:1;height:6px;background:var(--bg4);border-radius:3px;overflow:hidden}
 .score-fill{height:100%;border-radius:3px;transition:width .5s}
 .score-num{font-family:var(--mono);font-size:14px;font-weight:700;min-width:36px;text-align:right}
@@ -173,6 +182,10 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .skills-editor textarea{flex:1;background:var(--bg2);border:1px solid var(--bg3);border-radius:var(--radius);color:var(--fg);font-family:var(--mono);font-size:12px;line-height:1.6;padding:14px;resize:none;outline:none;min-height:300px}
 .skills-editor textarea:focus{border-color:var(--accent)}
 .skills-empty{display:flex;align-items:center;justify-content:center;flex:1;color:var(--fg3);font-size:14px}
+.skill-assign-bar{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--bg3);flex-wrap:wrap}
+.skill-assign-label{font-size:11px;font-weight:600;color:var(--fg2);text-transform:uppercase;flex-shrink:0}
+.skill-assign-cb{display:flex;align-items:center;gap:3px;font-size:12px;color:var(--fg2);cursor:pointer}
+.skill-assign-cb span{user-select:none}
 
 /* ── Health Checks ────────────────────────────────────────────── */
 .checks{list-style:none}
@@ -234,14 +247,37 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 
 /* ── Overview: Split Layout (top orchestration + bottom chat) ── */
 #panel-overview.active{display:flex!important;flex-direction:column;height:calc(100vh - 44px);gap:0}
-.ov-top{display:flex;flex-direction:column;min-height:120px;max-height:55%;overflow:hidden;border-bottom:none;flex-shrink:0;transition:height .2s}
-.ov-top.collapsed .ov-dispatch{display:none}
-.ov-top.collapsed{min-height:0;max-height:none;height:auto!important}
-.ov-divider{height:4px;background:var(--bg3);cursor:row-resize;flex-shrink:0;position:relative;display:flex;align-items:center;justify-content:center}
-.ov-divider::after{content:'';width:32px;height:3px;border-radius:2px;background:var(--bg4)}
-.ov-divider:hover{background:var(--accent);opacity:.5}
+/* ── Overview: Header Bar (statuses left, agents right) ────── */
+.ov-header{display:flex;align-items:center;gap:12px;flex-shrink:0;padding:8px 4px;background:var(--bg2);border:1px solid var(--bg3);border-radius:var(--radius);margin-bottom:8px}
+.ov-statuses{flex:1;display:flex;gap:6px;min-width:0;align-items:center;overflow:hidden}
+.ov-status-item{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--fg2);padding:4px 10px;background:var(--bg3);border:1px solid var(--bg4);border-radius:6px;overflow:hidden;height:32px;box-sizing:border-box}
+.ov-status-item .status-icon{font-size:10px;flex-shrink:0}
+.ov-status-item .status-agent{font-weight:600;flex-shrink:0}
+.ov-status-item .status-agent.planner-d{color:var(--cyan)}
+.ov-status-item .status-agent.executor-d{color:var(--green)}
+.ov-status-item .status-agent.reviewer-d{color:var(--magenta)}
+.ov-status-item .status-text{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ov-status-item .status-time{font-family:var(--mono);font-size:9px;color:var(--fg3);flex-shrink:0}
+.ov-status-empty{font-size:11px;color:var(--fg3);padding:0 8px}
+.ov-header-sep{width:1px;height:24px;background:var(--bg4);flex-shrink:0}
+.ov-agents{display:flex;gap:6px;flex-shrink:0;align-items:center}
+.ov-agent-chip{display:flex;align-items:center;gap:6px;padding:4px 12px;background:var(--bg3);border:1px solid var(--bg4);border-radius:6px;height:32px;box-sizing:border-box;transition:.3s}
+.ov-agent-chip.active{border-color:var(--cyan);box-shadow:0 0 8px rgba(6,182,212,.12)}
+.ov-agent-chip.active.executor{border-color:var(--green);box-shadow:0 0 8px rgba(34,197,94,.12)}
+.ov-agent-chip.active.reviewer{border-color:var(--magenta);box-shadow:0 0 8px rgba(217,70,239,.12)}
+.ov-agent-chip .chip-icon{font-size:12px;line-height:1}
+.ov-agent-chip .chip-name{font-size:10px;font-weight:700;color:var(--fg)}
+.ov-agent-chip .chip-dot{width:6px;height:6px;border-radius:50%;background:var(--fg3);flex-shrink:0}
+.ov-agent-chip.active .chip-dot{background:var(--cyan);animation:livePulse 1.2s infinite}
+.ov-agent-chip.active.executor .chip-dot{background:var(--green)}
+.ov-agent-chip.active.reviewer .chip-dot{background:var(--magenta)}
+
 .ov-bottom{display:flex;flex-direction:column;flex:1;min-height:200px;overflow:hidden}
-.workflow-viz{background:var(--bg2);border:1px solid var(--bg3);border-radius:var(--radius) var(--radius) 0 0;padding:12px 20px 8px;flex-shrink:0}
+
+/* ── (Legacy ov-top/divider kept for non-overview panels) ──── */
+.ov-top{display:none}
+.ov-divider{display:none}
+.workflow-viz{display:none}
 .wf-pipeline{display:flex;align-items:center;justify-content:center;gap:0;padding:4px 0 10px}
 .wf-node{display:flex;flex-direction:column;align-items:center;gap:4px;min-width:90px;padding:10px 14px;border-radius:10px;border:1.5px solid var(--bg4);background:var(--bg3);transition:.3s}
 .wf-node.active{border-color:var(--cyan);box-shadow:0 0 18px rgba(6,182,212,.15)}
@@ -330,8 +366,25 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .chat-bubble.assistant-bubble{background:var(--bg2);border:1px solid var(--bg3);border-radius:10px;border-bottom-left-radius:3px;padding:12px 16px;font-size:13px;line-height:1.7}
 .chat-bubble.assistant-bubble .asst-header{display:flex;align-items:center;gap:6px;margin-bottom:8px;font-size:11px;color:var(--fg3)}
 .chat-bubble.assistant-bubble .asst-header .asst-label{font-weight:700;color:var(--accent2)}
-.chat-bubble.assistant-bubble .asst-body{white-space:pre-wrap;word-break:break-word}
-.chat-bubble.assistant-bubble .asst-body h1,.chat-bubble.assistant-bubble .asst-body h2,.chat-bubble.assistant-bubble .asst-body h3{color:var(--fg);margin:8px 0 4px;font-size:14px}
+.chat-bubble.assistant-bubble .asst-body{word-break:break-word}
+.chat-bubble.assistant-bubble .asst-body p{margin:2px 0}
+.chat-bubble.assistant-bubble .asst-body h1,.chat-bubble.assistant-bubble .asst-body h2,.chat-bubble.assistant-bubble .asst-body h3{color:var(--fg);margin:10px 0 4px;font-size:14px;font-weight:700}
+.chat-bubble.assistant-bubble .asst-body h1{font-size:16px}
+.chat-bubble.assistant-bubble .asst-body ul,.chat-bubble.assistant-bubble .asst-body ol{margin:4px 0 4px 20px;padding:0}
+.chat-bubble.assistant-bubble .asst-body li{margin:2px 0;line-height:1.5}
+.chat-bubble.assistant-bubble .asst-body strong{color:var(--fg);font-weight:700}
+.chat-bubble.assistant-bubble .asst-body em{color:var(--fg2);font-style:italic}
+.chat-bubble.assistant-bubble .asst-body code{background:var(--bg);padding:1px 5px;border-radius:3px;font-family:var(--mono);font-size:12px}
+.chat-bubble.assistant-bubble .asst-body hr{border:none;border-top:1px solid var(--bg4);margin:8px 0}
+.chat-bubble.assistant-bubble .asst-body del{color:var(--fg3);text-decoration:line-through}
+.chat-bubble.assistant-bubble .asst-body blockquote{border-left:3px solid var(--accent);padding:4px 12px;margin:6px 0;color:var(--fg2);background:rgba(124,108,240,.04);border-radius:0 4px 4px 0}
+.chat-bubble.assistant-bubble .asst-body table{width:100%;border-collapse:collapse;margin:8px 0;font-size:12px}
+.chat-bubble.assistant-bubble .asst-body th{background:var(--bg3);color:var(--fg);font-weight:700;padding:6px 10px;border:1px solid var(--bg4);font-size:11px;text-transform:uppercase;letter-spacing:.3px}
+.chat-bubble.assistant-bubble .asst-body td{padding:5px 10px;border:1px solid var(--bg4);color:var(--fg2)}
+.chat-bubble.assistant-bubble .asst-body tr:hover td{background:rgba(255,255,255,.02)}
+.chat-bubble.assistant-bubble .asst-body .md-img{max-width:100%;border-radius:6px;margin:6px 0;border:1px solid var(--bg4)}
+.chat-bubble.assistant-bubble .asst-body a{color:var(--accent2);text-decoration:none;border-bottom:1px dotted var(--accent2)}
+.chat-bubble.assistant-bubble .asst-body a:hover{border-bottom-style:solid}
 .chat-bubble.assistant-bubble pre{background:var(--bg);padding:10px 12px;border-radius:6px;font-family:var(--mono);font-size:11px;line-height:1.5;overflow-x:auto;white-space:pre-wrap;max-height:300px;overflow-y:auto;margin:8px 0}
 .chat-bubble.assistant-bubble .asst-tokens{display:flex;gap:8px;margin-top:8px;padding-top:8px;border-top:1px solid var(--bg3);font-family:var(--mono);font-size:9px;color:var(--fg3)}
 
@@ -414,10 +467,12 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
   .skills-layout{flex-direction:column;height:auto}
   .skills-list{width:100%;min-width:0;max-height:200px}
   .agent-grid{grid-template-columns:1fr}
-  .wf-pipeline{gap:0}
-  .wf-node{min-width:70px;padding:8px 10px}
-  .wf-connector{width:30px}
-  .wf-name{font-size:11px}
+  .ov-header{flex-direction:column;gap:6px}
+  .ov-header-sep{display:none}
+  .ov-statuses{flex-wrap:wrap;justify-content:center}
+  .ov-agents{justify-content:center}
+  .chat-bubble.assistant-bubble .asst-body table{font-size:11px}
+  .chat-bubble.assistant-bubble .asst-body th,.chat-bubble.assistant-bubble .asst-body td{padding:4px 6px}
   .chat-msg{max-width:92%}
 }
 </style>
@@ -486,43 +541,35 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 
 <!-- ── Panel: Overview ── -->
 <div class="panel active" id="panel-overview">
-  <!-- ═══ TOP: Orchestration Panel ═══ -->
-  <div class="ov-top" id="ovTop">
-    <div class="workflow-viz">
-      <div class="wf-pipeline">
-        <div class="wf-node" id="wfPlanner">
-          <div class="wf-avatar">📋</div>
-          <div class="wf-name">Planner</div>
-          <div class="wf-status" id="wfPlannerStatus">idle</div>
-        </div>
-        <div class="wf-connector" id="wfConn1"><div class="wf-line"><div class="wf-packet planner-packet" id="wfPacket1"></div></div><span class="wf-arrow">›</span></div>
-        <div class="wf-node" id="wfExecutor">
-          <div class="wf-avatar">⚙️</div>
-          <div class="wf-name">Executor</div>
-          <div class="wf-status" id="wfExecutorStatus">idle</div>
-        </div>
-        <div class="wf-connector" id="wfConn2"><div class="wf-line"><div class="wf-packet executor-packet" id="wfPacket2"></div></div><span class="wf-arrow">›</span></div>
-        <div class="wf-node" id="wfReviewer">
-          <div class="wf-avatar">🔍</div>
-          <div class="wf-name">Reviewer</div>
-          <div class="wf-status" id="wfReviewerStatus">idle</div>
-        </div>
-      </div>
-      <div class="wf-stats" id="wfStats">Ready — submit a task to start</div>
+  <!-- ═══ HEADER BAR: Latest statuses (left) | Agent chips (right) ═══ -->
+  <div class="ov-header">
+    <div class="ov-statuses" id="ovStatuses">
+      <span class="ov-status-empty">Ready -- submit a task to start</span>
     </div>
-    <div class="ov-dispatch" id="dispatchLog"></div>
+    <div class="ov-header-sep"></div>
+    <div class="ov-agents" id="ovAgents">
+      <div class="ov-agent-chip" id="chipPlanner"><span class="chip-icon">📋</span><span class="chip-name">Planner</span><span class="chip-dot"></span></div>
+      <div class="ov-agent-chip" id="chipExecutor"><span class="chip-icon">⚙️</span><span class="chip-name">Executor</span><span class="chip-dot"></span></div>
+      <div class="ov-agent-chip" id="chipReviewer"><span class="chip-icon">🧠</span><span class="chip-name">Advisor</span><span class="chip-dot"></span></div>
+    </div>
   </div>
 
-  <!-- ═══ DIVIDER ═══ -->
-  <div class="ov-divider" id="ovDivider"></div>
+  <!-- Hidden legacy elements for JS compatibility -->
+  <div style="display:none">
+    <div id="ovTop"></div><div id="ovDivider"></div><div id="dispatchLog"></div>
+    <div id="wfPlanner"></div><div id="wfExecutor"></div><div id="wfReviewer"></div>
+    <div id="wfPlannerStatus"></div><div id="wfExecutorStatus"></div><div id="wfReviewerStatus"></div>
+    <div id="wfConn1"></div><div id="wfConn2"></div><div id="wfStats"></div>
+    <div id="wfPacket1"></div><div id="wfPacket2"></div>
+  </div>
 
-  <!-- ═══ BOTTOM: ChatBox ═══ -->
+  <!-- ═══ CHATBOX (takes most of the space) ═══ -->
   <div class="ov-bottom">
     <div class="chat-messages" id="chatMessages">
       <div class="chat-welcome">
         <div class="chat-welcome-icon">⬡</div>
         <div class="chat-welcome-text">What can I help you with?</div>
-        <div class="chat-welcome-sub">Your task will be planned, executed, and reviewed by the Swarm agent team</div>
+        <div class="chat-welcome-sub">Your task will be planned, executed, and quality-checked by the Swarm agent team</div>
       </div>
     </div>
     <div class="chat-input-area">
@@ -764,7 +811,18 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
    ══════════════════════════════════════════════════════════════════ */
 
 const API = '';  // same origin
-let TOKEN = localStorage.getItem('swarm_token') || '';
+// Auto-login: read token from URL param (?token=xxx) or localStorage
+let TOKEN = (function() {
+  const p = new URLSearchParams(window.location.search);
+  const t = p.get('token');
+  if (t) {
+    localStorage.setItem('swarm_token', t);
+    // Clean URL without reloading
+    history.replaceState(null, '', window.location.pathname);
+    return t;
+  }
+  return localStorage.getItem('swarm_token') || '';
+})();
 
 // ── State ───────────────────────────────────────────────────────
 let currentPanel = 'overview';
@@ -864,6 +922,7 @@ function statusIcon(status) {
     case 'completed': return '<span class="status-icon status-done">✓</span>';
     case 'failed': return '<span class="status-icon status-failed">✗</span>';
     case 'review': return '<span class="status-icon status-review">◆</span>';
+    case 'critique': return '<span class="status-icon status-critique">⚠</span>';
     default: return '<span class="status-icon status-pending">○</span>';
   }
 }
@@ -980,7 +1039,7 @@ function updateAgentStatusDots() {
 const AGENT_META = {
   planner:  {emoji:'📋', color:'var(--cyan)',    cls:'planner'},
   executor: {emoji:'⚙️', color:'var(--green)',   cls:'executor'},
-  reviewer: {emoji:'🔍', color:'var(--magenta)', cls:'reviewer'},
+  reviewer: {emoji:'🧠', color:'var(--magenta)', cls:'reviewer'},
   search:   {emoji:'🌐', color:'var(--cyan)',    cls:'planner'},
 };
 
@@ -1080,19 +1139,44 @@ function renderDispatchHtml(d) {
 // ── Incremental render for dispatch log (top panel) ──
 function renderDispatch() {
   const container = document.getElementById('dispatchLog');
-  if (!container) return;
-  const newEntries = dispatchEntries.slice(dispatchLastIdx);
-  if (!newEntries.length) return;
-  const frag = document.createDocumentFragment();
-  for (const d of newEntries) {
-    const wrapper = document.createElement('div');
-    wrapper.innerHTML = renderDispatchHtml(d);
-    while (wrapper.firstChild) frag.appendChild(wrapper.firstChild);
+  if (container) {
+    const newEntries = dispatchEntries.slice(dispatchLastIdx);
+    if (newEntries.length) {
+      const frag = document.createDocumentFragment();
+      for (const d of newEntries) {
+        const wrapper = document.createElement('div');
+        wrapper.innerHTML = renderDispatchHtml(d);
+        while (wrapper.firstChild) frag.appendChild(wrapper.firstChild);
+      }
+      container.appendChild(frag);
+      container.scrollTop = container.scrollHeight;
+    }
   }
-  container.appendChild(frag);
   dispatchLastIdx = dispatchEntries.length;
-  // Auto-scroll dispatch log to bottom
-  container.scrollTop = container.scrollHeight;
+  // Update header bar with latest 3 statuses
+  updateHeaderStatuses();
+}
+
+function updateHeaderStatuses() {
+  const el = document.getElementById('ovStatuses');
+  if (!el) return;
+  const latest = dispatchEntries.slice(-3);
+  if (!latest.length) {
+    el.innerHTML = '<span class="ov-status-empty">Ready -- submit a task to start</span>';
+    return;
+  }
+  let html = '';
+  for (const d of latest.reverse()) {
+    const agentCls = d.agent ? d.agent.toLowerCase().replace(/[^a-z]/g,'') : '';
+    const colorCls = agentCls.includes('planner') ? 'planner-d' : agentCls.includes('executor') ? 'executor-d' : agentCls.includes('reviewer') ? 'reviewer-d' : '';
+    const icon = agentCls.includes('planner') ? '📋' : agentCls.includes('executor') ? '⚙️' : agentCls.includes('reviewer') ? '🧠' : '▸';
+    html += '<div class="ov-status-item">'
+      + '<span class="status-icon">' + icon + '</span>'
+      + '<span class="status-agent ' + colorCls + '">' + escHtml(d.agent||'system') + '</span>'
+      + '<span class="status-text">' + escHtml(truncate(d.text||'',60)) + '</span>'
+      + '</div>';
+  }
+  el.innerHTML = html;
 }
 
 // ── Render a single chat message (bottom panel, ChatGPT-style) ──
@@ -1120,9 +1204,25 @@ function renderChatMsgHtml(m) {
     const resultText = m.result || m.text || '';
     // Format the result nicely
     let bodyHtml = formatResultBody(resultText);
-    // Score line
+    // Critique / Score line
     let scoreHtml = '';
-    if (m.score != null) {
+    if (m.critique) {
+      const cr = m.critique;
+      if (cr.passed) {
+        scoreHtml = '<div style="margin-top:8px"><span class="chat-score" style="background:rgba(34,197,94,.12);color:var(--green)">✓ Approved</span>';
+        if (cr.comment) scoreHtml += ' <span style="font-size:11px;color:var(--fg2)">' + escHtml(truncate(cr.comment, 120)) + '</span>';
+        scoreHtml += '</div>';
+      } else {
+        scoreHtml = '<div style="margin-top:8px"><span class="chat-score" style="background:rgba(239,68,68,.12);color:var(--red)">⚠ Revised</span>';
+        if (cr.comment) scoreHtml += ' <span style="font-size:11px;color:var(--fg2)">' + escHtml(truncate(cr.comment, 120)) + '</span>';
+        if (cr.suggestions && cr.suggestions.length) {
+          scoreHtml += '<ul style="margin:4px 0 0 16px;font-size:11px;color:var(--fg2)">';
+          for (const s of cr.suggestions) scoreHtml += '<li>' + escHtml(s) + '</li>';
+          scoreHtml += '</ul>';
+        }
+        scoreHtml += '</div>';
+      }
+    } else if (m.score != null) {
       const c = scoreColor(m.score);
       scoreHtml = '<div style="margin-top:8px"><span class="chat-score" style="background:rgba(124,108,240,.1);color:' + c + '">'
         + m.score + '/100</span>';
@@ -1161,24 +1261,131 @@ function renderChatMsgHtml(m) {
   return '';
 }
 
-// Format result text into nice readable HTML (like ChatGPT)
+// Format result text into nice readable HTML — lightweight markdown renderer
 function formatResultBody(text) {
   if (!text) return '';
-  // Try to parse JSON and pretty-print
-  let s = text;
+  // Try JSON pretty-print
   try {
-    const obj = JSON.parse(s);
-    s = JSON.stringify(obj, null, 2);
-    return '<pre>' + escHtml(s) + '</pre>';
+    const obj = JSON.parse(text);
+    return '<pre>' + escHtml(JSON.stringify(obj, null, 2)) + '</pre>';
   } catch(e) {}
-  // If it looks like code or is very long, wrap in pre
-  if (s.length > 500 || s.includes('\n  ') || s.includes('```')) {
-    // Handle markdown-ish code blocks
-    s = escHtml(s);
-    s = s.replace(/```(\w*)\n/g, '<pre>').replace(/```/g, '</pre>');
-    return '<div style="white-space:pre-wrap">' + s + '</div>';
+  return renderMarkdown(text);
+}
+
+function renderMarkdown(src) {
+  // 1) Extract fenced code blocks (protect from processing)
+  const codeBlocks = [];
+  let s = src.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+    const i = codeBlocks.length;
+    codeBlocks.push('<pre><code' + (lang ? ' class="lang-'+escHtml(lang)+'"' : '') + '>' + escHtml(code.trimEnd()) + '</code></pre>');
+    return '\x00CB' + i + '\x00';
+  });
+
+  const lines = s.split('\n');
+  let html = '';
+  let inList = false, listType = '';
+  let i = 0;
+
+  function closeList() { if (inList) { html += '</' + listType + '>'; inList = false; } }
+
+  while (i < lines.length) {
+    let line = lines[i];
+
+    // Code block placeholder
+    const cbMatch = line.match(/^\x00CB(\d+)\x00$/);
+    if (cbMatch) { closeList(); html += codeBlocks[parseInt(cbMatch[1])]; i++; continue; }
+
+    // Table: detect header row + separator row (| --- | --- |)
+    if (line.trim().startsWith('|') && i + 1 < lines.length && /^\|[\s:]*-{2,}[\s:]*(\|[\s:]*-{2,}[\s:]*)*\|?\s*$/.test(lines[i+1])) {
+      closeList();
+      const parseRow = (r) => r.replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
+      // Parse alignment from separator
+      const sepCols = parseRow(lines[i+1]);
+      const aligns = sepCols.map(c => {
+        if (c.startsWith(':') && c.endsWith(':')) return 'center';
+        if (c.endsWith(':')) return 'right';
+        return 'left';
+      });
+      const hdrCols = parseRow(line);
+      html += '<table><thead><tr>';
+      for (let c = 0; c < hdrCols.length; c++) {
+        const a = aligns[c] || 'left';
+        html += '<th style="text-align:' + a + '">' + inlineFmt(hdrCols[c]) + '</th>';
+      }
+      html += '</tr></thead><tbody>';
+      i += 2; // skip header + separator
+      while (i < lines.length && lines[i].trim().startsWith('|')) {
+        const cols = parseRow(lines[i]);
+        html += '<tr>';
+        for (let c = 0; c < cols.length; c++) {
+          const a = aligns[c] || 'left';
+          html += '<td style="text-align:' + a + '">' + inlineFmt(cols[c]) + '</td>';
+        }
+        html += '</tr>';
+        i++;
+      }
+      html += '</tbody></table>';
+      continue;
+    }
+
+    // Headers h1-h6
+    const hMatch = line.match(/^(#{1,6})\s+(.+)$/);
+    if (hMatch) { closeList(); const lvl = hMatch[1].length; html += '<h' + lvl + '>' + inlineFmt(hMatch[2]) + '</h' + lvl + '>'; i++; continue; }
+
+    // Unordered list
+    const ulMatch = line.match(/^[\s]*[-*]\s+(.+)$/);
+    if (ulMatch) {
+      if (!inList || listType !== 'ul') { closeList(); html += '<ul>'; inList = true; listType = 'ul'; }
+      html += '<li>' + inlineFmt(ulMatch[1]) + '</li>'; i++; continue;
+    }
+
+    // Ordered list
+    const olMatch = line.match(/^[\s]*(\d+)[.)]\s+(.+)$/);
+    if (olMatch) {
+      if (!inList || listType !== 'ol') { closeList(); html += '<ol>'; inList = true; listType = 'ol'; }
+      html += '<li>' + inlineFmt(olMatch[2]) + '</li>'; i++; continue;
+    }
+
+    // Non-list line closes any open list
+    if (inList) closeList();
+
+    // Horizontal rule
+    if (/^[-*_]{3,}\s*$/.test(line.trim())) { html += '<hr>'; i++; continue; }
+
+    // Blockquote
+    const bqMatch = line.match(/^>\s?(.*)$/);
+    if (bqMatch) { html += '<blockquote>' + inlineFmt(bqMatch[1]) + '</blockquote>'; i++; continue; }
+
+    // Empty line
+    if (line.trim() === '') { i++; continue; }
+
+    // Normal paragraph
+    html += '<p>' + inlineFmt(line) + '</p>';
+    i++;
   }
-  return escHtml(s);
+  closeList();
+  return html;
+}
+
+function inlineFmt(s) {
+  s = escHtml(s);
+  // images: ![alt](url)
+  s = s.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" class="md-img" loading="lazy">');
+  // links: [text](url)
+  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  // bold+italic
+  s = s.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+  // bold
+  s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  // italic
+  s = s.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  // strikethrough
+  s = s.replace(/~~(.+?)~~/g, '<del>$1</del>');
+  // inline code
+  s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // bare URLs → clickable links (only if not already in an href or src)
+  s = s.replace(/(?<!="|=')((https?:\/\/)[^\s<"']+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+  return s;
 }
 
 // ── Incremental render for chat messages (bottom panel) ──
@@ -1188,7 +1395,7 @@ function renderChat() {
     chatLastRenderedIdx = 0;
     container.innerHTML = '<div class="chat-welcome"><div class="chat-welcome-icon">⬡</div>'
       + '<div class="chat-welcome-text">What can I help you with?</div>'
-      + '<div class="chat-welcome-sub">Your task will be planned, executed, and reviewed by the Swarm agent team</div></div>';
+      + '<div class="chat-welcome-sub">Your task will be planned, executed, and quality-checked by the Swarm agent team</div></div>';
     return;
   }
   // First render: replace welcome
@@ -1386,7 +1593,7 @@ function findTokensForAgent(agentId, claimedAt, completedAt) {
       out.execIn += c.prompt_tokens || 0;
       out.execOut += c.completion_tokens || 0;
     }
-    if (cAid === 'reviewer' && aid !== 'reviewer') {
+    if ((cAid === 'reviewer' || cAid === 'advisor') && aid !== 'reviewer' && aid !== 'advisor') {
       out.reviewIn += c.prompt_tokens || 0;
       out.reviewOut += c.completion_tokens || 0;
     }
@@ -1494,46 +1701,74 @@ function diffAndRoute(prev, current) {
     if (newStatus === 'review' && oldStatus !== 'review' && !seen.has('review')) {
       seen.add('review');
       const agentTokens = findTokensForAgent(agent, task.claimed_at);
+      const isSimple = (task.complexity === 'simple');
       if (task.result) {
         seen.add('result_shown');
-        addDispatch('📝', agent, 'Implementation done → review', {
+        addDispatch('📝', agent, isSimple ? 'Done (auto-completed)' : 'Done → advisor review', {
           taskId, result: task.result,
           promptTokens: agentTokens.execIn, completionTokens: agentTokens.execOut,
         });
       } else {
-        addDispatch('📤', agent, 'Sent to review', {taskId});
+        addDispatch('📤', agent, '🧠 Sent to advisor', {taskId});
       }
-      firePacket(2, 'reviewer');
+      if (!isSimple) firePacket(2, 'reviewer');
     }
 
-    // ── Completed → review score → TOP, final result → BOTTOM ──
+    // ── Critique → executor needs to fix ──
+    if (newStatus === 'critique' && oldStatus !== 'critique' && !seen.has('critique')) {
+      seen.add('critique');
+      const critique = task.critique || {};
+      const sugCount = (critique.suggestions || []).length;
+      const preview = sugCount ? sugCount + ' suggestion' + (sugCount > 1 ? 's' : '') : '';
+      addDispatch('⚠', critique.reviewer || 'advisor', 'Needs revision: ' + preview, {taskId});
+    }
+
+    // ── Completed → critique/review result → TOP, final result → BOTTOM ──
     if (newStatus === 'completed' && !seen.has('completed')) {
       seen.add('completed');
       const agentTokens = findTokensForAgent(agent, task.claimed_at, task.completed_at);
 
-      // Review score → TOP dispatch
-      const scores = task.review_scores || [];
-      if (scores.length) {
-        const last = scores[scores.length - 1];
-        addDispatch('⭐', last.reviewer || 'reviewer', 'Reviewed', {
-          taskId, score: last.score, scoreComment: last.comment,
-          promptTokens: agentTokens.reviewIn, completionTokens: agentTokens.reviewOut,
-        });
+      // Critique/review result → TOP dispatch
+      const critique = task.critique;
+      if (critique) {
+        const advisorId = critique.reviewer || 'advisor';
+        if (critique.passed) {
+          addDispatch('✓', advisorId, 'Approved', {
+            taskId,
+            promptTokens: agentTokens.reviewIn, completionTokens: agentTokens.reviewOut,
+          });
+        } else {
+          addDispatch('🧠', advisorId, 'Revised & completed', {taskId});
+        }
+      } else {
+        // Legacy: numeric scores
+        const scores = task.review_scores || [];
+        if (scores.length) {
+          const last = scores[scores.length - 1];
+          addDispatch('⭐', last.reviewer || 'reviewer', 'Reviewed', {
+            taskId, score: last.score, scoreComment: last.comment,
+            promptTokens: agentTokens.reviewIn, completionTokens: agentTokens.reviewOut,
+          });
+        }
       }
 
-      // Completion marker → TOP dispatch
-      addDispatch('✓', agent, 'Task completed', {taskId});
+      // Simple task marker
+      if (task.complexity === 'simple') {
+        addDispatch('⚡', agent, 'Simple task auto-completed', {taskId});
+      } else {
+        addDispatch('✓', agent, 'Task completed', {taskId});
+      }
 
       // ── FINAL RESULT → BOTTOM chatbox as assistant message ──
       if (task.result) {
         seen.add('result_shown');
         const totalIn = agentTokens.execIn + agentTokens.reviewIn;
         const totalOut = agentTokens.execOut + agentTokens.reviewOut;
-        const lastScore = scores.length ? scores[scores.length-1] : null;
         addChatMsg('assistant', task.result, {
           agent, taskId, result: task.result,
-          score: lastScore ? lastScore.score : null,
-          scoreComment: lastScore ? lastScore.comment : null,
+          critique: critique || null,
+          score: critique ? null : (task.review_scores && task.review_scores.length ? task.review_scores[task.review_scores.length-1].score : null),
+          scoreComment: critique ? null : (task.review_scores && task.review_scores.length ? task.review_scores[task.review_scores.length-1].comment : null),
           promptTokens: totalIn || null,
           completionTokens: totalOut || null,
         });
@@ -1594,13 +1829,14 @@ function updateWorkflow(tasks) {
   entries.forEach(t => {
     if (t.status === 'completed') done++;
     else if (t.status === 'failed') failed++;
-    else if (t.status === 'claimed' || t.status === 'review') {
+    else if (t.status === 'claimed' || t.status === 'review' || t.status === 'critique') {
       working++;
       const aid = (t.agent_id || '').toLowerCase();
       if (aid === 'planner') activePlanner = true;
       else if (aid === 'executor') activeExecutor = true;
       else if (aid === 'reviewer') activeReviewer = true;
       if (t.status === 'review') activeReviewer = true;
+      if (t.status === 'critique') { activeExecutor = true; }
     }
   });
 
@@ -1612,36 +1848,47 @@ function updateWorkflow(tasks) {
     }
   }
 
+  // Update legacy hidden workflow nodes (for compatibility)
   const pn = document.getElementById('wfPlanner');
   const en = document.getElementById('wfExecutor');
   const rn = document.getElementById('wfReviewer');
-  pn.className = 'wf-node' + (activePlanner ? ' active' : '');
-  en.className = 'wf-node' + (activeExecutor ? ' active executor' : '');
-  rn.className = 'wf-node' + (activeReviewer ? ' active reviewer' : '');
+  if (pn) pn.className = 'wf-node' + (activePlanner ? ' active' : '');
+  if (en) en.className = 'wf-node' + (activeExecutor ? ' active executor' : '');
+  if (rn) rn.className = 'wf-node' + (activeReviewer ? ' active reviewer' : '');
 
-  document.getElementById('wfPlannerStatus').textContent = activePlanner ? 'working' : 'idle';
-  document.getElementById('wfExecutorStatus').textContent = activeExecutor ? 'working' : 'idle';
-  document.getElementById('wfReviewerStatus').textContent = activeReviewer ? 'working' : 'idle';
+  const ps = document.getElementById('wfPlannerStatus');
+  const es = document.getElementById('wfExecutorStatus');
+  const rs = document.getElementById('wfReviewerStatus');
+  if (ps) ps.textContent = activePlanner ? 'working' : 'idle';
+  if (es) es.textContent = activeExecutor ? 'working' : 'idle';
+  if (rs) rs.textContent = activeReviewer ? 'working' : 'idle';
 
   const c1 = document.getElementById('wfConn1');
   const c2 = document.getElementById('wfConn2');
-  c1.className = 'wf-connector' + ((activePlanner || activeExecutor) ? ' active' : '');
-  c2.className = 'wf-connector' + ((activeExecutor || activeReviewer) ? ' active' : '');
+  if (c1) c1.className = 'wf-connector' + ((activePlanner || activeExecutor) ? ' active' : '');
+  if (c2) c2.className = 'wf-connector' + ((activeExecutor || activeReviewer) ? ' active' : '');
 
-  if (activeExecutor && !wfPrevState.executor && wfPrevState.planner) firePacket(1, 'planner');
-  if (activeReviewer && !wfPrevState.reviewer && wfPrevState.executor) firePacket(2, 'executor');
   wfPrevState = {planner:activePlanner, executor:activeExecutor, reviewer:activeReviewer};
 
   const statsEl = document.getElementById('wfStats');
-  if (!total) {
-    statsEl.textContent = 'Ready — submit a task to start';
-  } else {
-    const parts = [total + ' task' + (total!==1?'s':'')];
-    if (done) parts.push(done + ' done');
-    if (working) parts.push(working + ' working');
-    if (failed) parts.push(failed + ' failed');
-    statsEl.textContent = parts.join(' · ');
+  if (statsEl) {
+    if (!total) statsEl.textContent = 'Ready';
+    else {
+      const parts = [total + ' task' + (total!==1?'s':'')];
+      if (done) parts.push(done + ' done');
+      if (working) parts.push(working + ' working');
+      if (failed) parts.push(failed + ' failed');
+      statsEl.textContent = parts.join(' · ');
+    }
   }
+
+  // ── Update header bar agent chips ──
+  const cp = document.getElementById('chipPlanner');
+  const ce = document.getElementById('chipExecutor');
+  const cr = document.getElementById('chipReviewer');
+  if (cp) cp.className = 'ov-agent-chip' + (activePlanner ? ' active' : '');
+  if (ce) ce.className = 'ov-agent-chip' + (activeExecutor ? ' active executor' : '');
+  if (cr) cr.className = 'ov-agent-chip' + (activeReviewer ? ' active reviewer' : '');
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -1723,89 +1970,60 @@ async function loadAgents() {
     const hb = heartbeatData[a.id];
     const isOnline = hb && hb.online;
 
+    // ── Card surface: compact, consistent ──
     html += '<div class="agent-card' + (isEditing ? ' editing' : '') + '" onclick="editAgent(\'' + escHtml(a.id) + '\')">';
-    html += '<div class="agent-name">'
-      + '<span class="hb-dot ' + (isOnline ? 'online' : 'offline') + '" data-agent-id="' + escHtml(a.id) + '" title="' + (isOnline ? (hb.status==='working' ? 'Working' : 'Idle') : 'Offline') + '"></span> '
-      + escHtml(a.id);
-    if (isOnline && hb.status === 'working') {
-      html += ' <span style="font-size:10px;color:var(--cyan);font-weight:400">⚡ working</span>';
-    }
-    html += '</div>';
-    html += '<div class="agent-model">' + escHtml(a.model||'—') + '</div>';
-    html += '<div class="agent-meta">';
-    html += 'Provider: <span>' + escHtml(a.provider||'—') + '</span><br>';
-
-    // API Key status
-    const keyEnv = a.api_key_env || '';
+    // Row 1: Name + status
+    html += '<div class="agent-card-header">';
+    html += '<span class="hb-dot ' + (isOnline ? 'online' : 'offline') + '" data-agent-id="' + escHtml(a.id) + '"></span>';
+    html += '<span class="agent-name">' + escHtml(a.id) + '</span>';
+    if (isOnline && hb.status === 'working') html += '<span class="agent-working">working</span>';
+    html += '<span style="flex:1"></span>';
+    // API Key indicator (compact)
     const isKeySet = a.api_key_set;
-    const maskedKey = a.api_key_masked || '';
-    const baseUrl = a.base_url || '';
-    if (keyEnv) {
-      const globalKeyEnv = agentData.global_key_env || '';
-      const allSameKey = agents.every(ag => (ag.api_key_env||'') === keyEnv);
-      const isShared = allSameKey || (globalKeyEnv && keyEnv === globalKeyEnv);
-      if (isKeySet) {
-        if (isShared) {
-          html += 'API Key: <span class="key-badge shared">🔗 ' + escHtml(maskedKey) + '</span>';
-        } else {
-          html += 'API Key: <span class="key-badge set">✓ ' + escHtml(maskedKey) + '</span>';
-        }
-      } else {
-        html += 'API Key: <span class="key-badge unset">✗ not set</span>';
-      }
-      if (baseUrl) html += ' <span style="font-size:10px;color:var(--fg3)">' + escHtml(baseUrl) + '</span>';
-      html += '<br>';
+    if (isKeySet) html += '<span class="key-dot set" title="API key set"></span>';
+    else if (a.api_key_env) html += '<span class="key-dot unset" title="API key not set"></span>';
+    html += '</div>';
+
+    // Row 2: Model + Provider
+    html += '<div class="agent-card-model">' + escHtml(a.model||'—')
+      + ' <span class="agent-provider">' + escHtml(a.provider||'') + '</span></div>';
+
+    // Row 3: Skills tags
+    const skillsList = a.skills || [];
+    if (skillsList.length) {
+      html += '<div class="agent-card-skills">';
+      for (const s of skillsList) html += '<span class="skill-tag">' + escHtml(s) + '</span>';
+      html += '</div>';
     }
 
-    html += 'Skills: ' + (a.skills||[]).map(s=>'<span>'+escHtml(s)+'</span>').join(' ');
-    if (a.fallback_models && a.fallback_models.length) {
-      html += '<br>Fallbacks: ' + a.fallback_models.map(m=>'<span>'+escHtml(m)+'</span>').join(' ');
-    }
-
-    // Chain identity info
+    // Row 4: Chain identity (compact, only if registered)
     const chain = chainAgents[a.id];
     if (chain && chain.registered) {
       const addr = chain.pkp_address || '';
       const shortAddr = addr ? addr.slice(0, 6) + '…' + addr.slice(-4) : '';
       const chainId = chain.erc8004_agent_id != null ? '#' + chain.erc8004_agent_id : '';
       const scanUrl = 'https://sepolia.basescan.org/address/' + addr;
-      html += '<br><span style="color:var(--green);font-size:11px">⛓ On-chain</span> ';
-      html += '<span style="font-size:11px;color:var(--fg2)">' + chainId + '</span> ';
-      html += '<a href="' + scanUrl + '" target="_blank" rel="noopener" onclick="event.stopPropagation()" '
-        + 'style="font-family:var(--mono);font-size:11px;color:var(--accent2);text-decoration:none" '
-        + 'title="' + escHtml(addr) + '">' + escHtml(shortAddr) + ' ↗</a>';
-    } else if (chainData && chainData.enabled) {
-      html += '<br><span style="color:var(--fg3);font-size:11px">⛓ Not registered</span>';
+      html += '<div class="agent-card-chain">'
+        + '<span>⛓ On-chain ' + chainId + '</span> '
+        + '<a href="' + scanUrl + '" target="_blank" rel="noopener" onclick="event.stopPropagation()">' + escHtml(shortAddr) + '</a>'
+        + '</div>';
     }
 
-    html += '</div>';
-
-    // Score bar
+    // Row 5: Score bar (if has scores)
     if (composite > 0) {
       html += '<div class="agent-score">'
         + '<div class="score-bar"><div class="score-fill" style="width:'+composite+'%;background:'+scoreColor(composite)+'"></div></div>'
         + '<div class="score-num" style="color:'+scoreColor(composite)+'">' + composite.toFixed(1) + '</div>'
         + '</div>';
-
-      const dimNames = {task_completion:'Completion',output_quality:'Quality',improvement_rate:'Improvement',consistency:'Consistency',review_accuracy:'Review'};
-      html += '<div style="margin-top:8px;font-size:11px;color:var(--fg2)">';
-      for (const [k,label] of Object.entries(dimNames)) {
-        const v = dims[k] || 0;
-        html += '<div style="display:flex;align-items:center;gap:6px;margin:2px 0">'
-          + '<span style="min-width:70px">' + label + '</span>'
-          + '<div style="flex:1;height:3px;background:var(--bg4);border-radius:2px;overflow:hidden">'
-          + '<div style="height:100%;width:'+v+'%;background:'+scoreColor(v)+';border-radius:2px"></div></div>'
-          + '<span style="min-width:28px;text-align:right;font-family:var(--mono)">' + v.toFixed(0) + '</span>'
-          + '</div>';
-      }
-      html += '</div>';
     }
 
     html += '</div>'; // .agent-card
 
-    // Inline editor
+    // ── Expanded editor panel ──
     if (isEditing) {
       html += '<div class="agent-editor" onclick="event.stopPropagation()">';
+
+      // ── Basic settings ──
       html += '<div class="field-row">';
       html += '<div class="field"><label>Model</label><input class="input" id="editModel" value="' + escHtml(a.model||'') + '"></div>';
       html += '<div class="field"><label>Provider</label><select class="input" id="editProvider">';
@@ -1815,6 +2033,8 @@ async function loadAgents() {
       html += '</select></div>';
       html += '</div>';
       html += '<div class="field"><label>Role</label><textarea class="input" id="editRole" rows="2">' + escHtml(a.role||'') + '</textarea></div>';
+
+      // ── Skills checkboxes ──
       html += '<div class="field"><label>Skills</label><div id="editSkillsBox" style="display:flex;flex-wrap:wrap;gap:6px">';
       const agentSkills = new Set(a.skills||[]);
       for (const sk of allSkills) {
@@ -1823,18 +2043,36 @@ async function loadAgents() {
           + '<input type="checkbox" class="edit-skill-cb" value="' + escHtml(sk.name) + '"' + checked + '>' + escHtml(sk.name) + '</label>';
       }
       html += '</div></div>';
+
+      // ── Fallback Models ──
       html += '<div class="field"><label>Fallback Models (comma-separated)</label><input class="input" id="editFallbacks" value="' + escHtml((a.fallback_models||[]).join(', ')) + '"></div>';
 
-      // ── API Key Configuration ──
+      // ── API Key + Base URL (in expanded only) ──
       html += '<div style="border-top:1px solid var(--bg4);margin:10px 0;padding-top:10px">';
-      html += '<div style="font-size:11px;font-weight:700;color:var(--fg2);text-transform:uppercase;margin-bottom:8px">🔑 API Key Configuration</div>';
+      html += '<div style="font-size:11px;font-weight:700;color:var(--fg2);text-transform:uppercase;margin-bottom:8px">API Configuration</div>';
       html += '<div class="field-row">';
       const keyPlaceholder = a.api_key_masked ? 'Current: ' + a.api_key_masked : 'sk-xxxxxxxx';
       html += '<div class="field"><label>API Key</label><input class="input" id="editApiKey" type="password" value="" placeholder="' + escHtml(keyPlaceholder) + '"><div style="font-size:10px;color:var(--fg3);margin-top:2px">Leave empty to keep current key</div></div>';
       html += '<div class="field"><label>Base URL</label><input class="input" id="editBaseUrl" value="' + escHtml(a.base_url||'') + '" placeholder="https://api.openai.com/v1"></div>';
       html += '</div>';
-      html += '<div style="font-size:11px;color:var(--fg3);margin-top:4px">💡 Values auto-save to local .env file. Leave API Key empty to keep current value.</div>';
       html += '</div>';
+
+      // ── Score dimensions (in expanded only) ──
+      if (composite > 0) {
+        const dimNames = {task_completion:'Completion',output_quality:'Quality',improvement_rate:'Improvement',consistency:'Consistency',review_accuracy:'Review'};
+        html += '<div style="border-top:1px solid var(--bg4);margin:10px 0;padding-top:10px">';
+        html += '<div style="font-size:11px;font-weight:700;color:var(--fg2);text-transform:uppercase;margin-bottom:8px">Score Breakdown</div>';
+        for (const [k,label] of Object.entries(dimNames)) {
+          const v = dims[k] || 0;
+          html += '<div style="display:flex;align-items:center;gap:6px;margin:3px 0;font-size:11px;color:var(--fg2)">'
+            + '<span style="min-width:70px">' + label + '</span>'
+            + '<div style="flex:1;height:3px;background:var(--bg4);border-radius:2px;overflow:hidden">'
+            + '<div style="height:100%;width:'+v+'%;background:'+scoreColor(v)+';border-radius:2px"></div></div>'
+            + '<span style="min-width:28px;text-align:right;font-family:var(--mono)">' + v.toFixed(0) + '</span>'
+            + '</div>';
+        }
+        html += '</div>';
+      }
 
       html += '<div class="actions">';
       html += '<button class="btn btn-outline btn-sm" onclick="event.stopPropagation();closeAgentEditor()">Cancel</button>';
@@ -1978,6 +2216,24 @@ async function selectSkill(scope, name, agentId) {
   }
 
   h += '</div>';
+
+  // ── Assignment panel for shared skills ──
+  if (scope === 'shared' && !name.startsWith('_')) {
+    const agentsResp = await api('/v1/agents');
+    const agentsList = agentsResp?.agents || [];
+    if (agentsList.length) {
+      h += '<div class="skill-assign-bar">';
+      h += '<span class="skill-assign-label">Assigned to:</span>';
+      for (const ag of agentsList) {
+        const hasSkill = (ag.skills || []).includes(name);
+        h += '<label class="skill-assign-cb"><input type="checkbox" class="assign-agent-cb" value="' + escHtml(ag.id) + '"'
+          + (hasSkill ? ' checked' : '') + ' onchange="updateSkillAssignment()">'
+          + '<span>' + escHtml(ag.id) + '</span></label>';
+      }
+      h += '</div>';
+    }
+  }
+
   h += '<textarea class="mono" id="skillContent" oninput="skillsDirty=true">' + escHtml(data.content||'') + '</textarea>';
   editor.innerHTML = h;
 
@@ -2005,6 +2261,29 @@ async function saveSkill() {
   } else {
     toast(res?.error || 'Failed to save', 'error');
   }
+}
+
+// Update which agents have this shared skill assigned
+async function updateSkillAssignment() {
+  if (!currentSkill || currentSkill.scope !== 'shared') return;
+  const skillName = currentSkill.name;
+  const agentsResp = await api('/v1/agents');
+  const agentsList = agentsResp?.agents || [];
+  const checkboxes = document.querySelectorAll('.assign-agent-cb');
+
+  for (const cb of checkboxes) {
+    const agentId = cb.value;
+    const shouldHave = cb.checked;
+    const agent = agentsList.find(a => a.id === agentId);
+    if (!agent) continue;
+    const currentSkills = new Set(agent.skills || []);
+    const hasIt = currentSkills.has(skillName);
+    if (shouldHave === hasIt) continue; // no change needed
+    if (shouldHave) currentSkills.add(skillName);
+    else currentSkills.delete(skillName);
+    await apiPut('/v1/agents/' + agentId, {skills: Array.from(currentSkills)});
+  }
+  toast('Skill assignment updated');
 }
 
 async function deleteSkill() {
@@ -2053,10 +2332,20 @@ function uploadSkill(input) {
     // Create as shared skill
     const res = await apiPut('/v1/skills/' + name, {content});
     if (res && res.ok) {
-      toast('Skill "' + name + '" uploaded');
-      loadSkills();
-      // Select the uploaded skill
-      setTimeout(() => selectSkill('shared', name), 300);
+      // Auto-assign to all agents
+      const agentsResp = await api('/v1/agents');
+      if (agentsResp?.agents) {
+        for (const ag of agentsResp.agents) {
+          const skills = new Set(ag.skills || []);
+          if (!skills.has(name)) {
+            skills.add(name);
+            await apiPut('/v1/agents/' + ag.id, {skills: Array.from(skills)});
+          }
+        }
+      }
+      toast('Skill "' + name + '" uploaded and assigned to all agents');
+      await loadSkills();
+      selectSkill('shared', name);
     } else {
       toast(res?.error || 'Upload failed', 'error');
     }
@@ -2120,15 +2409,27 @@ async function createSkill() {
 
   const res = await apiPut(path, {content: template});
   if (res && res.ok) {
+    // Auto-assign shared skills to all agents
+    if (!scopeVal.startsWith('agent:')) {
+      const agentsResp = await api('/v1/agents');
+      if (agentsResp?.agents) {
+        for (const ag of agentsResp.agents) {
+          const skills = new Set(ag.skills || []);
+          if (!skills.has(name)) {
+            skills.add(name);
+            await apiPut('/v1/agents/' + ag.id, {skills: Array.from(skills)});
+          }
+        }
+      }
+    }
     toast('Skill "' + name + '" created');
     closeCreateDialog();
-    loadSkills();
-    // Select the new skill
+    await loadSkills();
     if (scopeVal.startsWith('agent:')) {
       const aid = scopeVal.slice(6);
-      setTimeout(() => selectSkill('agent', name, aid), 300);
+      selectSkill('agent', name, aid);
     } else {
-      setTimeout(() => selectSkill('shared', name), 300);
+      selectSkill('shared', name);
     }
   } else {
     toast(res?.error || 'Failed to create', 'error');

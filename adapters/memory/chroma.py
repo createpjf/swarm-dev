@@ -13,7 +13,8 @@ logger = logging.getLogger(__name__)
 try:
     import chromadb
     _HAS_CHROMA = True
-except ImportError:
+except (ImportError, Exception):
+    # chromadb may fail on Python 3.14+ (pydantic v1 incompatibility)
     _HAS_CHROMA = False
 
 

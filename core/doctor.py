@@ -136,6 +136,9 @@ def check_dependencies() -> tuple[bool, str, str]:
     optional = {"chromadb": "Vector memory", "web3": "ERC-8004 chain",
                 "lit_python_sdk": "Lit PKP"}
 
+    # Refresh import finder caches so newly pip-installed packages are visible
+    importlib.invalidate_caches()
+
     missing_req = []
     for mod in required:
         mod_name = "pyyaml" if mod == "yaml" else mod
@@ -152,9 +155,9 @@ def check_dependencies() -> tuple[bool, str, str]:
     for mod, label in optional.items():
         try:
             importlib.import_module(mod)
-            opt_status.append(f"{label} ✓")
+            opt_status.append(f"{label} ok")
         except ImportError:
-            opt_status.append(f"{label} ✗")
+            opt_status.append(f"{label} missing")
 
     return True, "Dependencies", f"All required OK  ({', '.join(opt_status)})"
 
@@ -172,19 +175,21 @@ def check_memory_backend() -> tuple[bool, str, str]:
     if backend == "mock":
         return True, "Memory", "Mock (in-memory, no persistence)"
 
+    importlib.invalidate_caches()
+
     if backend == "chroma":
         try:
             import chromadb  # noqa: F401
-            return True, "Memory", "ChromaDB ✓"
-        except ImportError:
-            return False, "Memory", "ChromaDB configured but not installed — pip3 install chromadb"
+            return True, "Memory", "ChromaDB [ok]"
+        except (ImportError, Exception):
+            return False, "Memory", "ChromaDB configured but not loadable -- pip3 install chromadb"
 
     if backend == "hybrid":
         try:
             import chromadb  # noqa: F401
-            return True, "Memory", "Hybrid (Vector + BM25) ✓"
-        except ImportError:
-            return True, "Memory", "Hybrid (BM25 only — install chromadb for vector search)"
+            return True, "Memory", "Hybrid (Vector + BM25) [ok]"
+        except (ImportError, Exception):
+            return True, "Memory", "Hybrid (BM25 only -- install chromadb for vector search)"
 
     return True, "Memory", f"{backend}"
 
@@ -244,22 +249,22 @@ def check_chain() -> tuple[bool, str, str]:
     # Check web3
     try:
         import web3  # noqa: F401
-        parts.append("web3 \u2713")
+        parts.append("web3 ok")
     except ImportError:
         return False, "Chain", "Enabled but web3 not installed — pip3 install web3"
 
     # Check RPC URL
-    rpc_env = chain_cfg.get("rpc_url_env", "BASE_RPC_URL")
-    rpc = os.environ.get(rpc_env, "")
+    rpc_env = chain_cfg.get("rpc_url_env", "RPC_URL")
+    rpc = os.environ.get(rpc_env, "") or os.environ.get("BASE_RPC_URL", "")
     if rpc:
-        parts.append(f"RPC \u2713")
+        parts.append(f"RPC ok")
     else:
-        warnings.append(f"{rpc_env} not set")
+        warnings.append(f"RPC_URL not set")
 
     # Check operator key
     key_env = chain_cfg.get("operator_key_env", "CHAIN_PRIVATE_KEY")
     if os.environ.get(key_env):
-        parts.append("Key \u2713")
+        parts.append("Key ok")
     else:
         warnings.append("No operator key")
 
@@ -267,7 +272,7 @@ def check_chain() -> tuple[bool, str, str]:
     try:
         import lit_python_sdk  # noqa: F401
         lit_net = chain_cfg.get("lit", {}).get("network", "naga-dev")
-        parts.append(f"Lit({lit_net}) \u2713")
+        parts.append(f"Lit({lit_net}) ok")
     except ImportError:
         warnings.append("lit-python-sdk not installed")
 
@@ -276,9 +281,9 @@ def check_chain() -> tuple[bool, str, str]:
     id_reg = os.environ.get(erc_cfg.get("identity_registry_env", ""), "")
     rep_reg = os.environ.get(erc_cfg.get("reputation_registry_env", ""), "")
     if id_reg:
-        parts.append("Identity \u2713")
+        parts.append("Identity ok")
     if rep_reg:
-        parts.append("Reputation \u2713")
+        parts.append("Reputation ok")
 
     # Check chain_state for registered agents
     try:
@@ -294,11 +299,11 @@ def check_chain() -> tuple[bool, str, str]:
     # Check Safe
     safe_addr = os.environ.get(chain_cfg.get("safe", {}).get("address_env", ""), "")
     if safe_addr:
-        parts.append("Safe \u2713")
+        parts.append("Safe ok")
 
     # x402
     if chain_cfg.get("x402", {}).get("enabled"):
-        parts.append("x402 \u2713")
+        parts.append("x402 ok")
 
     detail = "  ".join(parts)
     if warnings:
@@ -373,7 +378,7 @@ def _print_rich(console, results: list[tuple[bool, str, str]]):
     total = len(results)
 
     for ok, label, detail in results:
-        icon = "[green]✓[/green]" if ok else "[red]✗[/red]"
+        icon = "[green]+[/green]" if ok else "[red]x[/red]"
         lines.append(f"  {icon} [bold]{label:14}[/bold] [dim]{detail}[/dim]")
 
     body = "\n".join(lines)
@@ -408,16 +413,26 @@ def _detect_fixable(results: list[tuple[bool, str, str]]) -> list[str]:
     """Detect which optional packages could be auto-installed."""
     fixable = []
     for ok, label, detail in results:
+        detail_lower = detail.lower()
+        # Check failed results for missing packages
         if not ok:
-            detail_lower = detail.lower()
-            if "chromadb" in detail_lower and "not installed" in detail_lower:
+            if "chromadb" in detail_lower and ("not installed" in detail_lower or "not loadable" in detail_lower):
                 fixable.append("chromadb")
             elif "web3" in detail_lower and "not installed" in detail_lower:
                 fixable.append("web3")
             elif "lit" in detail_lower and "not installed" in detail_lower:
                 fixable.append("lit_python_sdk")
-        elif label == "Memory" and "install chromadb" in detail.lower():
-            fixable.append("chromadb")
+        # Also check OK results with optional deps marked as missing
+        if label == "Dependencies" and "missing" in detail_lower:
+            if "vector memory missing" in detail_lower and "chromadb" not in fixable:
+                fixable.append("chromadb")
+            if "erc-8004 chain missing" in detail_lower and "web3" not in fixable:
+                fixable.append("web3")
+            if "lit pkp missing" in detail_lower and "lit_python_sdk" not in fixable:
+                fixable.append("lit_python_sdk")
+        if label == "Memory" and "install chromadb" in detail_lower:
+            if "chromadb" not in fixable:
+                fixable.append("chromadb")
     return fixable
 
 
@@ -454,12 +469,12 @@ def _offer_auto_fix(console, fixable: list[str]):
                 capture_output=True, text=True, timeout=120,
             )
             if result.returncode == 0:
-                console.print(f"  [green]✓[/green] {_t('doctor.installed', pkg=pkg)}")
+                console.print(f"  [green]+[/green] {_t('doctor.installed', pkg=pkg)}")
             else:
-                console.print(f"  [red]✗[/red] {_t('doctor.install_fail', pkg=pkg)}")
+                console.print(f"  [red]x[/red] {_t('doctor.install_fail', pkg=pkg)}")
                 if result.stderr:
                     console.print(f"    [dim]{result.stderr.strip()[:100]}[/dim]")
         except Exception as e:
-            console.print(f"  [red]✗[/red] {_t('doctor.install_fail', pkg=pkg)}: {e}")
+            console.print(f"  [red]x[/red] {_t('doctor.install_fail', pkg=pkg)}: {e}")
 
     console.print()

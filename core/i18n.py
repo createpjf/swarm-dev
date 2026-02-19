@@ -130,6 +130,29 @@ _STRINGS = {
     "gw.endpoints":       {"en": "Endpoints",                "zh": "端点"},
     "gw.restarting":      {"en": "Restarting gateway…",      "zh": "正在重启网关…"},
 
+    # ── Install / Update ─────────────────────────────────────────────────
+    "install.checking":   {"en": "Checking environment…",    "zh": "检查环境…"},
+    "install.cloning":    {"en": "Cloning from GitHub…",     "zh": "正在从 GitHub 克隆…"},
+    "install.installing": {"en": "Installing dependencies…", "zh": "正在安装依赖…"},
+    "install.done":       {"en": "Installation complete!",   "zh": "安装完成！"},
+    "install.already":    {"en": "Already installed at {path}",
+                           "zh": "已安装在 {path}"},
+    "install.failed":     {"en": "Installation failed: {err}",
+                           "zh": "安装失败：{err}"},
+    "uninstall.confirm":  {"en": "Remove swarm CLI and daemon? (source code stays)",
+                           "zh": "移除 swarm CLI 和守护进程？（源代码保留）"},
+    "uninstall.done":     {"en": "Uninstalled.",             "zh": "已卸载。"},
+    "uninstall.cancelled": {"en": "Cancelled.",              "zh": "已取消。"},
+    "update.checking":    {"en": "Checking for updates…",    "zh": "检查更新…"},
+    "update.fetching":    {"en": "Fetching from {remote}…",  "zh": "正在从 {remote} 拉取…"},
+    "update.up_to_date":  {"en": "Already up to date.",      "zh": "已是最新版本。"},
+    "update.updated":     {"en": "Updated! {summary}",       "zh": "已更新！{summary}"},
+    "update.deps":        {"en": "Updating dependencies…",   "zh": "正在更新依赖…"},
+    "update.failed":      {"en": "Update failed: {err}",     "zh": "更新失败：{err}"},
+    "update.changes":     {"en": "{n} file(s) changed",      "zh": "{n} 个文件有变更"},
+    "update.branch":      {"en": "Current branch: {branch}", "zh": "当前分支：{branch}"},
+    "update.version":     {"en": "Version: {version}",       "zh": "版本：{version}"},
+
     # ── Help panel ───────────────────────────────────────────────────────
     "help.status":        {"en": "task board",               "zh": "任务面板"},
     "help.scores":        {"en": "reputation scores",        "zh": "信誉评分"},
@@ -145,6 +168,9 @@ _STRINGS = {
     "help.chain":         {"en": "on-chain status",          "zh": "链上状态"},
     "help.doctor":        {"en": "system health check",      "zh": "系统健康检查"},
     "help.clear":         {"en": "clear history",            "zh": "清除历史"},
+    "help.install":       {"en": "install from GitHub",      "zh": "从 GitHub 安装"},
+    "help.uninstall":     {"en": "remove CLI & daemon",      "zh": "移除 CLI 和守护进程"},
+    "help.update":        {"en": "update from GitHub",       "zh": "从 GitHub 更新"},
     "help.exit":          {"en": "quit",                     "zh": "退出"},
 }
 

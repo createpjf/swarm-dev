@@ -68,25 +68,47 @@ class ReputationScheduler:
 
     async def on_review(self, reviewer_id: str, score: int):
         """
-        Called after a reviewer submits a review.
+        Called after a reviewer submits a review (legacy).
         Updates the reviewer's review_accuracy dimension.
         """
-        # Simple heuristic: moderate scores (40-80) indicate good calibration
         if 40 <= score <= 80:
             accuracy_signal = 85.0
         elif 20 <= score <= 90:
             accuracy_signal = 70.0
         else:
-            accuracy_signal = 55.0  # extreme scores are suspicious
-
+            accuracy_signal = 55.0
         self.scorer.update(reviewer_id, "review_accuracy", accuracy_signal)
 
     async def on_review_score(self, agent_id: str, review_score: int):
         """
-        Called when an agent's output receives a peer review score.
+        Called when an agent's output receives a peer review score (legacy).
         Updates the agent's output_quality dimension with the actual review.
         """
         self.scorer.update(agent_id, "output_quality", float(review_score))
+
+    async def on_critique(self, reviewer_id: str, passed: bool):
+        """
+        Called after an advisor submits a critique.
+        Updates the reviewer's review_accuracy dimension.
+        """
+        # Advisors who provide balanced feedback are better calibrated
+        # Track recent pass/fail ratio via a simple heuristic
+        accuracy_signal = 85.0 if not passed else 70.0
+        self.scorer.update(reviewer_id, "review_accuracy", accuracy_signal)
+
+    async def on_critique_result(self, agent_id: str, passed_first_time: bool,
+                                  had_revision: bool):
+        """
+        Called when an executor's task is critiqued.
+        Updates the agent's output_quality dimension.
+        """
+        if passed_first_time:
+            quality_signal = 90.0
+        elif had_revision:
+            quality_signal = 70.0
+        else:
+            quality_signal = 50.0
+        self.scorer.update(agent_id, "output_quality", quality_signal)
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
