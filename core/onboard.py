@@ -1542,11 +1542,12 @@ def _ask_model(provider: str, api_key: str) -> str | None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _check_chromadb() -> bool:
-    """Check if chromadb is installed."""
+    """Check if chromadb is installed and loadable."""
     try:
         import chromadb  # noqa: F401
         return True
-    except ImportError:
+    except (ImportError, Exception):
+        # chromadb may fail to import on Python 3.14+ due to pydantic v1 incompatibility
         return False
 
 

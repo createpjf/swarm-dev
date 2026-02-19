@@ -176,14 +176,14 @@ def check_memory_backend() -> tuple[bool, str, str]:
         try:
             import chromadb  # noqa: F401
             return True, "Memory", "ChromaDB ✓"
-        except ImportError:
-            return False, "Memory", "ChromaDB configured but not installed — pip3 install chromadb"
+        except (ImportError, Exception):
+            return False, "Memory", "ChromaDB configured but not loadable — pip3 install chromadb"
 
     if backend == "hybrid":
         try:
             import chromadb  # noqa: F401
             return True, "Memory", "Hybrid (Vector + BM25) ✓"
-        except ImportError:
+        except (ImportError, Exception):
             return True, "Memory", "Hybrid (BM25 only — install chromadb for vector search)"
 
     return True, "Memory", f"{backend}"

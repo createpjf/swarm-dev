@@ -13,12 +13,15 @@ VENV_DIR=".venv"
 # ── Colors ──
 RED='\033[0;31m'
 GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
 DIM='\033[2m'
+BOLD='\033[1m'
 RESET='\033[0m'
 
 ok()   { echo -e "  ${GREEN}✓${RESET} $1"; }
 fail() { echo -e "  ${RED}✗${RESET} $1"; exit 1; }
 info() { echo -e "  ${DIM}$1${RESET}"; }
+warn() { echo -e "  ${YELLOW}!${RESET} $1"; }
 
 echo ""
 echo "  ███████╗██╗    ██╗ █████╗ ██████╗ ███╗   ███╗"
@@ -52,20 +55,19 @@ ok "Python: $($PYTHON --version)"
 if [ ! -d "$VENV_DIR" ]; then
     info "Creating virtual environment..."
     "$PYTHON" -m venv "$VENV_DIR"
-    ok "Virtual environment created: $VENV_DIR/"
+    ok "Virtual environment created"
 else
-    ok "Virtual environment exists: $VENV_DIR/"
+    ok "Virtual environment exists"
 fi
 
 # Activate
 # shellcheck disable=SC1091
 source "$VENV_DIR/bin/activate"
 
-# ── 3. Install dependencies ──
-info "Installing dependencies..."
-pip install --upgrade pip -q
-pip install -r requirements.txt -q 2>&1 | tail -1 || true
-pip install -r requirements-dev.txt -q 2>&1 | tail -1 || true
+# ── 3. Install package (editable mode) ──
+info "Installing swarm + dependencies..."
+pip install --upgrade pip -q 2>/dev/null
+pip install -e ".[dev]" -q 2>&1 | tail -3 || true
 ok "Dependencies installed"
 
 # ── 4. Create .env if missing ──
@@ -80,24 +82,36 @@ else
 fi
 
 # ── 5. Create directories ──
-mkdir -p config .logs memory workflows bin
+mkdir -p config .logs memory workflows
 
-# ── 6. Create the 'swarm' alias/wrapper ──
-# Make swarm executable
-chmod +x "$ROOT/swarm"
+# ── 6. Install 'swarm' command globally ──
+# After `pip install -e .`, swarm is at .venv/bin/swarm
+# Symlink to /usr/local/bin so it works from anywhere
+SWARM_BIN="$ROOT/$VENV_DIR/bin/swarm"
+TARGET="/usr/local/bin/swarm"
 
-# Create a venv-aware wrapper
-cat > "$ROOT/bin/swarm" <<WRAPPER
-#!/usr/bin/env bash
-# Auto-activate venv and run swarm
-ROOT="$ROOT"
-source "\$ROOT/.venv/bin/activate"
-exec python3 "\$ROOT/swarm" "\$@"
-WRAPPER
-chmod +x "$ROOT/bin/swarm"
-ok "CLI wrapper: bin/swarm"
+if [ -f "$SWARM_BIN" ]; then
+    if [ -L "$TARGET" ] && [ "$(readlink "$TARGET")" = "$SWARM_BIN" ]; then
+        ok "CLI: swarm (already linked)"
+    elif [ -e "$TARGET" ]; then
+        warn "Cannot link: $TARGET already exists (different program)"
+        info "Use: $SWARM_BIN  or  source .venv/bin/activate && swarm"
+    else
+        info "Linking swarm → /usr/local/bin/  (may ask for password)"
+        if ln -sf "$SWARM_BIN" "$TARGET" 2>/dev/null; then
+            ok "CLI: swarm  (linked to /usr/local/bin/)"
+        elif sudo ln -sf "$SWARM_BIN" "$TARGET" 2>/dev/null; then
+            ok "CLI: swarm  (linked to /usr/local/bin/)"
+        else
+            warn "Could not link to /usr/local/bin/"
+            info "Use: source .venv/bin/activate && swarm"
+        fi
+    fi
+else
+    warn "swarm binary not found — try: pip install -e ."
+fi
 
-# ── 7. Run quick health check ──
+# ── 7. Health check ──
 info "Running health check..."
 if python3 -c "import yaml, httpx, filelock, rich, questionary" 2>/dev/null; then
     ok "All core packages importable"
@@ -106,17 +120,11 @@ else
 fi
 
 echo ""
-echo -e "  ${GREEN}Setup complete!${RESET}"
+echo -e "  ${GREEN}${BOLD}Setup complete!${RESET}"
 echo ""
-echo "  How to run:"
-echo "    source .venv/bin/activate    # activate venv (once per shell)"
-echo "    python3 swarm                # start interactive mode"
-echo "    python3 swarm configure      # first-time setup wizard"
-echo "    python3 swarm doctor         # system health check"
-echo ""
-echo "  Or use the wrapper (no activation needed):"
-echo "    ./bin/swarm                  # auto-activates venv"
-echo ""
-echo "  Optional: add to PATH:"
-echo "    export PATH=\"$ROOT/bin:\$PATH\""
+echo -e "  ${BOLD}Quick start:${RESET}"
+echo "    swarm                    # interactive chat mode"
+echo "    swarm configure          # setup wizard"
+echo "    swarm doctor             # system health check"
+echo "    swarm run \"your task\"    # one-shot task"
 echo ""

@@ -38,6 +38,19 @@ import json
 import os
 import sys
 
+
+def _ensure_project_root():
+    """Ensure we're running from the project root (needed for file-based state)."""
+    # Find project root: directory containing this file
+    root = os.path.dirname(os.path.abspath(__file__))
+    if os.getcwd() != root:
+        os.chdir(root)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+
+
+_ensure_project_root()
+
 # Load .env before anything else
 from core.env_loader import load_dotenv
 load_dotenv()
