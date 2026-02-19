@@ -2,11 +2,14 @@
 core/live_status.py
 Claude Code-style live status display for agent orchestration.
 Shows per-task status rows, elapsed time, and summary.
+Supports i18n via core.i18n module.
 """
 
 from __future__ import annotations
 import time
 from typing import Optional
+
+from core.i18n import t
 
 from rich.console import Console, Group
 from rich.live import Live
@@ -16,11 +19,13 @@ from rich.text import Text
 
 # ── Status icons ─────────────────────────────────────────────────────────────
 
-ICON_WORKING = "[bold cyan]●[/bold cyan]"
-ICON_DONE    = "[bold green]✓[/bold green]"
-ICON_IDLE    = "[dim]○[/dim]"
-ICON_FAIL    = "[bold red]✗[/bold red]"
-ICON_REVIEW  = "[bold magenta]◆[/bold magenta]"
+ICON_WORKING   = "[bold cyan]●[/bold cyan]"
+ICON_DONE      = "[bold green]✓[/bold green]"
+ICON_IDLE      = "[dim]○[/dim]"
+ICON_FAIL      = "[bold red]✗[/bold red]"
+ICON_REVIEW    = "[bold magenta]◆[/bold magenta]"
+ICON_CANCELLED = "[dim yellow]⊘[/dim yellow]"
+ICON_PAUSED    = "[bold yellow]⏸[/bold yellow]"
 
 
 # ── Task row ─────────────────────────────────────────────────────────────────
@@ -125,25 +130,32 @@ class LiveStatus:
                 row.status = "failed"
                 started    = t.get("claimed_at")
                 row.elapsed = (now - started) if started else None
-                # Extract error reason
+                # Extract error reason (i18n-aware)
                 flags = t.get("evolution_flags", [])
                 for f in flags:
                     if f.startswith("failed:"):
                         err = f[7:]
-                        # Simplify common errors
+                        # Simplify common errors using i18n
+                        from core.i18n import t as _t
                         if "401" in err:
-                            row.error_msg = "API Key 无效 (401)"
+                            row.error_msg = _t("error.api_key")
                         elif "403" in err:
-                            row.error_msg = "权限不足 (403)"
+                            row.error_msg = _t("error.forbidden")
                         elif "429" in err:
-                            row.error_msg = "请求过多 (429)"
+                            row.error_msg = _t("error.rate_limit")
                         elif "timeout" in err.lower() or "timed out" in err.lower():
-                            row.error_msg = "请求超时"
+                            row.error_msg = _t("error.timeout")
                         elif "connect" in err.lower():
-                            row.error_msg = "无法连接 API"
+                            row.error_msg = _t("error.connect")
                         else:
                             row.error_msg = _truncate(err, 40)
                         break
+
+            elif status == "cancelled":
+                row.status = "cancelled"
+
+            elif status == "paused":
+                row.status = "paused"
 
             elif status == "pending":
                 row.status = "pending"
@@ -172,7 +184,8 @@ class LiveStatus:
         table.add_column("time", width=8, justify="right", style="dim")
 
         # Sort: working first, then done, then failed, then pending
-        order = {"working": 0, "review": 1, "done": 2, "failed": 3, "pending": 4}
+        order = {"working": 0, "review": 1, "done": 2, "failed": 3,
+                 "cancelled": 4, "paused": 5, "pending": 6}
         sorted_rows = sorted(self.rows.values(),
                              key=lambda r: (order.get(r.status, 9),
                                             r.elapsed or 0))
@@ -180,6 +193,7 @@ class LiveStatus:
         done_count = 0
         fail_count = 0
         working_count = 0
+        cancelled_count = 0
 
         for row in sorted_rows:
             icon = _icon_for(row.status)
@@ -188,7 +202,7 @@ class LiveStatus:
                 desc_text = f"[cyan]{row.description}[/cyan]"
                 working_count += 1
             elif row.status == "review":
-                desc_text = f"[magenta]审查中…[/magenta]"
+                desc_text = f"[magenta]{t('status.review')}[/magenta]"
                 working_count += 1
             elif row.status == "done":
                 if row.review_score is not None:
@@ -197,11 +211,16 @@ class LiveStatus:
                     desc_text = f"[green]{row.description}[/green]"
                 done_count += 1
             elif row.status == "failed":
-                reason = row.error_msg or "执行失败"
+                reason = row.error_msg or t("status.failed")
                 desc_text = f"[red]{reason}[/red]"
                 fail_count += 1
+            elif row.status == "cancelled":
+                desc_text = f"[dim yellow]{t('status.cancelled')}[/dim yellow]"
+                cancelled_count += 1
+            elif row.status == "paused":
+                desc_text = f"[yellow]{t('status.paused')} — {row.description}[/yellow]"
             else:  # pending
-                desc_text = f"[dim]等待中…[/dim]"
+                desc_text = f"[dim]{t('status.pending')}[/dim]"
 
             elapsed_str = _fmt_time(row.elapsed) if row.elapsed else "—"
             table.add_row(icon, row.agent_id, desc_text, elapsed_str)
@@ -209,31 +228,35 @@ class LiveStatus:
         # If no rows yet, show agents waiting
         if not self.rows:
             for aid in self.agent_ids:
-                table.add_row(ICON_IDLE, aid, "[dim]等待中…[/dim]", "—")
+                table.add_row(ICON_IDLE, aid, f"[dim]{t('status.pending')}[/dim]", "—")
 
         # Summary row
         table.add_row()
         total_tasks = len(self.rows)
 
         if final:
+            parts = [f"{done_count} {t('summary.done').lower()}"]
             if fail_count:
-                summary = (f"[yellow]完成[/yellow] · "
-                           f"{done_count} 成功 · "
-                           f"[red]{fail_count} 失败[/red] · "
-                           f"{_fmt_time(total_elapsed)}")
+                parts.append(f"[red]{fail_count} {t('summary.failed')}[/red]")
+            if cancelled_count:
+                parts.append(f"[yellow]{cancelled_count} {t('summary.cancelled')}[/yellow]")
+            parts.append(_fmt_time(total_elapsed))
+            if fail_count or cancelled_count:
+                summary = f"[yellow]{t('summary.finished')}[/yellow] · {' · '.join(parts)}"
             else:
-                summary = (f"[green]Done[/green] · "
-                           f"{total_tasks} tasks · "
-                           f"{_fmt_time(total_elapsed)}")
+                summary = f"[green]{t('summary.done')}[/green] · {' · '.join(parts)}"
         else:
             parts = []
             if done_count:
-                parts.append(f"{done_count} done")
+                parts.append(f"{done_count} {t('summary.done').lower()}")
             if working_count:
-                parts.append(f"{working_count} working")
+                parts.append(f"{working_count} {t('summary.working')}")
             if fail_count:
-                parts.append(f"[red]{fail_count} failed[/red]")
-            summary = f"[dim]{' · '.join(parts)} · {_fmt_time(total_elapsed)} elapsed[/dim]"
+                parts.append(f"[red]{fail_count} {t('summary.failed')}[/red]")
+            if cancelled_count:
+                parts.append(f"[yellow]{cancelled_count} {t('summary.cancelled')}[/yellow]")
+            parts.append(f"{_fmt_time(total_elapsed)} {t('summary.elapsed')}")
+            summary = f"[dim]{' · '.join(parts)}[/dim]"
 
         table.add_row("", "", summary, "")
 
@@ -244,11 +267,13 @@ class LiveStatus:
 
 def _icon_for(status: str) -> str:
     return {
-        "working": ICON_WORKING,
-        "done":    ICON_DONE,
-        "pending": ICON_IDLE,
-        "failed":  ICON_FAIL,
-        "review":  ICON_REVIEW,
+        "working":   ICON_WORKING,
+        "done":      ICON_DONE,
+        "pending":   ICON_IDLE,
+        "failed":    ICON_FAIL,
+        "review":    ICON_REVIEW,
+        "cancelled": ICON_CANCELLED,
+        "paused":    ICON_PAUSED,
     }.get(status, ICON_IDLE)
 
 

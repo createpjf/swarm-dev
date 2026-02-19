@@ -280,6 +280,95 @@ class GnosisSafeAdapter:
             logger.error("[safe] approveHash failed: %s", e)
             return f"0x_error_{e}"
 
+    # ── Execute Transaction (Multi-sig) ─────────────────────────
+
+    def exec_transaction(self, to: str, value: int = 0,
+                         data: bytes = b"",
+                         signatures: bytes = b"") -> str:
+        """
+        Execute a Safe transaction with aggregated signatures.
+        Requires threshold number of owner approvals.
+        Returns tx_hash on success.
+        """
+        self._ensure_web3()
+        if not self._safe_contract or not self._account:
+            return "0x_not_configured"
+
+        from web3 import Web3
+        zero_addr = "0x0000000000000000000000000000000000000000"
+
+        try:
+            tx = self._safe_contract.functions.execTransaction(
+                Web3.to_checksum_address(to),
+                value,
+                data,
+                0,  # operation: CALL
+                0,  # safeTxGas
+                0,  # baseGas
+                0,  # gasPrice
+                Web3.to_checksum_address(zero_addr),
+                Web3.to_checksum_address(zero_addr),
+                signatures,
+            ).build_transaction({
+                "from": self._account.address,
+                "nonce": self._w3.eth.get_transaction_count(self._account.address),
+                "gas": 500000,
+                "gasPrice": self._w3.eth.gas_price,
+            })
+
+            signed = self._account.sign_transaction(tx)
+            tx_hash = self._w3.eth.send_raw_transaction(signed.raw_transaction)
+            hex_hash = tx_hash.hex()
+
+            logger.info("[safe] execTransaction to %s — tx: %s", to, hex_hash)
+            return hex_hash
+
+        except Exception as e:
+            logger.error("[safe] execTransaction failed: %s", e)
+            return f"0x_error_{e}"
+
+    def collect_and_execute(self, to: str, value: int = 0,
+                             data: bytes = b"") -> dict:
+        """
+        Full multi-sig flow:
+        1. Propose transaction -> get safe_tx_hash
+        2. Approve hash (as operator)
+        3. Attempt execution if threshold met
+        """
+        proposal = self.propose_transaction(to, value, data)
+        if "error" in proposal:
+            return {"status": "error", "detail": proposal["error"]}
+
+        safe_tx_hash = proposal["safe_tx_hash"]
+        approval_tx = self.approve_hash(safe_tx_hash)
+
+        threshold = self.get_threshold()
+        owners = self.get_owners()
+
+        result = {
+            "status": "pending",
+            "safe_tx_hash": safe_tx_hash,
+            "approval_tx": approval_tx,
+            "threshold": threshold,
+            "owners": len(owners),
+        }
+
+        # If threshold is 1, execute immediately with approved-hash signature
+        if threshold <= 1 and self._account:
+            from web3 import Web3
+            addr_bytes = bytes.fromhex(self._account.address[2:])
+            # r must be exactly 32 bytes: 12 zero-padding + 20-byte address
+            r = (b'\x00' * 12 + addr_bytes)[:32]
+            s = b'\x00' * 32
+            v = b'\x01'
+            sig = r + s + v  # 32 + 32 + 1 = 65 bytes
+
+            exec_tx = self.exec_transaction(to, value, data, sig)
+            result["status"] = "executed" if not exec_tx.startswith("0x_") else "failed"
+            result["exec_tx"] = exec_tx
+
+        return result
+
     # ── Deploy ─────────────────────────────────────────────────
 
     def deploy_safe(self, owners: list[str], threshold: int,

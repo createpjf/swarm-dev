@@ -5,6 +5,8 @@ Supports Agent Teams-style self-claim:
   each agent process independently claims the next available task.
 Dependency graph: tasks can be blocked_by other task IDs.
 Role-based routing: tasks can require a specific agent role.
+Timeout recovery: stale CLAIMED/REVIEW tasks auto-recover to PENDING.
+Cancel/Pause/Retry: user-controllable task lifecycle.
 """
 
 from __future__ import annotations
@@ -16,6 +18,10 @@ import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
+
+# Timeout thresholds (seconds)
+CLAIMED_TIMEOUT = 300   # 5 min — agent crashed if no progress
+REVIEW_TIMEOUT  = 180   # 3 min — reviewer crashed
 
 # Phase 8: loud warning on missing filelock
 try:
@@ -83,6 +89,8 @@ class TaskStatus(str, Enum):
     COMPLETED = "completed"
     FAILED    = "failed"
     BLOCKED   = "blocked"     # waiting for dependency
+    CANCELLED = "cancelled"   # user-cancelled
+    PAUSED    = "paused"      # user-paused (resumable)
 
 
 @dataclass
@@ -98,6 +106,8 @@ class Task:
     created_at:      float = field(default_factory=time.time)
     claimed_at:      Optional[float] = None
     completed_at:    Optional[float] = None
+    review_submitted_at: Optional[float] = None  # when sent to review
+    retry_count:     int = 0                      # number of retries
     review_scores:   list[dict] = field(default_factory=list)   # [{reviewer, score, comment}]
     evolution_flags: list[str] = field(default_factory=list)    # error tags
 
@@ -114,6 +124,8 @@ class Task:
             "created_at":     self.created_at,
             "claimed_at":     self.claimed_at,
             "completed_at":   self.completed_at,
+            "review_submitted_at": self.review_submitted_at,
+            "retry_count":    self.retry_count,
             "review_scores":  self.review_scores,
             "evolution_flags":self.evolution_flags,
         }
@@ -121,9 +133,18 @@ class Task:
     @classmethod
     def from_dict(cls, d: dict) -> "Task":
         d = dict(d)
-        d["status"] = TaskStatus(d.get("status", "pending"))
-        # Handle older task dicts that may lack required_role
+        raw_status = d.get("status", "pending")
+        # Handle unknown status values from older data gracefully
+        try:
+            d["status"] = TaskStatus(raw_status)
+        except ValueError:
+            d["status"] = TaskStatus.PENDING
+        # Handle older task dicts that may lack newer fields
         d.setdefault("required_role", None)
+        d.setdefault("review_submitted_at", None)
+        d.setdefault("retry_count", 0)
+        # Remove internal bookkeeping fields not in dataclass
+        d.pop("_paused_from", None)
         return cls(**d)
 
 
@@ -131,13 +152,16 @@ class TaskBoard:
     """
     File-backed task store.
     All mutating methods acquire a file lock — safe for concurrent agent processes.
+    Includes timeout recovery: stale CLAIMED/REVIEW tasks auto-return to PENDING.
     """
 
     def __init__(self, path: str = BOARD_FILE):
         self.path = path
         self.lock = FileLock(BOARD_LOCK)
-        if not os.path.exists(path):
-            self._write({})
+        # Fix TOCTOU: init under lock
+        with self.lock:
+            if not os.path.exists(path):
+                self._write({})
 
     # ── Create ───────────────────────────────────────────────────────────────
 
@@ -202,17 +226,24 @@ class TaskBoard:
     def submit_for_review(self, task_id: str, result: str):
         with self.lock:
             data = self._read()
-            t = data[task_id]
+            t = data.get(task_id)
+            if not t:
+                logger.warning("submit_for_review: task %s not found", task_id)
+                return
             t["status"] = TaskStatus.REVIEW.value
             t["result"] = result
+            t["review_submitted_at"] = time.time()
             self._write(data)
 
     def add_review(self, task_id: str, reviewer_id: str,
                    score: int, comment: str):
         with self.lock:
-            data  = self._read()
-            t     = data[task_id]
-            t["review_scores"].append({
+            data = self._read()
+            t = data.get(task_id)
+            if not t:
+                logger.warning("add_review: task %s not found", task_id)
+                return
+            t.setdefault("review_scores", []).append({
                 "reviewer": reviewer_id,
                 "score":    score,
                 "comment":  comment,
@@ -220,19 +251,25 @@ class TaskBoard:
             })
             self._write(data)
 
-    def complete(self, task_id: str) -> Task:
+    def complete(self, task_id: str) -> Optional[Task]:
         """Hook: TaskCompleted — only mark done if review passed."""
         with self.lock:
             data = self._read()
-            t    = data[task_id]
-            avg  = self._avg_review_score(t)
+            t = data.get(task_id)
+            if not t:
+                logger.warning("complete: task %s not found", task_id)
+                return None
+            avg = self._avg_review_score(t)
             if avg < 60:
                 # Phase 4 fix: send back to PENDING (not CLAIMED)
                 # so task re-enters the claimable pool
                 t["status"]    = TaskStatus.PENDING.value
                 t["agent_id"]  = None
                 t["claimed_at"] = None
-                t["evolution_flags"].append("review_failed")
+                t["review_submitted_at"] = None
+                t.setdefault("retry_count", 0)
+                t["retry_count"] += 1
+                t.setdefault("evolution_flags", []).append("review_failed")
                 self._write(data)
                 return Task.from_dict(t)
             t["status"]       = TaskStatus.COMPLETED.value
@@ -243,16 +280,156 @@ class TaskBoard:
     def fail(self, task_id: str, reason: str = ""):
         with self.lock:
             data = self._read()
-            t    = data[task_id]
+            t = data.get(task_id)
+            if not t:
+                logger.warning("fail: task %s not found", task_id)
+                return
             t["status"] = TaskStatus.FAILED.value
-            t["evolution_flags"].append(f"failed:{reason}")
+            t.setdefault("evolution_flags", []).append(f"failed:{reason}")
             self._write(data)
 
     def flag(self, task_id: str, tag: str):
         with self.lock:
             data = self._read()
-            data[task_id]["evolution_flags"].append(tag)
+            t = data.get(task_id)
+            if not t:
+                return
+            t.setdefault("evolution_flags", []).append(tag)
             self._write(data)
+
+    # ── Cancel / Pause / Resume / Retry ───────────────────────────────────
+
+    def cancel(self, task_id: str) -> bool:
+        """Cancel a task. Returns True if cancelled, False if not cancellable."""
+        with self.lock:
+            data = self._read()
+            t = data.get(task_id)
+            if not t:
+                return False
+            # Can only cancel non-terminal tasks
+            if t["status"] in (TaskStatus.COMPLETED.value,
+                               TaskStatus.CANCELLED.value):
+                return False
+            t["status"] = TaskStatus.CANCELLED.value
+            t["completed_at"] = time.time()
+            t.setdefault("evolution_flags", []).append("user_cancelled")
+            self._write(data)
+            return True
+
+    def pause(self, task_id: str) -> bool:
+        """Pause a pending/claimed task. Returns True if paused."""
+        with self.lock:
+            data = self._read()
+            t = data.get(task_id)
+            if not t:
+                return False
+            if t["status"] not in (TaskStatus.PENDING.value,
+                                   TaskStatus.CLAIMED.value):
+                return False
+            t["_paused_from"] = t["status"]  # remember original state
+            t["status"] = TaskStatus.PAUSED.value
+            self._write(data)
+            return True
+
+    def resume(self, task_id: str) -> bool:
+        """Resume a paused task back to PENDING."""
+        with self.lock:
+            data = self._read()
+            t = data.get(task_id)
+            if not t:
+                return False
+            if t["status"] != TaskStatus.PAUSED.value:
+                return False
+            t["status"]    = TaskStatus.PENDING.value
+            t["agent_id"]  = None
+            t["claimed_at"] = None
+            t.pop("_paused_from", None)
+            self._write(data)
+            return True
+
+    def retry(self, task_id: str) -> bool:
+        """Retry a failed/cancelled task. Resets it to PENDING."""
+        with self.lock:
+            data = self._read()
+            t = data.get(task_id)
+            if not t:
+                return False
+            if t["status"] not in (TaskStatus.FAILED.value,
+                                   TaskStatus.CANCELLED.value):
+                return False
+            t["status"]    = TaskStatus.PENDING.value
+            t["agent_id"]  = None
+            t["claimed_at"] = None
+            t["completed_at"] = None
+            t["review_submitted_at"] = None
+            t["result"]    = None
+            t["review_scores"] = []
+            t.setdefault("retry_count", 0)
+            t["retry_count"] += 1
+            self._write(data)
+            return True
+
+    # ── Timeout Recovery ──────────────────────────────────────────────────
+
+    def recover_stale_tasks(self) -> list[str]:
+        """
+        Recover stale CLAIMED/REVIEW tasks back to PENDING.
+        Called periodically by the orchestrator or agent loop.
+        Returns list of recovered task IDs.
+        """
+        recovered = []
+        now = time.time()
+        with self.lock:
+            data = self._read()
+            changed = False
+            for tid, t in data.items():
+                status = t.get("status")
+                # Stale CLAIMED: agent crashed or hung
+                if status == TaskStatus.CLAIMED.value:
+                    claimed_at = t.get("claimed_at", 0)
+                    if claimed_at and (now - claimed_at) > CLAIMED_TIMEOUT:
+                        t["status"]    = TaskStatus.PENDING.value
+                        t["agent_id"]  = None
+                        t["claimed_at"] = None
+                        t.setdefault("retry_count", 0)
+                        t["retry_count"] += 1
+                        t.setdefault("evolution_flags", []).append(
+                            "timeout_recovered:claimed")
+                        recovered.append(tid)
+                        changed = True
+                        logger.warning(
+                            "Recovered stale CLAIMED task %s (age=%.0fs)",
+                            tid, now - claimed_at)
+                # Stale REVIEW: reviewer crashed
+                elif status == TaskStatus.REVIEW.value:
+                    review_at = t.get("review_submitted_at") or t.get("claimed_at", 0)
+                    if review_at and (now - review_at) > REVIEW_TIMEOUT:
+                        # Auto-complete with existing review or pass-through
+                        scores = t.get("review_scores", [])
+                        if scores:
+                            avg = self._avg_review_score(t)
+                            if avg >= 60:
+                                t["status"]       = TaskStatus.COMPLETED.value
+                                t["completed_at"] = time.time()
+                            else:
+                                t["status"]    = TaskStatus.PENDING.value
+                                t["agent_id"]  = None
+                                t["claimed_at"] = None
+                                t["review_submitted_at"] = None
+                        else:
+                            # No reviews arrived — auto-complete
+                            t["status"]       = TaskStatus.COMPLETED.value
+                            t["completed_at"] = time.time()
+                        t.setdefault("evolution_flags", []).append(
+                            "timeout_recovered:review")
+                        recovered.append(tid)
+                        changed = True
+                        logger.warning(
+                            "Recovered stale REVIEW task %s (age=%.0fs)",
+                            tid, now - review_at)
+            if changed:
+                self._write(data)
+        return recovered
 
     # ── Query ────────────────────────────────────────────────────────────────
 
@@ -273,25 +450,39 @@ class TaskBoard:
         """Collect all completed results for a task tree (root + all subtasks).
 
         Gathers results from:
-        1. All non-planner completed tasks (executor output)
+        1. All non-planner completed tasks (executor output) — with attribution
         2. Falls back to planner output if no executor results exist
+
+        Each result section includes the producing agent for traceability.
         """
         data = self._read()
         planner_result = None
-        executor_results = []
+        planner_agent = ""
+        executor_results: list[dict] = []
 
         for tid, t in data.items():
             if not t.get("result"):
                 continue
             agent = t.get("agent_id", "")
+            desc  = t.get("description", "")[:80]
             if "planner" in agent.lower():
                 planner_result = t["result"]
+                planner_agent = agent
             else:
-                executor_results.append(t["result"])
+                executor_results.append({
+                    "agent_id": agent,
+                    "description": desc,
+                    "result": t["result"],
+                    "task_id": tid,
+                })
 
-        # Prefer executor results (the actual implementation)
+        # Prefer executor results (the actual implementation) — with attribution
         if executor_results:
-            return "\n\n---\n\n".join(executor_results)
+            parts = []
+            for r in executor_results:
+                header = f"<!-- agent:{r['agent_id']} task:{r['task_id'][:8]} -->"
+                parts.append(f"{header}\n{r['result']}")
+            return "\n\n---\n\n".join(parts)
 
         # If no executor results, fall back to planner output
         if planner_result:
@@ -304,10 +495,38 @@ class TaskBoard:
 
         return ""
 
-    def clear(self):
-        """Remove all tasks. Used between chat turns."""
+    def clear(self, force: bool = False) -> int:
+        """Remove all tasks. Returns count of removed tasks.
+        If force=False and there are active tasks, does NOT clear and returns -1.
+        """
         with self.lock:
+            data = self._read()
+            if not force:
+                active_states = {"pending", "claimed", "review", "blocked", "paused"}
+                active = sum(1 for t in data.values()
+                             if t.get("status") in active_states)
+                if active > 0:
+                    return -1  # signal: active tasks exist, need confirmation
+            count = len(data)
             self._write({})
+            return count
+
+    def cancel_all(self) -> int:
+        """Cancel all non-terminal tasks. Returns count cancelled."""
+        cancelled = 0
+        with self.lock:
+            data = self._read()
+            terminal = {TaskStatus.COMPLETED.value, TaskStatus.CANCELLED.value,
+                        TaskStatus.FAILED.value}
+            for tid, t in data.items():
+                if t.get("status") not in terminal:
+                    t["status"] = TaskStatus.CANCELLED.value
+                    t["completed_at"] = time.time()
+                    t.setdefault("evolution_flags", []).append("user_cancelled")
+                    cancelled += 1
+            if cancelled:
+                self._write(data)
+        return cancelled
 
     def history(self, agent_id: str, last: int = 50) -> list[Task]:
         tasks = [Task.from_dict(t) for t in self._read().values()

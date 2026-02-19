@@ -57,10 +57,7 @@ def _plist_content(port: int, token: str) -> str:
     <true/>
 
     <key>KeepAlive</key>
-    <dict>
-        <key>SuccessfulExit</key>
-        <false/>
-    </dict>
+    <true/>
 
     <key>StandardOutPath</key>
     <string>{log_path}</string>

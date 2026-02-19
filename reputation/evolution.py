@@ -259,7 +259,6 @@ class EvolutionEngine:
     def _write_vote_request(self, agent_id: str, restructure: dict):
         path = f"memory/pending_votes/{agent_id}.json"
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        # Phase 7: file-locked write
         lock = self._get_lock(path)
         with lock:
             with open(path, "w") as f:
@@ -267,6 +266,117 @@ class EvolutionEngine:
                            "ts": time.time(),
                            "votes_for": [], "votes_against": []},
                           f, indent=2)
+
+    def cast_vote(self, agent_id: str, voter_id: str, approve: bool) -> dict:
+        """Cast a vote on a Path C role restructure request."""
+        path = f"memory/pending_votes/{agent_id}.json"
+        lock = self._get_lock(path)
+        with lock:
+            if not os.path.exists(path):
+                return {"error": "no pending vote", "agent_id": agent_id}
+
+            with open(path, "r") as f:
+                vote_data = json.load(f)
+
+            all_voters = vote_data.get("votes_for", []) + vote_data.get("votes_against", [])
+            if voter_id in all_voters:
+                return {"error": "already voted", "voter_id": voter_id}
+
+            if approve:
+                vote_data.setdefault("votes_for", []).append(voter_id)
+            else:
+                vote_data.setdefault("votes_against", []).append(voter_id)
+
+            with open(path, "w") as f:
+                json.dump(vote_data, f, indent=2)
+
+        return self._check_vote_result(agent_id, vote_data)
+
+    def _check_vote_result(self, agent_id: str, vote_data: dict) -> dict:
+        """Check if the vote has reached threshold and execute if so."""
+        import yaml
+        try:
+            with open(os.path.join(AGENT_CONFIG_DIR, "agents.yaml"), "r") as f:
+                cfg = yaml.safe_load(f) or {}
+        except Exception:
+            cfg = {}
+
+        threshold = cfg.get("reputation", {}).get("role_vote_threshold", 0.6)
+        total_agents = len(cfg.get("agents", []))
+        if total_agents == 0:
+            total_agents = 1
+
+        votes_for = len(vote_data.get("votes_for", []))
+        votes_against = len(vote_data.get("votes_against", []))
+        total_votes = votes_for + votes_against
+        approval_ratio = votes_for / max(total_votes, 1)
+
+        result = {
+            "agent_id": agent_id,
+            "votes_for": votes_for,
+            "votes_against": votes_against,
+            "total_agents": total_agents,
+            "threshold": threshold,
+            "approval_ratio": round(approval_ratio, 2),
+            "status": "pending",
+        }
+
+        if total_votes < (total_agents // 2 + 1):
+            result["status"] = "waiting_for_quorum"
+            return result
+
+        if approval_ratio >= threshold:
+            result["status"] = "approved"
+            self._execute_role_restructure(agent_id, vote_data)
+        else:
+            result["status"] = "rejected"
+            self._clear_vote(agent_id)
+            self._clear_pending(agent_id)
+
+        return result
+
+    def _execute_role_restructure(self, agent_id: str, vote_data: dict):
+        """Execute an approved role restructure."""
+        proposal = vote_data.get("proposal", "")
+        logger.info("[evolution] PATH C approved for %s: %s", agent_id, proposal)
+
+        skill_path = f"skills/agent_overrides/{agent_id}.md"
+        os.makedirs(os.path.dirname(skill_path), exist_ok=True)
+        header = f"\n\n## Role Restructure ({time.strftime('%Y-%m-%d')})\n"
+        content = (
+            f"**Team vote approved role change.**\n"
+            f"Reason: {proposal}\n\n"
+            f"- Focus on simpler, well-defined tasks only.\n"
+            f"- Avoid tasks requiring complex reasoning or multi-step planning.\n"
+            f"- Request help from other agents when facing ambiguity.\n"
+        )
+        with open(skill_path, "a") as f:
+            f.write(header + content)
+
+        self._clear_vote(agent_id)
+        self._clear_pending(agent_id)
+        logger.info("[evolution] PATH C executed for %s", agent_id)
+
+    def _clear_vote(self, agent_id: str):
+        path = f"memory/pending_votes/{agent_id}.json"
+        if os.path.exists(path):
+            os.remove(path)
+
+    def get_pending_votes(self) -> list[dict]:
+        """List all pending vote requests (for dashboard)."""
+        vote_dir = "memory/pending_votes"
+        if not os.path.isdir(vote_dir):
+            return []
+        results = []
+        for fname in os.listdir(vote_dir):
+            if not fname.endswith(".json") or fname.startswith("."):
+                continue
+            try:
+                with open(os.path.join(vote_dir, fname)) as f:
+                    results.append(json.load(f))
+            except (json.JSONDecodeError, OSError):
+                continue
+        return results
 
     # ── Config helpers ───────────────────────────────────────────────────────
 

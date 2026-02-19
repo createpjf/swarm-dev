@@ -242,9 +242,19 @@ class WorkflowEngine:
         while True:
             # Find runnable steps (dependencies met, not yet done)
             runnable = []
+            failed_ids = {s.id for s in workflow.steps
+                          if s.status == StepStatus.FAILED}
             for step in workflow.steps:
                 if step.status in (StepStatus.COMPLETED, StepStatus.FAILED,
                                    StepStatus.SKIPPED):
+                    continue
+                # Skip steps whose dependencies failed
+                if any(d in failed_ids for d in step.depends_on):
+                    step.status = StepStatus.SKIPPED
+                    step.error = "dependency failed"
+                    completed_ids.add(step.id)
+                    logger.info("[workflow] step %s skipped (dependency failed)",
+                                step.id)
                     continue
                 if all(d in completed_ids for d in step.depends_on):
                     runnable.append(step)

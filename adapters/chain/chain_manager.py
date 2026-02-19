@@ -198,6 +198,59 @@ class ChainManager:
                    agent_id, pkp["eth_address"])
         return result
 
+    # ── Bidirectional Reputation Sync ────────────────────────────
+
+    def read_chain_reputation(self, agent_id: str) -> dict:
+        """
+        Read reputation back from chain for an agent.
+        Returns: {score, submissions, last_update, synced}
+        This closes the chain verification loop.
+        """
+        agent_data = self.state.get_agent(agent_id)
+        chain_agent_id = agent_data.get("erc8004_agent_id")
+        if chain_agent_id is None:
+            return {"score": 0, "submissions": 0, "last_update": 0, "synced": False}
+
+        try:
+            chain_rep = self.erc8004.get_reputation(chain_agent_id)
+            self.state.set_agent(agent_id, {
+                "chain_reputation_score": chain_rep.get("score", 0),
+                "chain_reputation_submissions": chain_rep.get("submissions", 0),
+                "chain_reputation_last_update": chain_rep.get("last_update", 0),
+                "chain_reputation_read_at": time.time(),
+            })
+            chain_rep["synced"] = True
+            return chain_rep
+        except Exception as e:
+            logger.warning("[chain] read_chain_reputation(%s) failed: %s", agent_id, e)
+            return {"score": 0, "submissions": 0, "last_update": 0, "synced": False}
+
+    def verify_reputation(self, agent_id: str, local_score: float) -> dict:
+        """
+        Compare local reputation with on-chain score.
+        Returns verification result with divergence info.
+        """
+        chain_rep = self.read_chain_reputation(agent_id)
+        chain_score = chain_rep.get("score", 0)
+        divergence = abs(local_score - chain_score)
+
+        result = {
+            "agent_id": agent_id,
+            "local_score": round(local_score, 1),
+            "chain_score": chain_score,
+            "divergence": round(divergence, 1),
+            "synced": chain_rep.get("synced", False),
+            "submissions": chain_rep.get("submissions", 0),
+            "verified": divergence <= 15,
+        }
+
+        if divergence > 15 and chain_rep.get("synced"):
+            logger.warning(
+                "[chain] Reputation divergence for %s: local=%.1f chain=%d (delta=%.1f)",
+                agent_id, local_score, chain_score, divergence)
+
+        return result
+
     # ── Status & Queries ───────────────────────────────────────
 
     def get_status(self) -> dict:

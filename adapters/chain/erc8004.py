@@ -2,9 +2,12 @@
 adapters/chain/erc8004.py
 ERC-8004 Identity & Reputation Registry adapter.
 Uses web3.py for on-chain interactions on Base network.
+Supports IPFS uploads for agent cards and signals.
+Bidirectional sync: write scores to chain AND read them back.
 """
 
 from __future__ import annotations
+import hashlib
 import json
 import logging
 import os
@@ -12,6 +15,69 @@ import time
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+# ── IPFS Helper ──────────────────────────────────────────────────────────────
+
+class IPFSHelper:
+    """
+    Upload JSON data to IPFS via Pinata or local node.
+    Falls back to deterministic content-hash CID simulation
+    when no IPFS service is configured.
+    """
+
+    def __init__(self):
+        self.pinata_jwt = os.environ.get("PINATA_JWT", "")
+        self.ipfs_api_url = os.environ.get(
+            "IPFS_API_URL", "https://api.pinata.cloud")
+
+    @property
+    def available(self) -> bool:
+        return bool(self.pinata_jwt)
+
+    def upload_json(self, data: dict, name: str = "swarm-data") -> str:
+        """
+        Upload JSON to IPFS. Returns CID string.
+        If Pinata is configured, uses Pinata pinning API.
+        Otherwise returns a deterministic content-hash placeholder.
+        """
+        json_bytes = json.dumps(data, sort_keys=True,
+                                ensure_ascii=False).encode("utf-8")
+
+        if self.pinata_jwt:
+            return self._upload_pinata(json_bytes, name)
+
+        # Fallback: deterministic content-hash CID (not real IPFS, but
+        # reproducible and useful for testing)
+        content_hash = hashlib.sha256(json_bytes).hexdigest()
+        cid = f"bafk_{content_hash[:46]}"
+        logger.debug("[ipfs] simulated CID: %s (no IPFS service configured)", cid)
+        return cid
+
+    def _upload_pinata(self, data: bytes, name: str) -> str:
+        """Upload to Pinata pinning service."""
+        try:
+            import httpx
+            resp = httpx.post(
+                f"{self.ipfs_api_url}/pinning/pinJSONToIPFS",
+                headers={
+                    "Authorization": f"Bearer {self.pinata_jwt}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "pinataContent": json.loads(data),
+                    "pinataMetadata": {"name": name},
+                },
+                timeout=30.0,
+            )
+            resp.raise_for_status()
+            result = resp.json()
+            cid = result.get("IpfsHash", "")
+            logger.info("[ipfs] pinned %s → %s", name, cid)
+            return cid
+        except Exception as e:
+            logger.warning("[ipfs] Pinata upload failed: %s — using content hash", e)
+            content_hash = hashlib.sha256(data).hexdigest()
+            return f"bafk_{content_hash[:46]}"
 
 # Minimal ABIs — only functions we actually call
 IDENTITY_ABI = [
@@ -126,6 +192,7 @@ class ERC8004Adapter:
         self._reputation_contract = None
         self._usdc_contract = None
         self._account = None
+        self._ipfs = IPFSHelper()
 
         if not self.rpc_url:
             logger.warning("[erc8004] BASE_RPC_URL not set — on-chain ops will fail")
@@ -177,19 +244,19 @@ class ERC8004Adapter:
             logger.warning("[erc8004] register_agent(%s) — missing contract or key", agent_id)
             return "0x_stub"
 
-        # Build Agent Card JSON and use CID placeholder
-        # In production, upload to IPFS first and pass the CID
+        # Build Agent Card JSON and upload to IPFS
         agent_card_cid = metadata.get("agent_card_cid", "")
         if not agent_card_cid:
-            # Inline the metadata as a JSON string CID placeholder
-            agent_card_cid = json.dumps({
+            agent_card = {
                 "name": agent_id,
                 "description": metadata.get("description", f"{agent_id} — Swarm Agent"),
                 "endpoint": metadata.get("endpoint", ""),
                 "capabilities": metadata.get("capabilities", []),
                 "pkpAddress": metadata.get("pkp_address", ""),
                 "version": "1.0.0",
-            })
+            }
+            agent_card_cid = self._ipfs.upload_json(
+                agent_card, name=f"agent-card-{agent_id}")
 
         try:
             tx = self._identity_contract.functions.registerAgent(
@@ -230,8 +297,9 @@ class ERC8004Adapter:
             logger.warning("[erc8004] Agent %s not registered on-chain", agent_id)
             return "0x_not_registered"
 
-        # Encode signals as JSON string (could be IPFS CID in production)
-        signals_cid = json.dumps(signals)
+        # Upload signals to IPFS (falls back to content-hash if no service)
+        signals_cid = self._ipfs.upload_json(
+            signals, name=f"reputation-{agent_id}-{int(time.time())}")
 
         try:
             tx = self._reputation_contract.functions.submitReputation(

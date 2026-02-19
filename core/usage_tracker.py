@@ -2,6 +2,7 @@
 core/usage_tracker.py
 Centralized usage tracking — token counts, costs, per-agent and per-model stats.
 File-backed JSON store, process-safe with file locks.
+Budget limits: configurable spending cap with auto-pause.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 USAGE_FILE = "memory/usage_stats.json"
 USAGE_LOCK = "memory/usage_stats.lock"
+BUDGET_FILE = "config/budget.json"
 
 # ── Cost estimation (per 1M tokens) ─────────────────────────────────────────
 # Approximate costs for FLock-hosted models (adjust as needed)
@@ -35,6 +37,11 @@ MODEL_COSTS = {
     # Defaults for unknown models
     "_default":             {"input": 1.0, "output": 4.0},
 }
+
+
+class BudgetExceeded(Exception):
+    """Raised when spending exceeds the configured budget limit."""
+    pass
 
 
 def estimate_cost(model: str, prompt_tokens: int,
@@ -52,6 +59,7 @@ class UsageTracker:
     """
     Process-safe usage statistics store.
     Tracks per-agent, per-model token usage and estimated costs.
+    Budget enforcement: checks spending against limits and raises BudgetExceeded.
     """
 
     def __init__(self, path: str = USAGE_FILE):
@@ -70,7 +78,7 @@ class UsageTracker:
         retries: int = 0,
         failover: bool = False,
     ):
-        """Record a single LLM call's usage."""
+        """Record a single LLM call's usage. Checks budget limits."""
         total_tokens = prompt_tokens + completion_tokens
         cost = estimate_cost(model, prompt_tokens, completion_tokens)
 
@@ -106,6 +114,9 @@ class UsageTracker:
                 agg["failure_count"]  = agg.get("failure_count", 0) + 1
 
             self._write(data)
+
+            # Check budget limits inside lock to prevent concurrent overspend
+            self._check_budget(agg)
 
     def get_summary(self) -> dict:
         """Get aggregated usage summary."""
@@ -163,6 +174,138 @@ class UsageTracker:
         """Reset all usage data."""
         with self.lock:
             self._write({"calls": [], "aggregate": {}})
+
+    # ── Budget Management ─────────────────────────────────────────────────
+
+    def _check_budget(self, agg: dict):
+        """Check if spending exceeds budget limits. Raises BudgetExceeded."""
+        budget = self._read_budget()
+        if not budget.get("enabled", False):
+            return
+
+        total_cost = agg.get("total_cost_usd", 0)
+        max_cost = budget.get("max_cost_usd", 0)
+        warn_at = budget.get("warn_at_percent", 80) / 100.0
+
+        if max_cost > 0:
+            # Warning threshold
+            if total_cost >= max_cost * warn_at:
+                pct = (total_cost / max_cost) * 100
+                logger.warning(
+                    "Budget alert: $%.4f / $%.2f (%.0f%%) spent",
+                    total_cost, max_cost, pct)
+                # Write alert to a file for the dashboard to pick up
+                self._write_alert({
+                    "type": "budget_warning",
+                    "message": f"Budget {pct:.0f}% used (${total_cost:.4f} / ${max_cost:.2f})",
+                    "cost": total_cost,
+                    "limit": max_cost,
+                    "percent": pct,
+                    "ts": time.time(),
+                })
+
+            # Hard limit
+            if total_cost >= max_cost:
+                self._write_alert({
+                    "type": "budget_exceeded",
+                    "message": f"Budget exceeded: ${total_cost:.4f} >= ${max_cost:.2f}",
+                    "cost": total_cost,
+                    "limit": max_cost,
+                    "ts": time.time(),
+                })
+                raise BudgetExceeded(
+                    f"Budget exceeded: ${total_cost:.4f} >= ${max_cost:.2f}. "
+                    f"Increase limit via config/budget.json or API.")
+
+        # Token limit
+        max_tokens = budget.get("max_tokens", 0)
+        if max_tokens > 0:
+            total_tokens = agg.get("total_tokens", 0)
+            if total_tokens >= max_tokens:
+                raise BudgetExceeded(
+                    f"Token limit exceeded: {total_tokens:,} >= {max_tokens:,}")
+
+    @staticmethod
+    def _read_budget() -> dict:
+        """Read budget config. Returns empty dict if not configured."""
+        try:
+            with open(BUDGET_FILE, "r") as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
+
+    @staticmethod
+    def set_budget(max_cost_usd: float = 0, max_tokens: int = 0,
+                   warn_at_percent: int = 80, enabled: bool = True):
+        """Set budget limits. Called from CLI or API."""
+        budget = {
+            "enabled": enabled,
+            "max_cost_usd": max_cost_usd,
+            "max_tokens": max_tokens,
+            "warn_at_percent": warn_at_percent,
+            "updated_at": time.time(),
+        }
+        os.makedirs(os.path.dirname(BUDGET_FILE) or ".", exist_ok=True)
+        with open(BUDGET_FILE, "w") as f:
+            json.dump(budget, f, indent=2)
+        return budget
+
+    @staticmethod
+    def get_budget() -> dict:
+        """Get current budget config + spending status."""
+        try:
+            with open(BUDGET_FILE, "r") as f:
+                budget = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            budget = {"enabled": False, "max_cost_usd": 0, "max_tokens": 0}
+
+        # Add current spending
+        try:
+            with open(USAGE_FILE, "r") as f:
+                data = json.load(f)
+            agg = data.get("aggregate", {})
+            budget["current_cost_usd"] = agg.get("total_cost_usd", 0)
+            budget["current_tokens"] = agg.get("total_tokens", 0)
+            max_cost = budget.get("max_cost_usd", 0)
+            if max_cost > 0:
+                budget["percent_used"] = round(
+                    (budget["current_cost_usd"] / max_cost) * 100, 1)
+            else:
+                budget["percent_used"] = 0
+        except (FileNotFoundError, json.JSONDecodeError):
+            budget["current_cost_usd"] = 0
+            budget["current_tokens"] = 0
+            budget["percent_used"] = 0
+
+        return budget
+
+    def _write_alert(self, alert: dict):
+        """Append alert to alerts file for dashboard consumption."""
+        alerts_path = "memory/alerts.jsonl"
+        try:
+            os.makedirs(os.path.dirname(alerts_path) or ".", exist_ok=True)
+            with open(alerts_path, "a") as f:
+                f.write(json.dumps(alert, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
+
+    @staticmethod
+    def get_alerts(limit: int = 20) -> list[dict]:
+        """Read recent alerts."""
+        alerts_path = "memory/alerts.jsonl"
+        alerts = []
+        try:
+            with open(alerts_path, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            alerts.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            continue
+        except FileNotFoundError:
+            pass
+        return alerts[-limit:]
 
     def _read(self) -> dict:
         try:

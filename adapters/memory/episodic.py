@@ -462,6 +462,85 @@ class EpisodicMemory:
 
         return "## Long-Term Memory Recall\n" + "\n".join(parts)
 
+    # ── Lifecycle Management (TTL / Cleanup / Archival) ───────────────────
+
+    def cleanup(self, max_age_days: int = 90, max_episodes: int = 500) -> dict:
+        """
+        Clean up old episodes beyond TTL or count limit.
+        Keeps daily logs and patterns (they're already compact).
+        Returns: {archived: int, deleted_dates: []}
+        """
+        archived = 0
+        deleted_dates = []
+        now_ts = time.time()
+        cutoff = now_ts - (max_age_days * 86400)
+
+        all_dates = sorted(self._list_dates())
+        total_episodes = 0
+
+        # Count total episodes
+        for d in all_dates:
+            day_dir = os.path.join(self.episodes_dir, d)
+            total_episodes += len([f for f in os.listdir(day_dir)
+                                   if f.endswith(".json")])
+
+        # Archive old dates (beyond TTL)
+        for d in all_dates:
+            day_dir = os.path.join(self.episodes_dir, d)
+            try:
+                # Parse date to timestamp
+                from datetime import datetime as _dt, timezone as _tz
+                day_ts = _dt.strptime(d, "%Y-%m-%d").replace(
+                    tzinfo=_tz.utc).timestamp()
+            except ValueError:
+                continue
+
+            if day_ts < cutoff or total_episodes > max_episodes:
+                # Archive: compress to daily summary, then delete episodes
+                summary = self.generate_daily_summary(d)
+                if summary:
+                    self.append_daily_log(
+                        f"[ARCHIVED] {summary[:500]}", date=d)
+
+                # Delete individual episode files
+                for fname in os.listdir(day_dir):
+                    if fname.endswith(".json"):
+                        os.remove(os.path.join(day_dir, fname))
+                        archived += 1
+                        total_episodes -= 1
+
+                # Remove empty directory
+                try:
+                    os.rmdir(day_dir)
+                except OSError:
+                    pass
+                deleted_dates.append(d)
+
+        if archived:
+            logger.info("[%s] cleaned up %d episodes from %d dates",
+                       self.agent_id, archived, len(deleted_dates))
+
+        return {"archived": archived, "deleted_dates": deleted_dates}
+
+    def get_storage_size(self) -> dict:
+        """Get storage usage stats for this agent's memory."""
+        total_bytes = 0
+        file_count = 0
+        for dirpath, _, filenames in os.walk(self.base):
+            for f in filenames:
+                fp = os.path.join(dirpath, f)
+                try:
+                    total_bytes += os.path.getsize(fp)
+                    file_count += 1
+                except OSError:
+                    pass
+        return {
+            "agent_id": self.agent_id,
+            "total_bytes": total_bytes,
+            "total_kb": round(total_bytes / 1024, 1),
+            "file_count": file_count,
+        }
+
     # ── Stats ─────────────────────────────────────────────────────────────
 
     def stats(self) -> dict:

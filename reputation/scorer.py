@@ -139,6 +139,34 @@ class ScoreAggregator:
         except Exception:
             pass  # Never let chain sync break local reputation
 
+    def get_chain_verified(self, agent_id: str) -> dict:
+        """
+        Return local score alongside on-chain verification.
+        Enables chain data to influence trust decisions.
+        """
+        local_score = self.get(agent_id)
+        result = {
+            "agent_id": agent_id,
+            "local_score": local_score,
+            "chain_score": None,
+            "verified": False,
+        }
+        try:
+            import yaml
+            if not os.path.exists("config/agents.yaml"):
+                return result
+            with open("config/agents.yaml") as f:
+                cfg = yaml.safe_load(f) or {}
+            if not cfg.get("chain", {}).get("enabled", False):
+                return result
+            from adapters.chain.chain_manager import ChainManager
+            mgr = ChainManager(cfg)
+            verification = mgr.verify_reputation(agent_id, local_score)
+            result.update(verification)
+        except Exception as e:
+            logger.debug("[scorer] chain verification failed for %s: %s", agent_id, e)
+        return result
+
     # ── Query ─────────────────────────────────────────────────────────────────
 
     def get(self, agent_id: str) -> float:

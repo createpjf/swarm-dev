@@ -6,6 +6,7 @@ Coordination via:
   - ContextBus  (shared file-backed KV)
   - TaskBoard   (file-locked self-claim)
   - Mailbox     (per-agent JSONL inbox)
+Signal handling: SIGTERM/SIGINT trigger graceful shutdown of all children.
 """
 
 from __future__ import annotations
@@ -20,6 +21,9 @@ import time
 from typing import Any
 
 import yaml
+
+# ── Graceful shutdown flag (per-process) ──
+_shutdown_requested = False
 
 try:
     from filelock import FileLock
@@ -44,8 +48,19 @@ def _agent_process(agent_cfg_dict: dict, agent_def: dict, config: dict):
     Runs in a child process.
     Imports adapters here to avoid pickling issues.
     Child output is redirected to .logs/ to keep the terminal clean.
+    Registers signal handlers for graceful shutdown.
     """
     import asyncio, logging, os, sys
+
+    global _shutdown_requested
+
+    # ── Signal handlers for graceful shutdown ──
+    def _handle_signal(signum, frame):
+        global _shutdown_requested
+        _shutdown_requested = True
+
+    signal.signal(signal.SIGTERM, _handle_signal)
+    signal.signal(signal.SIGINT, _handle_signal)
 
     # ── Silence child process output ──
     # Redirect stdout/stderr to log files so urllib3/chromadb/etc.
@@ -154,7 +169,7 @@ async def _handle_review_request(agent, board: TaskBoard, mail: dict, sched):
     # Reviewer completes the task after review (Phase 4 fix)
     if task_obj and task_obj.status.value == "review":
         completed = board.complete(task_id)
-        if "review_failed" in completed.evolution_flags:
+        if completed and "review_failed" in completed.evolution_flags:
             logger.info("[%s] review REJECTED task %s — sent back to PENDING",
                         agent.cfg.agent_id, task_id)
 
@@ -233,9 +248,9 @@ def _infer_role(description: str) -> str:
 # ── Helper: check if any tasks are still active ───────────────────────────
 
 def _has_active_tasks(board: TaskBoard) -> bool:
-    """Return True if any tasks are still pending, claimed, or in review."""
+    """Return True if any tasks are still pending, claimed, in review, or paused."""
     data = board._read()
-    active_states = {"pending", "claimed", "review", "blocked"}
+    active_states = {"pending", "claimed", "review", "blocked", "paused"}
     return any(t.get("status") in active_states for t in data.values())
 
 
@@ -247,17 +262,34 @@ async def _agent_loop(agent, bus: ContextBus, board: TaskBoard,
     Agent Teams self-claim loop.
     After finishing a task, immediately tries to claim the next one.
     Sends periodic heartbeats for gateway status monitoring.
+    Checks for shutdown signals and recovers stale tasks.
     """
     from reputation.scheduler import ReputationScheduler
     sched = ReputationScheduler(board)
 
     idle_count = 0
     max_idle   = config.get("max_idle_cycles", 30)
+    _last_recovery_check = 0.0
 
     while True:
+        # --- check shutdown signal ---
+        if _shutdown_requested:
+            logger.info("[%s] shutdown signal received, exiting gracefully",
+                        agent.cfg.agent_id)
+            return
+
         # --- heartbeat ---
         if heartbeat:
             heartbeat.beat("idle")
+
+        # --- periodic stale task recovery (every 30s) ---
+        now = time.time()
+        if now - _last_recovery_check > 30:
+            _last_recovery_check = now
+            recovered = board.recover_stale_tasks()
+            if recovered:
+                logger.info("[%s] recovered %d stale tasks",
+                            agent.cfg.agent_id, len(recovered))
 
         # --- check mail first (P2P messages from teammates) ---
         mails = agent.read_mail()
@@ -298,24 +330,46 @@ async def _agent_loop(agent, bus: ContextBus, board: TaskBoard,
 
         # --- heartbeat: working ---
         if heartbeat:
-            heartbeat.beat("working", task.task_id)
+            heartbeat.beat("working", task.task_id, progress="preparing...")
 
         try:
+            if heartbeat:
+                heartbeat.beat("working", task.task_id,
+                               progress="loading skills & context...")
             result = await agent.run(task, bus)
+
+            if heartbeat:
+                heartbeat.beat("working", task.task_id,
+                               progress="processing result...")
 
             # Track usage from ResilientLLM
             if tracker and hasattr(agent.llm, 'usage_log') and agent.llm.usage_log:
                 last_usage = agent.llm.usage_log[-1]
-                tracker.record(
-                    agent_id=agent.cfg.agent_id,
-                    model=last_usage.model or agent.cfg.model,
-                    prompt_tokens=last_usage.prompt_tokens,
-                    completion_tokens=last_usage.completion_tokens,
-                    latency_ms=last_usage.latency_ms,
-                    success=last_usage.success,
-                    retries=last_usage.retries,
-                    failover=last_usage.failover_used,
-                )
+                try:
+                    tracker.record(
+                        agent_id=agent.cfg.agent_id,
+                        model=last_usage.model or agent.cfg.model,
+                        prompt_tokens=last_usage.prompt_tokens,
+                        completion_tokens=last_usage.completion_tokens,
+                        latency_ms=last_usage.latency_ms,
+                        success=last_usage.success,
+                        retries=last_usage.retries,
+                        failover=last_usage.failover_used,
+                    )
+                except Exception as budget_err:
+                    from core.usage_tracker import BudgetExceeded
+                    if isinstance(budget_err, BudgetExceeded):
+                        logger.warning("[%s] %s — saving result and exiting",
+                                       agent.cfg.agent_id, budget_err)
+                        board.submit_for_review(task.task_id, result)
+                        # Let the reviewer complete the task normally;
+                        # auto-complete only if no reviewers available
+                        reviewers = config.get("reputation", {}).get(
+                            "peer_review_agents", [])
+                        if not any(r != agent.cfg.agent_id for r in reviewers):
+                            board.complete(task.task_id)
+                        return  # exit agent loop gracefully
+                    raise
 
             is_planner = "planner" in agent.cfg.agent_id.lower()
 
@@ -545,6 +599,7 @@ class Orchestrator:
     """
     Reads agents.yaml, spins up one OS process per agent,
     submits the initial task, then waits for all processes to finish.
+    Handles SIGTERM/SIGINT for graceful shutdown of all children.
     """
 
     def __init__(self, config_path: str = "config/agents.yaml"):
@@ -553,6 +608,7 @@ class Orchestrator:
         self.bus    = ContextBus()
         self.board  = TaskBoard()
         self.procs: list[mp.Process] = []
+        self._shutting_down = False
 
         # Auto-generate team skill on every launch
         try:
@@ -622,6 +678,34 @@ class Orchestrator:
         for p in self.procs:
             p.join()
         logger.info("all agent processes finished")
+
+    def shutdown(self):
+        """Gracefully shut down all agent processes."""
+        if self._shutting_down:
+            return
+        self._shutting_down = True
+        logger.info("Orchestrator shutting down — sending SIGTERM to %d processes",
+                     len(self.procs))
+        # Send shutdown via mailbox first (clean exit)
+        for p in self.procs:
+            if p.is_alive():
+                self.shutdown_agent(p.name)
+        # Give agents 5s to exit cleanly, then SIGTERM
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            if not any(p.is_alive() for p in self.procs):
+                break
+            time.sleep(0.5)
+        # Force SIGTERM on remaining
+        for p in self.procs:
+            if p.is_alive():
+                try:
+                    os.kill(p.pid, signal.SIGTERM)
+                except OSError:
+                    pass
+        # Final wait
+        for p in self.procs:
+            p.join(timeout=3)
 
     def shutdown_agent(self, agent_id: str):
         """Send shutdown message via mailbox (Agent Teams pattern)."""

@@ -30,7 +30,7 @@ def _tokenize(text: str) -> list[str]:
 class BM25Index:
     """
     Self-contained BM25 index — no external dependencies.
-    Supports incremental document addition.
+    Supports incremental document addition and disk persistence.
     """
 
     def __init__(self, k1: float = 1.5, b: float = 0.75):
@@ -96,6 +96,48 @@ class BM25Index:
         scores.sort(key=lambda x: x[1], reverse=True)
         return scores[:n_results]
 
+    # ── Persistence ───────────────────────────────────────────────────────
+
+    def save(self, path: str):
+        """Save index to disk as JSON for persistence across restarts."""
+        import json
+        data = {
+            "k1": self.k1, "b": self.b,
+            "docs": self.docs,
+            "doc_ids": self.doc_ids,
+            "doc_metadata": self.doc_metadata,
+            "doc_lens": self.doc_lens,
+            "doc_freqs": self.doc_freqs,
+            "idf": self.idf,
+            "avg_dl": self.avg_dl,
+            "df": dict(self._df),
+        }
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(data, f, ensure_ascii=False)
+        logger.debug("BM25 index saved to %s (%d docs)", path, len(self.docs))
+
+    @classmethod
+    def load(cls, path: str) -> "BM25Index":
+        """Load index from disk. Returns empty index if file missing."""
+        import json
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            idx = cls(k1=data.get("k1", 1.5), b=data.get("b", 0.75))
+            idx.docs = data.get("docs", [])
+            idx.doc_ids = data.get("doc_ids", [])
+            idx.doc_metadata = data.get("doc_metadata", [])
+            idx.doc_lens = data.get("doc_lens", [])
+            idx.doc_freqs = data.get("doc_freqs", [])
+            idx.idf = data.get("idf", {})
+            idx.avg_dl = data.get("avg_dl", 0.0)
+            idx._df = defaultdict(int, data.get("df", {}))
+            logger.debug("BM25 index loaded from %s (%d docs)", path, len(idx.docs))
+            return idx
+        except (FileNotFoundError, json.JSONDecodeError, KeyError):
+            return cls()
+
 
 # ── Reciprocal Rank Fusion ───────────────────────────────────────────────────
 
@@ -152,8 +194,25 @@ class HybridMemory:
             self._chroma = None
             self._has_chroma = False
 
-        # BM25 keyword search (per-collection)
+        # BM25 keyword search (per-collection) — with persistence
+        self._bm25_dir = os.path.join(persist_dir, "bm25")
+        os.makedirs(self._bm25_dir, exist_ok=True)
         self._bm25_indices: dict[str, BM25Index] = {}
+        self._bm25_dirty: set[str] = set()
+
+    def _get_bm25(self, collection: str) -> BM25Index:
+        """Get or load BM25 index for a collection."""
+        if collection not in self._bm25_indices:
+            path = os.path.join(self._bm25_dir, f"{collection}.json")
+            self._bm25_indices[collection] = BM25Index.load(path)
+        return self._bm25_indices[collection]
+
+    def _save_bm25(self, collection: str):
+        """Persist a dirty BM25 index to disk."""
+        if collection in self._bm25_indices:
+            path = os.path.join(self._bm25_dir, f"{collection}.json")
+            self._bm25_indices[collection].save(path)
+            self._bm25_dirty.discard(collection)
 
     def add(self, collection: str, document: str, metadata: dict):
         """Add a document to both vector and BM25 indices."""
@@ -168,10 +227,14 @@ class HybridMemory:
                 ids=[doc_id],
             )
 
-        # BM25 index
-        if collection not in self._bm25_indices:
-            self._bm25_indices[collection] = BM25Index()
-        self._bm25_indices[collection].add(doc_id, document, metadata)
+        # BM25 index (with persistence)
+        bm25 = self._get_bm25(collection)
+        bm25.add(doc_id, document, metadata)
+        self._bm25_dirty.add(collection)
+
+        # Auto-persist every 10 adds
+        if len(bm25.docs) % 10 == 0:
+            self._save_bm25(collection)
 
     def query(self, collection: str, query: str,
               n_results: int = 3) -> dict:
@@ -200,7 +263,7 @@ class HybridMemory:
                 logger.warning("Vector search failed: %s", e)
 
         # 2. BM25 search
-        bm25_idx = self._bm25_indices.get(collection)
+        bm25_idx = self._get_bm25(collection)
         if bm25_idx:
             hits = bm25_idx.search(query, n_results=n_results * 2)
             for doc_idx, score in hits:

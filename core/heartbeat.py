@@ -43,8 +43,15 @@ class Heartbeat:
         self._path = os.path.join(HEARTBEAT_DIR, f"{agent_id}.json")
         os.makedirs(HEARTBEAT_DIR, exist_ok=True)
 
-    def beat(self, status: str = "idle", task_id: str | None = None):
-        """Write heartbeat file. Called from agent loop."""
+    def beat(self, status: str = "idle", task_id: str | None = None,
+             progress: str | None = None):
+        """Write heartbeat file. Called from agent loop.
+
+        Args:
+            status: idle/working/review
+            task_id: current task being worked on
+            progress: human-readable progress message (e.g. "building prompt...")
+        """
         self.beats += 1
         self.status = status
         self.task_id = task_id
@@ -53,6 +60,7 @@ class Heartbeat:
             "pid": os.getpid(),
             "status": status,
             "task_id": task_id,
+            "progress": progress,  # visible on dashboard
             "last_beat": time.time(),
             "started_at": self.started_at,
             "beats": self.beats,

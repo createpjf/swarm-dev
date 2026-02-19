@@ -1797,8 +1797,10 @@ def _write_env(env_var: str, value: str):
     if not found:
         lines.append(f"{env_var}={value}\n")
 
-    with open(ENV_PATH, "w") as f:
+    tmp_path = ENV_PATH + ".tmp"
+    with open(tmp_path, "w") as f:
         f.writelines(lines)
+    os.replace(tmp_path, ENV_PATH)
 
     os.environ[env_var] = value
 
