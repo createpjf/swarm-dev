@@ -77,8 +77,9 @@ class UsageTracker:
         success: bool = True,
         retries: int = 0,
         failover: bool = False,
-    ):
-        """Record a single LLM call's usage. Checks budget limits."""
+    ) -> float:
+        """Record a single LLM call's usage. Checks budget limits.
+        Returns the estimated cost in USD for this call."""
         total_tokens = prompt_tokens + completion_tokens
         cost = estimate_cost(model, prompt_tokens, completion_tokens)
 
@@ -117,6 +118,8 @@ class UsageTracker:
 
             # Check budget limits inside lock to prevent concurrent overspend
             self._check_budget(agg)
+
+        return cost
 
     def get_summary(self) -> dict:
         """Get aggregated usage summary."""

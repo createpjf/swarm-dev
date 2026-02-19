@@ -185,8 +185,8 @@ class BaseAgent:
                 logger.warning("[%s] compaction failed, using full history: %s",
                                self.cfg.agent_id, e)
 
-        # 6. Call LLM
-        result = await self.llm.chat(messages, self.cfg.model)
+        # 6. Call LLM (streaming if available, with partial result updates)
+        result = await self._call_llm_streaming(messages, task)
 
         # Update short-term memory
         self._short_term.append({"role": "user", "content": task.description})
@@ -205,6 +205,37 @@ class BaseAgent:
         logger.info("[%s] task completed, result length=%d",
                     self.cfg.agent_id, len(result))
         return result
+
+    async def _call_llm_streaming(self, messages: list[dict], task: "Task") -> str:
+        """
+        Call LLM with streaming if available, writing partial results to task board.
+        Falls back to non-streaming chat() if chat_stream() is not available.
+        """
+        # Try streaming first
+        if hasattr(self.llm, "chat_stream"):
+            try:
+                from core.task_board import TaskBoard
+                board = TaskBoard()
+                chunks: list[str] = []
+                update_interval = 0
+                async for chunk in self.llm.chat_stream(messages, self.cfg.model):
+                    chunks.append(chunk)
+                    update_interval += 1
+                    # Write partial result every 5 chunks to avoid excessive I/O
+                    if update_interval >= 5:
+                        board.update_partial(task.task_id, "".join(chunks))
+                        update_interval = 0
+                result = "".join(chunks)
+                # Final partial update (will be cleared when task completes)
+                if chunks:
+                    board.update_partial(task.task_id, result)
+                return result
+            except Exception as e:
+                logger.warning("[%s] streaming failed, falling back to blocking: %s",
+                               self.cfg.agent_id, e)
+
+        # Fallback: non-streaming
+        return await self.llm.chat(messages, self.cfg.model)
 
     def _recall_long_term(self, query: str) -> str:
         """

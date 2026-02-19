@@ -206,6 +206,7 @@ def _extract_and_create_subtasks(board: TaskBoard, planner_output: str,
             desc,
             blocked_by=[],
             required_role=role,
+            parent_id=parent_task_id,
         )
         # Set complexity on the task
         with board.lock:
@@ -451,7 +452,7 @@ async def _agent_loop(agent, bus: ContextBus, board: TaskBoard,
             if tracker and hasattr(agent.llm, 'usage_log') and agent.llm.usage_log:
                 last_usage = agent.llm.usage_log[-1]
                 try:
-                    tracker.record(
+                    call_cost = tracker.record(
                         agent_id=agent.cfg.agent_id,
                         model=last_usage.model or agent.cfg.model,
                         prompt_tokens=last_usage.prompt_tokens,
@@ -461,6 +462,8 @@ async def _agent_loop(agent, bus: ContextBus, board: TaskBoard,
                         retries=last_usage.retries,
                         failover=last_usage.failover_used,
                     )
+                    # Write cost to task board for dashboard display
+                    board.set_cost(task.task_id, call_cost)
                 except Exception as budget_err:
                     from core.usage_tracker import BudgetExceeded
                     if isinstance(budget_err, BudgetExceeded):

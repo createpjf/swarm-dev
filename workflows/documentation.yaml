@@ -1,0 +1,44 @@
+# workflows/documentation.yaml
+# Documentation generation pipeline: outline → write → review
+
+name: Documentation Pipeline
+description: Create structured documentation with outline, content, and review
+
+steps:
+  - id: outline
+    agent: planner
+    prompt: |
+      Create a documentation outline for: {{task}}
+
+      Consider the target audience and include:
+      1. Document structure (sections and subsections)
+      2. Key topics to cover in each section
+      3. Code examples or diagrams needed
+
+  - id: write
+    agent: executor
+    prompt: |
+      Write the documentation based on this outline:
+
+      ## Outline
+      {{outline.result}}
+
+      Write clear, user-friendly documentation in Markdown.
+      Include practical code examples where appropriate.
+    depends_on: [outline]
+
+  - id: review
+    agent: reviewer
+    prompt: |
+      Review this documentation for quality:
+
+      {{write.result}}
+
+      Check:
+      - Is it clear and accessible to the target audience?
+      - Are code examples correct and complete?
+      - Is the structure logical?
+      - Are there missing topics?
+
+      Return JSON: {"score": int, "comment": str}
+    depends_on: [write]

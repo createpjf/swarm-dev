@@ -114,6 +114,7 @@ class Task:
     complexity:      str = "normal"                             # "simple" | "normal" | "complex"
     critique:        dict | None = None                         # {reviewer, passed, suggestions, comment, ts}
     critique_round:  int = 0                                    # current revision round (max=1)
+    parent_id:       Optional[str] = None                       # parent task ID for subtask tree
 
     def to_dict(self) -> dict:
         return {
@@ -135,6 +136,7 @@ class Task:
             "complexity":     self.complexity,
             "critique":       self.critique,
             "critique_round": self.critique_round,
+            "parent_id":      self.parent_id,
         }
 
     @classmethod
@@ -153,6 +155,7 @@ class Task:
         d.setdefault("complexity", "normal")
         d.setdefault("critique", None)
         d.setdefault("critique_round", 0)
+        d.setdefault("parent_id", None)
         # Remove internal bookkeeping fields not in dataclass
         d.pop("_paused_from", None)
         return cls(**d)
@@ -178,7 +181,8 @@ class TaskBoard:
     def create(self, description: str,
                blocked_by: list[str] | None = None,
                min_reputation: int = 0,
-               required_role: str | None = None) -> Task:
+               required_role: str | None = None,
+               parent_id: str | None = None) -> Task:
         # Phase 8: full UUID instead of [:8] to prevent collisions
         task = Task(
             task_id=str(uuid.uuid4()),
@@ -186,6 +190,7 @@ class TaskBoard:
             blocked_by=blocked_by or [],
             min_reputation=min_reputation,
             required_role=required_role,
+            parent_id=parent_id,
         )
         with self.lock:
             data = self._read()
@@ -334,6 +339,30 @@ class TaskBoard:
             if not t:
                 return
             t.setdefault("evolution_flags", []).append(tag)
+            self._write(data)
+
+    # ── Streaming partial results ──────────────────────────────────────────
+
+    def update_partial(self, task_id: str, partial: str):
+        """Update partial result for a task (for streaming output to dashboard)."""
+        with self.lock:
+            data = self._read()
+            t = data.get(task_id)
+            if not t:
+                return
+            t["partial_result"] = partial
+            self._write(data)
+
+    def set_cost(self, task_id: str, cost_usd: float):
+        """Record estimated cost for a task (displayed in dashboard)."""
+        with self.lock:
+            data = self._read()
+            t = data.get(task_id)
+            if not t:
+                return
+            t["cost_usd"] = round(
+                t.get("cost_usd", 0) + cost_usd, 6
+            )
             self._write(data)
 
     # ── Cancel / Pause / Resume / Retry ───────────────────────────────────

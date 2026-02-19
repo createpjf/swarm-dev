@@ -1,51 +1,182 @@
 # ⬡ Swarm
 
-**Multi-agent orchestration framework with reputation-driven evolution.**
+**Multi-agent orchestration that plans, executes, and quality-checks your tasks.**
 
-Agents collaborate through file-backed channels, self-claim tasks, peer-review each other, and automatically evolve when performance drops. Process-native, model-agnostic, zero external infrastructure.
-
----
-
-## Features
-
-- **Multi-process isolation** — each agent runs in its own OS process with its own asyncio loop
-- **File-backed coordination** — TaskBoard, ContextBus, Mailbox — no Redis, no RabbitMQ
-- **5-dimension reputation** — EMA scoring with automatic evolution when performance drops
-- **3-layer episodic memory** — L0 index → L1 summary → L2 full (OpenViking-inspired)
-- **Shared knowledge base** — Zettelkasten atomic notes across the team
-- **Hot-reload skills** — edit `skills/*.md`, changes apply on next task cycle
-- **Resilient LLM** — exponential backoff, circuit breaker, fallback model chains
-- **On-chain identity** — ERC-8004 reputation registry on Base Sepolia (optional)
-- **Web dashboard** — real-time orchestration pipeline + ChatGPT-style result panel
-- **Declarative workflows** — YAML-defined multi-step pipelines with dependency graphs
+Agents collaborate through file-backed channels, self-claim tasks, peer-review each other, and evolve when performance drops. Process-native, model-agnostic, zero infrastructure.
 
 ---
 
 ## Quick Start
 
 ```bash
-# 1. Clone
-git clone https://github.com/createpjf/swarm-dev.git
-cd swarm-dev
+# 1. Install & configure (one command)
+git clone https://github.com/createpjf/swarm-dev.git && cd swarm-dev
+bash setup.sh          # installs deps → launches setup wizard
 
-# 2. Install dependencies
-pip install -r requirements.txt
+# 2. Use it
+swarm                  # interactive chat
+swarm run "your task"  # one-shot
 
-# 3. Configure
-cp .env.example .env
-# Edit .env — add your LLM API keys (FLock, OpenAI, etc.)
-
-# 4. Run
-python main.py                # interactive chat mode
-python main.py run "Build a REST API for user management"  # one-shot
-
-# 5. Dashboard
-python main.py gateway        # starts at http://127.0.0.1:19789
+# 3. Dashboard (optional)
+swarm gateway start    # opens http://127.0.0.1:19789
 ```
+
+> Only one API key needed. `setup.sh` auto-detects local Ollama if running.
 
 ---
 
-## Architecture
+## What Happens When You Submit a Task
+
+```
+You: "Build a REST API for user management"
+  │
+  ▼
+Planner → decomposes into subtasks
+  │
+  ▼
+Executor → implements each subtask (streaming output)
+  │
+  ▼
+Advisor → reviews quality, suggests fixes
+  │
+  ▼
+Result → with cost estimate and agent attribution
+```
+
+The dashboard shows this in real-time: streaming output, subtask tree, agent status, cost per task.
+
+---
+
+## CLI Cheat Sheet
+
+| Command | What it does |
+|---------|-------------|
+| `swarm` | Interactive chat mode |
+| `swarm onboard` | Setup wizard (re-run anytime) |
+| `swarm run "..."` | One-shot task |
+| `swarm status` | Task board |
+| `swarm scores` | Reputation scores |
+| `swarm doctor` | System health check |
+| `swarm gateway start` | Start dashboard |
+| `swarm agents create <name>` | Create agent (`--template coder\|researcher\|debugger\|doc_writer`) |
+| `swarm workflow list` | List available workflows |
+| `swarm workflow run <name>` | Run a workflow (e.g., `code_review`, `bug_fix`, `brainstorm`) |
+| `swarm chain status` | On-chain identity status |
+
+**Chat commands** (inside interactive mode): `/status` `/scores` `/config` `/configure` `/doctor` `/workflows` `/cancel` `/clear` `/help`
+
+---
+
+## Core Concepts
+
+| Concept | Summary |
+|---------|---------|
+| **TaskBoard** | File-locked task lifecycle: create → claim → review → complete |
+| **ContextBus** | Shared KV store — agent outputs feed into other agents' prompts |
+| **Reputation** | 5-dimension EMA scoring (quality 30%, completion 25%, improvement 25%, consistency 10%, review accuracy 10%) |
+| **Evolution** | Score < 40 triggers: Path A (prompt upgrade) → B (model swap) → C (role restructure) |
+| **Skills** | Hot-reload markdown files in `skills/`. Edit → next task picks up changes |
+| **Workflows** | YAML pipelines with dependency graphs, variable passing, approval gates |
+| **Memory** | 3-layer episodic (L0 index → L1 summary → L2 full) + shared Zettelkasten KB |
+
+---
+
+## Workflows
+
+Built-in templates — run without setup:
+
+```bash
+swarm workflow run code_review --input "Review auth module"
+swarm workflow run bug_fix --input "Login fails on empty password"
+swarm workflow run documentation --input "Write API docs for /users endpoint"
+swarm workflow run brainstorm --input "Ways to improve onboarding UX"
+swarm workflow run research_report --input "Compare React vs Vue in 2025"
+```
+
+Create your own: drop a YAML file in `workflows/`. See existing templates for the format.
+
+---
+
+## Dashboard
+
+`swarm gateway start` opens the web dashboard at `http://127.0.0.1:19789`:
+
+- **Overview** — Real-time streaming output, subtask tree, agent status chips
+- **Agents** — Cards with model, skills, reputation sparkline, inline editor
+- **Skills** — Full CRUD for skill documents
+- **Usage** — Token counts, cost breakdown by agent and model
+- **Logs** — Per-agent logs with level filter
+- **Health** — Diagnostic checks (same as `swarm doctor`)
+
+---
+
+## Configuration
+
+All config lives in `config/agents.yaml` (auto-generated by `swarm onboard`):
+
+```yaml
+llm:
+  provider: flock
+
+agents:
+  - id: planner
+    role: "Strategic planner — decomposes tasks"
+    model: minimax-m2.1
+    skills: [_base, planning]
+  - id: executor
+    role: "Implementation agent — writes solutions"
+    model: minimax-m2.1
+    skills: [_base, coding]
+  - id: reviewer
+    role: "Advisor — reviews quality"
+    model: deepseek-v3.2
+    skills: [_base, review]
+```
+
+Each agent can have its own provider, API key, model, fallback chain, and skills.
+
+---
+
+## FAQ / Troubleshooting
+
+**"API key not set"** — Run `swarm onboard` or edit `.env` line 7.
+
+**"Cannot reach LLM"** — Check your internet connection and Base URL. Run `swarm doctor` for diagnostics.
+
+**"Port 19789 in use"** — Another gateway is running. Use `swarm gateway stop` first, or set `SWARM_GATEWAY_PORT` in `.env`.
+
+**Tasks stuck in "claimed"** — Agent may have crashed. Tasks auto-recover after 5 min timeout, or use `/cancel` to manually cancel.
+
+**How to use Ollama (free, local)?** — Install Ollama, pull a model (`ollama pull llama3`), then run `swarm onboard`. It auto-detects Ollama.
+
+**How to add a new agent?** — `swarm agents create my_agent --template coder`
+
+---
+
+## API Endpoints
+
+Gateway runs on port **19789** (`SWARM_GATEWAY_PORT`). Auth: `Authorization: Bearer <token>`.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/` | Web dashboard |
+| `POST` | `/v1/task` | Submit a task |
+| `GET` | `/v1/task/:id` | Task status |
+| `GET` | `/v1/status` | Full task board |
+| `GET` | `/v1/scores` | Reputation scores |
+| `GET` | `/v1/scores/history` | Score trend data |
+| `GET` | `/v1/agents` | Team info |
+| `GET` | `/v1/heartbeat` | Agent liveness |
+| `GET` | `/v1/usage` | Token usage stats |
+| `GET` | `/v1/doctor` | Health check |
+| `GET` | `/v1/skills` | List skills |
+| `PUT` | `/v1/skills/:name` | Create/update skill |
+| `POST` | `/v1/search` | Web search |
+
+---
+
+<details>
+<summary><strong>Architecture</strong></summary>
 
 ```
 ┌──────────────────────────────────────────────────────┐
@@ -54,7 +185,7 @@ python main.py gateway        # starts at http://127.0.0.1:19789
 └────┬──────────────────┬──────────────────┬───────────┘
      │                  │                  │
  ┌───▼───┐         ┌───▼────┐        ┌───▼────┐
- │Planner│ ──────► │Executor│ ──────►│Reviewer│    Agents
+ │Planner│ ──────► │Executor│ ──────►│Advisor │    Agents
  └───┬───┘         └───┬────┘        └───┬────┘
      │                  │                  │
      ▼                  ▼                  ▼
@@ -74,333 +205,41 @@ python main.py gateway        # starts at http://127.0.0.1:19789
  └─────────────────────────────────────────────┘
 ```
 
-### Coordination Channels
-
-| Channel | Purpose | Backing |
-|---------|---------|---------|
-| **TaskBoard** | Task lifecycle (create → claim → review → complete) | `.task_board.json` + file lock |
-| **ContextBus** | Shared KV store (agent outputs → system prompts) | `.context_bus.json` + file lock |
-| **Mailbox** | P2P messages (shutdown, peer requests) | `.mailboxes/{id}.jsonl` |
-| **Heartbeat** | Agent liveness detection | `.heartbeats/{id}.json` |
-
----
-
-## Reputation & Evolution
-
-Five-dimension scoring with exponential moving average (α=0.3):
-
-| Dimension | Weight | What it measures |
-|-----------|--------|-----------------|
-| Task Completion | 25% | Success rate |
-| Output Quality | 30% | Peer review scores |
-| Improvement Rate | 25% | Recovery trend over time |
-| Consistency | 10% | Variance penalty |
-| Review Accuracy | 10% | Reviewer calibration |
-
-**Threshold states:** `≥80` healthy · `60–79` watch · `40–59` warning · `<40` evolve
-
-When an agent's composite score drops below 40, the **Evolution Engine** activates:
-
-| Path | Trigger | Action | Approval |
-|------|---------|--------|----------|
-| **A — Prompt Upgrade** | Score < 40 | Append constraints to `skills/agent_overrides/{id}.md` | Automatic |
-| **B — Model Swap** | Path A insufficient | Switch to stronger model in fallback chain | Leader confirm |
-| **C — Role Restructure** | Fundamental role mismatch | Restructure agent responsibilities | 60% team vote |
-
----
-
-## Memory System
-
-```
-┌─────────────────────────────────────────────────────┐
-│  Short-term: conversation window (volatile, N turns) │
-├─────────────────────────────────────────────────────┤
-│  Long-term: Hybrid BM25 + ChromaDB (RRF fusion)     │
-├─────────────────────────────────────────────────────┤
-│  Episodic: 3-layer progressive loading               │
-│    L0 (~100 tok) index + tags                        │
-│    L1 (~500 tok) summary + decisions                 │
-│    L2 (full)     complete input/output               │
-├─────────────────────────────────────────────────────┤
-│  Knowledge Base: shared Zettelkasten (atomic notes)  │
-│    + MOC navigation  + cross-agent insights feed     │
-└─────────────────────────────────────────────────────┘
-```
-
-Each agent maintains its own episodic memory in `memory/agents/{id}/`. The shared knowledge base lives in `memory/shared/` and is accessible to all agents.
-
----
-
-## Dashboard
-
-The web dashboard (`http://127.0.0.1:19789`) provides:
-
-**Top Panel — Orchestration:**
-- Real-time agent pipeline visualization (Planner → Executor → Reviewer)
-- Data packet animation showing task flow between agents
-- Compact dispatch log with agent activity, token usage, review scores
-
-**Bottom Panel — ChatBox:**
-- ChatGPT-style conversation interface
-- Submit tasks, view final results
-- File/image upload support
-- Brave Search integration for web-augmented tasks
-
-**Other panels:** Agents (inline editor) · Skills (full CRUD) · Chain (ERC-8004 status) · Usage (token stats) · Logs (per-agent, level filter) · Health (diagnostic checks)
-
----
-
-## Pluggable Adapters
-
-```
-adapters/
-├── llm/                        # Language model providers
-│   ├── flock.py                # FLock API (Minimax, DeepSeek, Qwen)
-│   ├── openai.py               # OpenAI / Azure / compatible
-│   ├── ollama.py               # Local Ollama
-│   └── resilience.py           # Retry + circuit breaker + fallback chains
-│
-├── memory/                     # Memory backends
-│   ├── hybrid.py               # BM25 + ChromaDB (reciprocal rank fusion)
-│   ├── chroma.py               # ChromaDB vector store
-│   ├── episodic.py             # 3-layer episodic memory
-│   ├── knowledge_base.py       # Shared Zettelkasten KB
-│   ├── extractor.py            # Case/pattern extraction from episodes
-│   └── mock.py                 # In-memory (testing)
-│
-└── chain/                      # Blockchain integrations
-    ├── erc8004.py              # ERC-8004 Identity & Reputation Registry
-    ├── chain_manager.py        # Unified chain interface
-    ├── lit_pkp.py              # Lit Protocol PKP
-    ├── gnosis_safe.py          # Multi-sig treasury
-    └── x402_client.py          # HTTP 402 payment protocol
-```
-
----
-
-## Configuration
-
-All team config lives in **`config/agents.yaml`**:
-
-```yaml
-llm:
-  provider: flock               # Global default (overrideable per-agent)
-
-agents:
-  - id: planner
-    role: "Strategic planner — decomposes tasks into subtasks"
-    model: minimax-m2.1
-    fallback_models: [deepseek-v3.2, qwen3-235b-thinking]
-    skills: [_base, planning]
-    llm:
-      api_key_env: FLOCK_API_KEY
-      base_url_env: PLANNER_BASE_URL
-
-  - id: executor
-    role: "Implementation agent — writes code and solutions"
-    model: minimax-m2.1
-    fallback_models: [deepseek-v3.2, qwen3-235b-thinking]
-    skills: [_base, coding]
-    llm:
-      api_key_env: EXECUTOR_API_KEY
-      base_url_env: EXECUTOR_BASE_URL
-
-  - id: reviewer
-    role: "Peer reviewer — evaluates outputs and scores quality"
-    model: deepseek-v3.2
-    fallback_models: [minimax-m2.1, qwen3-235b-thinking]
-    skills: [_base, review]
-    llm:
-      api_key_env: REVIEWER_API_KEY
-      base_url_env: REVIEWER_BASE_URL
-```
-
-Each agent can have its own LLM provider, API key, model, fallback chain, skills, memory settings, and autonomy level.
-
----
-
-## CLI Commands
-
-```bash
-# Interactive mode
-python main.py                          # chat loop with rich TUI
-python main.py --setup                  # run setup wizard first
-
-# One-shot
-python main.py run "Build a REST API"   # execute and exit
-python main.py status                   # show task board
-python main.py scores                   # reputation scores
-python main.py doctor                   # system health check
-python main.py gateway                  # start HTTP gateway
-
-# Chat commands (inside interactive mode)
-/status         # task board
-/scores         # reputation scores
-/config         # current agent team
-/doctor         # health check
-/clear          # clear task history
-/help           # all commands
-
-# On-chain
-python main.py chain status             # ERC-8004 identity status
-python main.py chain init <agent>       # register agent on-chain
-python main.py chain balance            # USDC balances
-
-# Evolution
-python main.py evolve <agent> confirm   # approve model swap (Path B)
-```
-
----
-
-## API Endpoints
-
-The gateway runs on port **19789** (configurable via `SWARM_GATEWAY_PORT`).
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/` | Web dashboard |
-| `POST` | `/v1/task` | Submit a task |
-| `GET` | `/v1/task/:id` | Get task status |
-| `GET` | `/v1/status` | Full task board |
-| `GET` | `/v1/scores` | Reputation scores |
-| `GET` | `/v1/agents` | Team info |
-| `GET` | `/v1/heartbeat` | Agent liveness |
-| `GET` | `/v1/usage` | Token usage stats |
-| `GET` | `/v1/usage/recent` | Recent API calls |
-| `GET` | `/v1/doctor` | Health check |
-| `GET` | `/v1/skills` | List skills |
-| `PUT` | `/v1/skills/:name` | Create/update skill |
-| `GET` | `/v1/logs/:agent_id` | Agent logs |
-| `POST` | `/v1/search` | Brave web search |
-| `POST` | `/v1/chain/init` | Init agent on-chain |
-| `GET` | `/v1/chain/status` | Chain status |
-
-Auth: `Authorization: Bearer <SWARM_GATEWAY_TOKEN>`
-
----
-
-## Project Structure
+### Project Structure
 
 ```
 swarm-dev/
-├── main.py                     # CLI entry point (interactive + one-shot)
-├── swarm                       # Alternative CLI entry point
-├── config/
-│   ├── agents.yaml             # Team definition (roles, models, skills)
-│   └── chain_contracts.json    # ERC-8004 contract addresses
+├── main.py                     # CLI entry point
+├── config/agents.yaml          # Team definition
 ├── core/
-│   ├── orchestrator.py         # Process launcher — spawns N agents
-│   ├── agent.py                # BaseAgent — task execution loop
+│   ├── orchestrator.py         # Process launcher
+│   ├── agent.py                # Task execution loop
 │   ├── task_board.py           # File-locked task lifecycle
-│   ├── context_bus.py          # Shared KV store
-│   ├── gateway.py              # HTTP API server
-│   ├── dashboard.html          # Web dashboard (single-file)
-│   ├── skill_loader.py         # Hot-reload markdown skills
+│   ├── gateway.py              # HTTP API + dashboard
 │   ├── workflow.py             # Declarative workflow engine
-│   ├── heartbeat.py            # Agent liveness detection
-│   ├── compaction.py           # Context window compression
-│   ├── usage_tracker.py        # Token usage & cost tracking
-│   ├── onboard.py              # Interactive setup wizard
-│   ├── doctor.py               # System health checks
-│   └── ...
+│   ├── onboard.py              # Setup wizard
+│   └── doctor.py               # Health checks
 ├── adapters/
-│   ├── llm/                    # FLock · OpenAI · Ollama · Resilience
+│   ├── llm/                    # FLock · OpenAI · Ollama
 │   ├── memory/                 # Hybrid · ChromaDB · Episodic · KB
-│   └── chain/                  # ERC-8004 · Lit PKP · Gnosis · X.402
-├── reputation/
-│   ├── scorer.py               # 5-dimension EMA scoring
-│   ├── peer_review.py          # Weighted aggregation + anti-gaming
-│   ├── evolution.py            # Evolution Engine (Path A/B/C)
-│   └── scheduler.py            # Event hooks & reputation updates
-├── skills/                     # Markdown skill documents (hot-reload)
-│   ├── _base.md                # Core operating principles
-│   ├── planning.md             # Planner role skills
-│   ├── coding.md               # Executor role skills
-│   ├── review.md               # Reviewer role skills
-│   └── agent_overrides/        # Per-agent evolved skills
-├── workflows/                  # YAML workflow definitions
-│   ├── code_review.yaml
-│   └── research_report.yaml
-├── scripts/                    # Deployment utilities
-│   ├── deploy_erc8004.py       # Deploy ERC-8004 contracts
-│   └── mint_naga_pkp.py        # Mint Lit Protocol PKP
-├── docs/                       # Per-agent cognition profiles
-│   ├── _shared/                # Team reference documents
-│   ├── planner/cognition.md
-│   ├── executor/cognition.md
-│   └── reviewer/cognition.md
-└── TECHNICAL_SPEC.md           # Full architecture specification
+│   └── chain/                  # ERC-8004 · Lit PKP · Gnosis
+├── reputation/                 # Scoring + evolution engine
+├── skills/                     # Hot-reload markdown skills
+├── workflows/                  # YAML workflow templates
+└── docs/                       # Per-agent cognition profiles
 ```
 
-**Runtime directories** (auto-created, gitignored):
-```
-memory/                         # Reputation cache, episodic memory, KB
-.task_board.json                # Active task state
-.context_bus.json               # Shared KV store
-.heartbeats/                    # Agent liveness files
-.mailboxes/                     # P2P message inboxes
-.logs/                          # Agent process logs
-```
-
----
-
-## Workflows
-
-Define multi-step pipelines in YAML:
-
-```yaml
-# workflows/code_review.yaml
-name: Code Review Pipeline
-steps:
-  - id: plan
-    role: plan
-    description: "Analyze requirements and create implementation plan"
-  - id: implement
-    role: implement
-    description: "Implement based on {{plan.result}}"
-    depends_on: [plan]
-  - id: review
-    role: review
-    description: "Review implementation from {{implement.result}}"
-    depends_on: [implement]
-```
-
-Features: dependency graphs, variable interpolation, approval gates, fan-out/fan-in.
-
----
-
-## On-Chain Integration
-
-Optional ERC-8004 reputation on Base Sepolia:
-
-```bash
-# Deploy contracts
-python scripts/deploy_erc8004.py
-
-# Register agents
-python main.py chain init planner
-python main.py chain init executor
-python main.py chain init reviewer
-
-# Check status
-python main.py chain status
-python main.py chain balance
-```
-
-Each agent gets an on-chain identity. Reputation scores sync periodically (max 10 writes/hour, min 5-point delta).
-
-**Stack:** ERC-8004 Identity Registry · Lit Protocol PKP · Gnosis Safe Multi-sig · X.402 Payment Protocol
+</details>
 
 ---
 
 ## Requirements
 
 - Python 3.10+
-- At least one LLM API key (FLock, OpenAI, or local Ollama)
+- One LLM API key (FLock, OpenAI, or local Ollama)
 
-**Core dependencies:** `httpx`, `pyyaml`, `filelock`, `rich`, `questionary`
-
-**Optional:** `chromadb` (vector memory), `web3` + `eth-account` (on-chain features)
+**Core deps:** `httpx` `pyyaml` `filelock` `rich` `questionary`
+**Optional:** `chromadb` (vector memory) · `web3` (on-chain features)
 
 ---
 

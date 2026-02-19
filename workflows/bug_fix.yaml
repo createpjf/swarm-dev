@@ -1,0 +1,50 @@
+# workflows/bug_fix.yaml
+# Bug triage, diagnosis, fix, and verification pipeline
+
+name: Bug Fix Pipeline
+description: Diagnose a bug, implement a fix, and verify the solution
+
+steps:
+  - id: diagnose
+    agent: planner
+    prompt: |
+      Analyze this bug report and identify the likely root cause:
+
+      {{task}}
+
+      Return:
+      1. Suspected root cause
+      2. Affected files/components
+      3. Reproduction steps
+      4. Proposed fix approach
+
+  - id: fix
+    agent: executor
+    prompt: |
+      Implement a fix based on this diagnosis:
+
+      ## Diagnosis
+      {{diagnose.result}}
+
+      Write the minimal code change that fixes the root cause.
+      Include clear reasoning for each change.
+    depends_on: [diagnose]
+
+  - id: verify
+    agent: reviewer
+    prompt: |
+      Verify this bug fix for correctness and completeness:
+
+      ## Bug Diagnosis
+      {{diagnose.result}}
+
+      ## Fix Implementation
+      {{fix.result}}
+
+      Check:
+      - Does the fix address the root cause (not just symptoms)?
+      - Are there edge cases or regressions?
+      - Is the change minimal and focused?
+
+      Return JSON: {"score": int, "comment": str}
+    depends_on: [fix]

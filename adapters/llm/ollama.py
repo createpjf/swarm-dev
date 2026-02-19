@@ -31,3 +31,30 @@ class OllamaAdapter:
             resp.raise_for_status()
             data = resp.json()
             return data["message"]["content"]
+
+    async def chat_stream(self, messages: list[dict], model: str):
+        """Yield content chunks from Ollama streaming response."""
+        import httpx
+
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            async with client.stream(
+                "POST",
+                f"{self.base_url}/api/chat",
+                json={
+                    "model": model,
+                    "messages": messages,
+                    "stream": True,
+                },
+            ) as resp:
+                resp.raise_for_status()
+                import json as _json
+                async for line in resp.aiter_lines():
+                    if not line.strip():
+                        continue
+                    try:
+                        chunk = _json.loads(line)
+                        content = chunk.get("message", {}).get("content", "")
+                        if content:
+                            yield content
+                    except _json.JSONDecodeError:
+                        continue

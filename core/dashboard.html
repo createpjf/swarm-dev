@@ -149,6 +149,8 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .skill-tag{display:inline-block;background:var(--bg3);color:var(--fg2);padding:2px 8px;border-radius:4px;font-size:11px}
 .agent-card-chain{font-size:11px;color:var(--fg2)}
 .agent-card-chain a{font-family:var(--mono);color:var(--accent2);text-decoration:none;font-size:11px}
+.sparkline-wrap{height:28px;width:100%;margin-top:2px}
+.sparkline-wrap svg{width:100%;height:100%}
 .key-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
 .key-dot.set{background:var(--green)}
 .key-dot.unset{background:var(--red)}
@@ -271,6 +273,26 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .ov-agent-chip.active .chip-dot{background:var(--cyan);animation:livePulse 1.2s infinite}
 .ov-agent-chip.active.executor .chip-dot{background:var(--green)}
 .ov-agent-chip.active.reviewer .chip-dot{background:var(--magenta)}
+
+/* ── Subtask Tree ─────────────────────────────────────────── */
+.subtask-tree{flex-shrink:0;padding:0 4px;margin-bottom:8px;display:none}
+.subtask-tree.has-tree{display:block}
+.st-toggle{font-size:10px;color:var(--fg3);cursor:pointer;padding:4px 8px;user-select:none}
+.st-toggle:hover{color:var(--fg2)}
+.st-container{display:flex;flex-wrap:wrap;gap:6px;padding:6px 0}
+.st-node{display:flex;align-items:center;gap:5px;padding:4px 10px;border-radius:6px;font-size:10px;border:1px solid var(--bg4);background:var(--bg3);max-width:220px;overflow:hidden}
+.st-node .st-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.st-node .st-dot.pending{background:var(--fg3)}
+.st-node .st-dot.claimed{background:var(--yellow);animation:livePulse 1.2s infinite}
+.st-node .st-dot.review{background:var(--magenta)}
+.st-node .st-dot.completed{background:var(--green)}
+.st-node .st-dot.failed{background:var(--red)}
+.st-node .st-dot.critique{background:var(--yellow)}
+.st-node .st-desc{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg2)}
+.st-node .st-agent{font-weight:600;color:var(--fg3);flex-shrink:0;font-size:9px}
+.st-edge{color:var(--fg3);font-size:10px;align-self:center}
+.st-group{display:flex;flex-direction:column;gap:4px;padding:4px 0 4px 16px;border-left:1.5px solid var(--bg4)}
+.st-parent-label{font-size:10px;font-weight:600;color:var(--fg3);padding:2px 6px}
 
 .ov-bottom{display:flex;flex-direction:column;flex:1;min-height:200px;overflow:hidden}
 
@@ -562,6 +584,9 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
     <div id="wfConn1"></div><div id="wfConn2"></div><div id="wfStats"></div>
     <div id="wfPacket1"></div><div id="wfPacket2"></div>
   </div>
+
+  <!-- ═══ SUBTASK TREE (shows when planner decomposes a task) ═══ -->
+  <div class="subtask-tree" id="subtaskTree"></div>
 
   <!-- ═══ CHATBOX (takes most of the space) ═══ -->
   <div class="ov-bottom">
@@ -1637,6 +1662,7 @@ async function pollChatUpdates() {
 
   diffAndRoute(chatPrevSnapshot, tasks);
   updateWorkflow(tasks);
+  renderSubtaskTree(tasks);
   chatPrevSnapshot = JSON.parse(JSON.stringify(tasks));
 
   if (dispatchEntries.length > prevDispLen) renderDispatch();
@@ -1668,6 +1694,125 @@ function renderLiveStatus() {
 }
 
 // ══════════════════════════════════════════════════════════════════
+//  STREAMING — live partial results in ChatBox
+// ══════════════════════════════════════════════════════════════════
+
+function updateStreamingBubble(taskId, agent, partial) {
+  const container = document.getElementById('chatMessages');
+  if (!container) return;
+  let bubble = document.getElementById('stream-' + taskId);
+  if (!bubble) {
+    // Remove welcome message if present
+    const welcome = container.querySelector('.chat-welcome');
+    if (welcome) welcome.remove();
+    // Create streaming bubble
+    const meta = agentMeta(agent);
+    const wrapper = document.createElement('div');
+    wrapper.className = 'chat-msg assistant';
+    wrapper.id = 'stream-' + taskId;
+    wrapper.innerHTML = '<div class="chat-avatar" style="background:' + meta.color + '">' + meta.icon + '</div>'
+      + '<div class="chat-bubble assistant-bubble ' + meta.cls + '-bubble">'
+      + '<div class="asst-header"><span class="asst-label">' + escHtml(agent) + '</span>'
+      + '<span class="stream-indicator" style="color:var(--accent)">streaming…</span></div>'
+      + '<div class="asst-body stream-body"></div></div>';
+    container.appendChild(wrapper);
+  }
+  bubble = document.getElementById('stream-' + taskId);
+  if (bubble) {
+    const body = bubble.querySelector('.stream-body');
+    if (body) {
+      body.textContent = partial;
+      container.scrollTop = container.scrollHeight;
+    }
+  }
+}
+
+function removeStreamingBubble(taskId) {
+  const el = document.getElementById('stream-' + taskId);
+  if (el) el.remove();
+}
+
+function updateCostBadge(taskId, costUsd) {
+  // Find the completed message bubble for this task and add cost
+  const msgs = document.querySelectorAll('[data-task-id="' + taskId + '"]');
+  for (const msg of msgs) {
+    if (msg.querySelector('.cost-badge')) continue;
+    const tokens = msg.querySelector('.asst-tokens') || msg.querySelector('.chat-tokens');
+    if (tokens) {
+      const badge = document.createElement('span');
+      badge.className = 'cost-badge';
+      badge.style.cssText = 'margin-left:8px;color:var(--green);font-weight:600';
+      badge.textContent = '~$' + costUsd.toFixed(4);
+      tokens.appendChild(badge);
+    }
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  SUBTASK TREE — visual decomposition of planner subtasks
+// ══════════════════════════════════════════════════════════════════
+
+function renderSubtaskTree(tasks) {
+  const container = document.getElementById('subtaskTree');
+  if (!container) return;
+
+  // Find tasks that have children (parent tasks)
+  const childrenOf = {};  // parentId -> [{id, task}]
+  for (const [tid, t] of Object.entries(tasks)) {
+    const pid = t.parent_id;
+    if (pid) {
+      if (!childrenOf[pid]) childrenOf[pid] = [];
+      childrenOf[pid].push({ id: tid, ...t });
+    }
+  }
+
+  // No subtask trees? Hide
+  const parentIds = Object.keys(childrenOf);
+  if (parentIds.length === 0) {
+    container.classList.remove('has-tree');
+    container.innerHTML = '';
+    return;
+  }
+
+  container.classList.add('has-tree');
+
+  // Build HTML for each parent group
+  let html = '';
+  for (const pid of parentIds) {
+    const parent = tasks[pid];
+    const parentDesc = parent ? (parent.description || '').substring(0, 50) : pid.substring(0, 8);
+    const children = childrenOf[pid];
+
+    // Count statuses
+    const counts = { completed: 0, claimed: 0, review: 0, failed: 0 };
+    for (const c of children) {
+      const s = c.status || 'pending';
+      if (counts[s] !== undefined) counts[s]++;
+    }
+    const total = children.length;
+    const done = counts.completed;
+    const progress = total > 0 ? Math.round((done / total) * 100) : 0;
+
+    html += '<div class="st-parent-label">📋 ' + escHtml(parentDesc) + ' — '
+      + done + '/' + total + ' (' + progress + '%)</div>';
+    html += '<div class="st-group">';
+    for (const child of children) {
+      const st = child.status || 'pending';
+      const desc = (child.description || '').substring(0, 40);
+      const agent = child.agent_id || '';
+      html += '<div class="st-node">'
+        + '<span class="st-dot ' + st + '"></span>'
+        + '<span class="st-desc" title="' + escHtml(child.description || '') + '">' + escHtml(desc) + '</span>'
+        + (agent ? '<span class="st-agent">' + escHtml(agent) + '</span>' : '')
+        + '</div>';
+    }
+    html += '</div>';
+  }
+
+  container.innerHTML = html;
+}
+
+// ══════════════════════════════════════════════════════════════════
 //  DIFF & ROUTE — agent activity → top, final results → bottom
 // ══════════════════════════════════════════════════════════════════
 
@@ -1677,7 +1822,22 @@ function diffAndRoute(prev, current) {
     const oldStatus = old ? old.status : null;
     const newStatus = task.status;
 
+    // Streaming: update partial result bubble even when status unchanged
+    if (task.partial_result && (newStatus === 'claimed' || newStatus === 'review')) {
+      updateStreamingBubble(taskId, task.agent_id || 'system', task.partial_result);
+    }
+
+    // Show cost on completed tasks
+    if (task.cost_usd != null && newStatus === 'completed') {
+      updateCostBadge(taskId, task.cost_usd);
+    }
+
     if (oldStatus === newStatus && old) continue;
+
+    // Remove streaming bubble when task completes
+    if (newStatus === 'completed' || newStatus === 'failed') {
+      removeStreamingBubble(taskId);
+    }
 
     if (!chatTaskMap[taskId]) chatTaskMap[taskId] = new Set();
     const seen = chatTaskMap[taskId];
@@ -1949,15 +2109,41 @@ async function submitTask() { await chatSubmit(); }
 //  AGENTS — View + Edit
 // ══════════════════════════════════════════════════════════════════
 
+function buildSparkline(history) {
+  if (!history || history.length < 2) return '';
+  const values = history.map(h => h.composite || 0);
+  const min = Math.min(...values) - 2;
+  const max = Math.max(...values) + 2;
+  const range = max - min || 1;
+  const w = 120;
+  const h = 24;
+  const step = w / (values.length - 1);
+
+  const points = values.map((v, i) =>
+    (i * step).toFixed(1) + ',' + (h - ((v - min) / range) * h).toFixed(1)
+  ).join(' ');
+
+  // Color based on trend: compare last vs first
+  const trend = values[values.length - 1] - values[0];
+  const color = trend >= 0 ? 'var(--green)' : 'var(--red)';
+
+  return '<div class="sparkline-wrap">'
+    + '<svg viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none">'
+    + '<polyline fill="none" stroke="' + color + '" stroke-width="1.5" '
+    + 'stroke-linecap="round" stroke-linejoin="round" points="' + points + '"/>'
+    + '</svg></div>';
+}
+
 async function loadAgents() {
-  const [agentData, scoreData, skillsResp, chainData] = await Promise.all([
-    api('/v1/agents'), api('/v1/scores'), api('/v1/skills'), api('/v1/chain/status')
+  const [agentData, scoreData, skillsResp, chainData, historyData] = await Promise.all([
+    api('/v1/agents'), api('/v1/scores'), api('/v1/skills'), api('/v1/chain/status'), api('/v1/scores/history')
   ]);
   const grid = document.getElementById('agentGrid');
   const agents = agentData?.agents || [];
   const scores = scoreData?.scores || {};
   const allSkills = skillsResp?.shared || [];
   const chainAgents = chainData?.agents || {};
+  const scoreHistory = historyData?.agents || {};
 
   if (!agents.length) { grid.innerHTML = '<div class="empty">No agents configured</div>'; return; }
 
@@ -2015,6 +2201,12 @@ async function loadAgents() {
         + '<div class="score-bar"><div class="score-fill" style="width:'+composite+'%;background:'+scoreColor(composite)+'"></div></div>'
         + '<div class="score-num" style="color:'+scoreColor(composite)+'">' + composite.toFixed(1) + '</div>'
         + '</div>';
+    }
+
+    // Row 6: Reputation sparkline (if history exists)
+    const agentHistory = scoreHistory[a.id] || [];
+    if (agentHistory.length >= 2) {
+      html += buildSparkline(agentHistory);
     }
 
     html += '</div>'; // .agent-card

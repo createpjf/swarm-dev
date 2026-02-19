@@ -153,6 +153,42 @@ _STRINGS = {
     "update.branch":      {"en": "Current branch: {branch}", "zh": "当前分支：{branch}"},
     "update.version":     {"en": "Version: {version}",       "zh": "版本：{version}"},
 
+    # ── Onboarding ──────────────────────────────────────────────────────
+    "onboard.first_run_hint": {
+        "en": "[dim]First time? Starting setup wizard…[/dim]",
+        "zh": "[dim]首次使用，进入配置向导…[/dim]",
+    },
+
+    # ── Preflight ────────────────────────────────────────────────────────
+    "preflight.api_key_empty": {
+        "en": "No API key configured — edit .env or run: swarm onboard",
+        "zh": "未配置 API Key — 编辑 .env 或运行: swarm onboard",
+    },
+    "preflight.llm_unreachable": {
+        "en": "Cannot reach LLM at {url} — check network or Base URL",
+        "zh": "无法连接 LLM {url} — 检查网络或 Base URL 配置",
+    },
+    "preflight.port_in_use": {
+        "en": "Port {port} is already in use — change SWARM_GATEWAY_PORT or stop the other process",
+        "zh": "端口 {port} 已被占用 — 修改 SWARM_GATEWAY_PORT 或停止其他进程",
+    },
+    "error.suggest_doctor": {
+        "en": "Run [bold]swarm doctor[/bold] for full diagnostics",
+        "zh": "运行 [bold]swarm doctor[/bold] 查看完整诊断",
+    },
+    "error.connect_failed": {
+        "en": "Cannot connect to {url} — check network or Base URL config",
+        "zh": "无法连接 {url} — 检查网络或 Base URL 配置",
+    },
+    "preflight.title": {
+        "en": "Preflight Check",
+        "zh": "启动预检",
+    },
+    "preflight.issues_found": {
+        "en": "Issues found — continue anyway?",
+        "zh": "发现问题 — 是否继续？",
+    },
+
     # ── Help panel ───────────────────────────────────────────────────────
     "help.status":        {"en": "task board",               "zh": "任务面板"},
     "help.scores":        {"en": "reputation scores",        "zh": "信誉评分"},
@@ -163,7 +199,7 @@ _STRINGS = {
     "help.config":        {"en": "show agent config",        "zh": "查看代理配置"},
     "help.config_hist":   {"en": "config backup history",    "zh": "配置备份历史"},
     "help.config_roll":   {"en": "restore previous config",  "zh": "恢复历史配置"},
-    "help.configure":     {"en": "re-run setup wizard",      "zh": "重新配置"},
+    "help.configure":     {"en": "re-run onboarding wizard", "zh": "重新运行配置向导"},
     "help.gateway":       {"en": "gateway status & control", "zh": "网关状态与控制"},
     "help.chain":         {"en": "on-chain status",          "zh": "链上状态"},
     "help.doctor":        {"en": "system health check",      "zh": "系统健康检查"},
