@@ -472,6 +472,27 @@ class _Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
+            # Agent files (soul.md, skills, etc.)
+            agent_files = []
+            try:
+                agent_dir = os.path.join("skills", "agents", a["id"])
+                if os.path.isdir(agent_dir):
+                    for fn in sorted(os.listdir(agent_dir)):
+                        if fn.endswith(".md"):
+                            fp = os.path.join(agent_dir, fn)
+                            st = os.stat(fp)
+                            agent_files.append({
+                                "name": fn,
+                                "path": fp,
+                                "size": st.st_size,
+                                "mtime": st.st_mtime,
+                            })
+            except Exception:
+                pass
+
+            # Agent tools config
+            tools_cfg = a.get("tools", {})
+
             agents.append({
                 "id": a["id"],
                 "model": a.get("model", "?"),
@@ -487,6 +508,8 @@ class _Handler(BaseHTTPRequestHandler):
                 "autonomy_level": a.get("autonomy_level", 1),
                 "current_task": current_task,
                 "recent_logs": recent_logs,
+                "files": agent_files,
+                "tools": tools_cfg,
             })
         self._json_response(200, {"agents": agents, "global_key_env": global_key_env, "global_url_env": global_url_env})
 
@@ -557,7 +580,17 @@ class _Handler(BaseHTTPRequestHandler):
         from core.task_board import TaskBoard
 
         board = TaskBoard()
-        board.clear()
+
+        # Archive completed tasks for cross-round context before clearing
+        try:
+            from core.task_history import save_round
+            old_data = board._read()
+            if old_data:
+                save_round(old_data)
+        except Exception as e:
+            logger.warning("Failed to archive task history: %s", e)
+
+        board.clear(force=True)
         # Clean old state
         for fp in [".context_bus.json"]:
             if os.path.exists(fp):

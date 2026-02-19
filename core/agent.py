@@ -198,6 +198,22 @@ class BaseAgent:
                 logger.warning("[%s] tools prompt build failed: %s",
                                self.cfg.agent_id, e)
 
+        # 5c. Recent task history (cross-round context)
+        history_section = ""
+        try:
+            from core.task_history import load_recent
+            history_text = load_recent(n=3)
+            if history_text:
+                history_section = (
+                    f"\n\n## Recent Task History\n"
+                    f"Below are results from previous task rounds. "
+                    f"Use this context to maintain continuity.\n\n"
+                    f"{history_text}"
+                )
+        except Exception as e:
+            logger.debug("[%s] task history load skipped: %s",
+                         self.cfg.agent_id, e)
+
         system_prompt = (
             f"You are {self.cfg.agent_id}.\n\n"
             f"## Role\n{self.cfg.role}"
@@ -205,7 +221,8 @@ class BaseAgent:
             f"## Skills\n{skills_text}"
             f"{tools_section}"
             f"{docs_section}"
-            f"{memory_block}\n\n"
+            f"{memory_block}"
+            f"{history_section}\n\n"
             f"## Shared Context\n{context_snap}\n"
         )
 

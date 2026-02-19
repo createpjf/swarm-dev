@@ -420,6 +420,11 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .chat-bubble.assistant-bubble{background:var(--bg2);border:1px solid var(--bg3);border-radius:10px;border-bottom-left-radius:3px;padding:12px 16px;font-size:13px;line-height:1.7}
 .chat-bubble.assistant-bubble .asst-header{display:flex;align-items:center;gap:6px;margin-bottom:8px;font-size:11px;color:var(--fg3)}
 .chat-bubble.assistant-bubble .asst-header .asst-label{font-weight:700;color:var(--accent2)}
+.stream-body{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;font-family:var(--mono);font-size:12px;color:var(--fg2);min-height:18px}
+.stream-meta{font-size:11px;color:var(--fg3);margin-top:4px;display:flex;align-items:center;gap:8px}
+.stream-meta .char-count{opacity:.7}
+.stream-meta .expand-btn{cursor:pointer;color:var(--accent);text-decoration:underline;font-size:11px}
+.stream-meta .expand-btn:hover{color:var(--accent2)}
 .chat-bubble.assistant-bubble .asst-body{word-break:break-word}
 .chat-bubble.assistant-bubble .asst-body p{margin:2px 0}
 .chat-bubble.assistant-bubble .asst-body h1,.chat-bubble.assistant-bubble .asst-body h2,.chat-bubble.assistant-bubble .asst-body h3{color:var(--fg);margin:10px 0 4px;font-size:14px;font-weight:700}
@@ -583,6 +588,9 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
     </div>
     <div class="nav-item" data-panel="memory" onclick="switchPanel('memory')">
       <span class="icon">🧠</span><span>Memory</span>
+    </div>
+    <div class="nav-item" data-panel="cron" onclick="switchPanel('cron')">
+      <span class="icon">⏰</span><span>Cron Jobs</span>
     </div>
   </div>
 
@@ -871,6 +879,30 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
   </div>
 </div>
 
+<!-- ═══════════════ Cron Jobs Panel ═══════════════ -->
+<div class="panel" id="panel-cron">
+  <div class="page-header">
+    <div class="page-title">⏰ Cron Jobs</div>
+    <div class="page-actions"><button class="btn" onclick="showNewCronModal()">+ New Job</button> <button class="btn" onclick="loadCron()">Refresh</button></div>
+  </div>
+
+  <div class="stat-grid" id="cronStats" style="margin-bottom:18px">
+    <div class="stat-card"><div class="stat-value" id="cronTotal">—</div><div class="stat-label">Total Jobs</div></div>
+    <div class="stat-card"><div class="stat-value" id="cronActive">—</div><div class="stat-label">Active</div></div>
+    <div class="stat-card"><div class="stat-value" id="cronRuns">—</div><div class="stat-label">Total Runs</div></div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Scheduled Jobs</div>
+    <table class="data-table">
+      <thead><tr>
+        <th>Name</th><th>Action</th><th>Schedule</th><th>Last Run</th><th>Runs</th><th>Enabled</th><th>Actions</th>
+      </tr></thead>
+      <tbody id="cronJobsBody"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
 </main>
 </div><!-- .app -->
 
@@ -1079,6 +1111,7 @@ function switchPanel(name) {
   if (name === 'logs') initLogs();
   if (name === 'chain') loadChain();
   if (name === 'memory') loadMemory();
+  if (name === 'cron') loadCron();
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -1763,9 +1796,16 @@ function renderLiveStatus() {
 //  STREAMING — live partial results in ChatBox
 // ══════════════════════════════════════════════════════════════════
 
+// Store full streaming content for expand modal
+const _streamingFullText = {};
+
 function updateStreamingBubble(taskId, agent, partial) {
   const container = document.getElementById('chatMessages');
   if (!container) return;
+
+  // Store full text for expand
+  _streamingFullText[taskId] = partial;
+
   let bubble = document.getElementById('stream-' + taskId);
   if (!bubble) {
     // Remove welcome message if present
@@ -1780,22 +1820,69 @@ function updateStreamingBubble(taskId, agent, partial) {
       + '<div class="chat-bubble assistant-bubble ' + meta.cls + '-bubble">'
       + '<div class="asst-header"><span class="asst-label">' + escHtml(agent) + '</span>'
       + '<span class="stream-indicator" style="color:var(--accent)">streaming…</span></div>'
-      + '<div class="asst-body stream-body"></div></div>';
+      + '<div class="stream-body"></div>'
+      + '<div class="stream-meta">'
+      + '<span class="char-count"></span>'
+      + '<span class="expand-btn" onclick="showStreamingDetail(\'' + taskId + '\')">展开查看</span>'
+      + '</div></div>';
     container.appendChild(wrapper);
   }
   bubble = document.getElementById('stream-' + taskId);
   if (bubble) {
     const body = bubble.querySelector('.stream-body');
+    const charCount = bubble.querySelector('.char-count');
     if (body) {
-      body.textContent = partial;
-      container.scrollTop = container.scrollHeight;
+      // Show only the last non-empty line + ellipsis
+      const lastLine = partial.split('\n').filter(Boolean).pop() || '';
+      body.textContent = lastLine.slice(0, 80) + (partial.length > 80 ? '…' : '');
     }
+    if (charCount) {
+      charCount.textContent = partial.length + ' chars';
+    }
+    container.scrollTop = container.scrollHeight;
   }
 }
 
 function removeStreamingBubble(taskId) {
   const el = document.getElementById('stream-' + taskId);
   if (el) el.remove();
+  delete _streamingFullText[taskId];
+}
+
+// ── Streaming Detail Modal ──
+let _streamDetailInterval = null;
+
+function showStreamingDetail(taskId) {
+  // Close any existing
+  closeStreamingDetail();
+  const full = _streamingFullText[taskId] || '(no content yet)';
+  const overlay = document.createElement('div');
+  overlay.className = 'agent-modal-overlay';
+  overlay.id = 'streamDetailOverlay';
+  overlay.onclick = function(e) { if (e.target === overlay) closeStreamingDetail(); };
+  overlay.innerHTML = '<div class="agent-modal" style="width:700px;max-height:80vh" onclick="event.stopPropagation()">'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--bg4)">'
+    + '<h3 style="margin:0;font-size:15px;color:var(--fg)">📡 Streaming Detail — ' + escHtml(taskId).slice(0, 8) + '…</h3>'
+    + '<button onclick="closeStreamingDetail()" style="background:none;border:none;color:var(--fg3);cursor:pointer;font-size:18px">&times;</button>'
+    + '</div>'
+    + '<div id="streamDetailBody" class="asst-body" style="padding:16px 20px;overflow-y:auto;max-height:calc(80vh - 60px)"></div>'
+    + '</div>';
+  document.body.appendChild(overlay);
+  const body = document.getElementById('streamDetailBody');
+  if (body) body.innerHTML = renderMarkdown(full);
+  // Auto-refresh every 2s
+  _streamDetailInterval = setInterval(function() {
+    const latest = _streamingFullText[taskId];
+    if (!latest) { closeStreamingDetail(); return; }
+    const bd = document.getElementById('streamDetailBody');
+    if (bd) bd.innerHTML = renderMarkdown(latest);
+  }, 2000);
+}
+
+function closeStreamingDetail() {
+  if (_streamDetailInterval) { clearInterval(_streamDetailInterval); _streamDetailInterval = null; }
+  const ov = document.getElementById('streamDetailOverlay');
+  if (ov) ov.remove();
 }
 
 function updateCostBadge(taskId, costUsd) {
@@ -2303,6 +2390,8 @@ async function loadAgents() {
       mhtml += '<div class="modal-tabs">';
       mhtml += '<button class="modal-tab' + (activeTab==='overview'?' active':'') + '" onclick="switchAgentTab(\'overview\')">Overview</button>';
       mhtml += '<button class="modal-tab' + (activeTab==='edit'?' active':'') + '" onclick="switchAgentTab(\'edit\')">Edit</button>';
+      mhtml += '<button class="modal-tab' + (activeTab==='files'?' active':'') + '" onclick="switchAgentTab(\'files\');loadAgentFiles(\'' + escHtml(a.id) + '\')">Files</button>';
+      mhtml += '<button class="modal-tab' + (activeTab==='tools'?' active':'') + '" onclick="switchAgentTab(\'tools\');loadAgentTools(\'' + escHtml(a.id) + '\')">Tools</button>';
       mhtml += '</div>';
 
       // ═══ OVERVIEW TAB ═══
@@ -2408,6 +2497,16 @@ async function loadAgents() {
       mhtml += '</div>'; // .agent-editor
       mhtml += '</div>'; // edit tab
 
+      // ═══ FILES TAB ═══
+      mhtml += '<div class="modal-tab-content' + (activeTab==='files'?' active':'') + '" data-tab="files">';
+      mhtml += '<div id="agentFilesContent" style="min-height:200px"><div class="empty" style="padding:16px">Click to load files…</div></div>';
+      mhtml += '</div>'; // files tab
+
+      // ═══ TOOLS TAB ═══
+      mhtml += '<div class="modal-tab-content' + (activeTab==='tools'?' active':'') + '" data-tab="tools">';
+      mhtml += '<div id="agentToolsContent" style="min-height:200px"><div class="empty" style="padding:16px">Click to load tools…</div></div>';
+      mhtml += '</div>'; // tools tab
+
       mhtml += '</div>'; // .agent-modal
       mhtml += '</div>'; // .agent-modal-overlay
       modalContainer.innerHTML = mhtml;
@@ -2419,7 +2518,8 @@ async function loadAgents() {
 
 function switchAgentTab(tab) {
   window._agentModalTab = tab;
-  document.querySelectorAll('.modal-tab').forEach(t => t.classList.toggle('active', t.textContent.toLowerCase() === tab));
+  const tabMap = {'overview': 'Overview', 'edit': 'Edit', 'files': 'Files', 'tools': 'Tools'};
+  document.querySelectorAll('.modal-tab').forEach(t => t.classList.toggle('active', t.textContent === tabMap[tab]));
   document.querySelectorAll('.modal-tab-content').forEach(c => c.classList.toggle('active', c.dataset.tab === tab));
 }
 
@@ -3366,6 +3466,196 @@ async function loadMemory() {
   } else {
     insList.innerHTML = '<span class="empty">No cross-agent insights yet. Insights are generated after task completion.</span>';
   }
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  CRON JOBS
+// ══════════════════════════════════════════════════════════════════
+
+async function loadCron() {
+  const data = await api('/v1/cron');
+  const jobs = data?.jobs || [];
+  const tbody = document.getElementById('cronJobsBody');
+  const el = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+
+  el('cronTotal', jobs.length);
+  el('cronActive', jobs.filter(j => j.enabled).length);
+  el('cronRuns', jobs.reduce((s, j) => s + (j.run_count || 0), 0));
+
+  if (!jobs.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">No cron jobs configured. Click "+ New Job" to create one.</td></tr>';
+    return;
+  }
+  let html = '';
+  jobs.forEach(j => {
+    const lastRun = j.last_run ? new Date(j.last_run * 1000).toLocaleString() : '—';
+    html += '<tr>'
+      + '<td><strong>' + escHtml(j.name || j.id) + '</strong></td>'
+      + '<td><code>' + escHtml(j.action || '?') + '</code></td>'
+      + '<td><code>' + escHtml(j.schedule || '?') + '</code></td>'
+      + '<td>' + lastRun + '</td>'
+      + '<td>' + (j.run_count || 0) + '</td>'
+      + '<td>' + (j.enabled ? '✅' : '⏸️') + '</td>'
+      + '<td>'
+      + '<button class="btn btn-small" onclick="runCronJob(\'' + j.id + '\')">▶ Run</button> '
+      + '<button class="btn btn-small" onclick="deleteCronJob(\'' + j.id + '\')" style="color:var(--red)">✕</button>'
+      + '</td></tr>';
+  });
+  tbody.innerHTML = html;
+}
+
+async function runCronJob(id) {
+  const res = await api('/v1/cron/' + id + '/run', { method: 'POST' });
+  if (res && !res.error) { toast('Job triggered'); loadCron(); }
+  else toast('Failed: ' + (res?.error || 'unknown'), 'error');
+}
+
+async function deleteCronJob(id) {
+  if (!confirm('Delete this cron job?')) return;
+  const res = await api('/v1/cron/' + id, { method: 'DELETE' });
+  if (res && !res.error) { toast('Job deleted'); loadCron(); }
+  else toast('Failed: ' + (res?.error || 'unknown'), 'error');
+}
+
+function showNewCronModal() {
+  const overlay = document.createElement('div');
+  overlay.className = 'agent-modal-overlay';
+  overlay.id = 'cronModalOverlay';
+  overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = '<div class="agent-modal" style="width:500px" onclick="event.stopPropagation()">'
+    + '<div style="padding:16px 20px;border-bottom:1px solid var(--bg4)"><h3 style="margin:0;font-size:15px">New Cron Job</h3></div>'
+    + '<div style="padding:16px 20px">'
+    + '<label style="display:block;margin-bottom:12px;font-size:13px;color:var(--fg2)">Name<br>'
+    + '<input id="cronName" class="input" style="width:100%;margin-top:4px" placeholder="my-daily-task"></label>'
+    + '<label style="display:block;margin-bottom:12px;font-size:13px;color:var(--fg2)">Action Type<br>'
+    + '<select id="cronAction" class="input" style="width:100%;margin-top:4px"><option value="task">task (submit task)</option><option value="exec">exec (shell command)</option><option value="webhook">webhook (HTTP POST)</option></select></label>'
+    + '<label style="display:block;margin-bottom:12px;font-size:13px;color:var(--fg2)">Payload<br>'
+    + '<textarea id="cronPayload" class="input" style="width:100%;margin-top:4px;height:60px;font-family:var(--mono);font-size:12px" placeholder="task description or command"></textarea></label>'
+    + '<label style="display:block;margin-bottom:12px;font-size:13px;color:var(--fg2)">Schedule Type<br>'
+    + '<select id="cronSchedType" class="input" style="width:100%;margin-top:4px"><option value="interval">interval (e.g. 3600)</option><option value="cron">cron (e.g. 0 */2 * * *)</option><option value="once">once (ISO datetime)</option></select></label>'
+    + '<label style="display:block;margin-bottom:16px;font-size:13px;color:var(--fg2)">Schedule Value<br>'
+    + '<input id="cronSchedVal" class="input" style="width:100%;margin-top:4px" placeholder="3600"></label>'
+    + '<div style="text-align:right"><button class="btn" onclick="document.getElementById(\'cronModalOverlay\').remove()">Cancel</button> '
+    + '<button class="btn btn-accent" onclick="createCronJob()">Create</button></div>'
+    + '</div></div>';
+  document.body.appendChild(overlay);
+}
+
+async function createCronJob() {
+  const name = document.getElementById('cronName').value.trim();
+  const action = document.getElementById('cronAction').value;
+  const payload = document.getElementById('cronPayload').value.trim();
+  const schedType = document.getElementById('cronSchedType').value;
+  const schedVal = document.getElementById('cronSchedVal').value.trim();
+  if (!name || !payload || !schedVal) { toast('Fill all fields', 'error'); return; }
+
+  const body = { name, action, payload, schedule_type: schedType, schedule: schedVal };
+  const res = await api('/v1/cron', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  if (res && !res.error) {
+    toast('Cron job created');
+    document.getElementById('cronModalOverlay').remove();
+    loadCron();
+  } else {
+    toast('Failed: ' + (res?.error || 'unknown'), 'error');
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  AGENT FILES & TOOLS TABS
+// ══════════════════════════════════════════════════════════════════
+
+async function loadAgentFiles(agentId) {
+  const data = await api('/v1/agents');
+  const agents = data?.agents || [];
+  const ag = agents.find(a => a.id === agentId);
+  const files = ag?.files || [];
+
+  const container = document.getElementById('agentFilesContent');
+  if (!container) return;
+  if (!files.length) {
+    container.innerHTML = '<div class="empty" style="padding:16px">No files found for this agent. Create <code>skills/agents/' + escHtml(agentId) + '/soul.md</code> to get started.</div>';
+    return;
+  }
+
+  let html = '<div style="display:flex;flex-direction:column;gap:8px;padding:12px">';
+  files.forEach(f => {
+    const name = f.name || f.path || 'unknown';
+    const size = f.size ? (f.size < 1024 ? f.size + 'B' : (f.size / 1024).toFixed(1) + 'KB') : '?';
+    html += '<div class="card" style="padding:10px 14px;cursor:pointer" onclick="viewAgentFile(\'' + escHtml(agentId) + '\',\'' + escHtml(name) + '\')">'
+      + '<div style="display:flex;align-items:center;justify-content:space-between">'
+      + '<div><strong style="color:var(--fg)">📄 ' + escHtml(name) + '</strong></div>'
+      + '<div style="font-size:11px;color:var(--fg3)">' + size + '</div>'
+      + '</div></div>';
+  });
+  html += '</div>';
+  container.innerHTML = html;
+}
+
+async function viewAgentFile(agentId, fileName) {
+  // API expects name without .md extension
+  const apiName = fileName.endsWith('.md') ? fileName.slice(0, -3) : fileName;
+  const res = await api('/v1/skills/agents/' + agentId + '/' + encodeURIComponent(apiName));
+  const content = res?.content || res?.text || '(empty)';
+  const container = document.getElementById('agentFilesContent');
+  if (!container) return;
+  container.innerHTML = '<div style="padding:12px">'
+    + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">'
+    + '<button class="btn btn-small" onclick="loadAgentFiles(\'' + escHtml(agentId) + '\')">← Back</button>'
+    + '<strong>' + escHtml(fileName) + '</strong>'
+    + '</div>'
+    + '<textarea id="agentFileEditor" class="input" style="width:100%;height:300px;font-family:var(--mono);font-size:12px;background:var(--bg);color:var(--fg);border:1px solid var(--bg4);border-radius:6px;padding:12px">' + escHtml(content) + '</textarea>'
+    + '<div style="text-align:right;margin-top:8px">'
+    + '<button class="btn btn-accent" onclick="saveAgentFile(\'' + escHtml(agentId) + '\',\'' + escHtml(fileName) + '\')">Save</button>'
+    + '</div></div>';
+}
+
+async function saveAgentFile(agentId, fileName) {
+  const editor = document.getElementById('agentFileEditor');
+  if (!editor) return;
+  const apiName = fileName.endsWith('.md') ? fileName.slice(0, -3) : fileName;
+  const res = await api('/v1/skills/agents/' + agentId + '/' + encodeURIComponent(apiName), {
+    method: 'PUT',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ content: editor.value })
+  });
+  if (res && !res.error) toast('File saved');
+  else toast('Save failed: ' + (res?.error || 'unknown'), 'error');
+}
+
+function loadAgentTools(agentId) {
+  // Show agent's tool profile & available tools
+  const container = document.getElementById('agentToolsContent');
+  if (!container) return;
+  api('/v1/agents').then(data => {
+    const agents = data?.agents || [];
+    const ag = agents.find(a => a.id === agentId);
+    if (!ag) { container.innerHTML = '<div class="empty">Agent not found</div>'; return; }
+    const tools = ag.tools || {};
+    const profile = tools.profile || 'minimal';
+    const allow = tools.allow || [];
+    const deny = tools.deny || [];
+
+    let html = '<div style="padding:12px">';
+    html += '<div style="margin-bottom:16px"><strong>Tool Profile:</strong> <code>' + escHtml(profile) + '</code></div>';
+    if (allow.length) html += '<div style="margin-bottom:8px"><strong>Allow:</strong> ' + allow.map(t => '<code style="margin:2px">' + escHtml(t) + '</code>').join(' ') + '</div>';
+    if (deny.length) html += '<div style="margin-bottom:8px"><strong>Deny:</strong> ' + deny.map(t => '<code style="margin:2px;color:var(--red)">' + escHtml(t) + '</code>').join(' ') + '</div>';
+
+    // Show all available tools
+    api('/v1/tools').then(tdata => {
+      const allTools = tdata?.tools || [];
+      html += '<div style="margin-top:16px"><strong>Available Tools (' + allTools.length + '):</strong></div>';
+      html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px;margin-top:8px">';
+      allTools.forEach(t => {
+        const name = t.name || t;
+        const isAllowed = allow.length ? allow.includes(name) : !deny.includes(name);
+        const icon = isAllowed ? '✅' : '❌';
+        html += '<div style="padding:6px 10px;background:var(--bg);border-radius:4px;font-size:12px">'
+          + icon + ' <code>' + escHtml(name) + '</code></div>';
+      });
+      html += '</div></div>';
+      container.innerHTML = html;
+    });
+  });
 }
 
 // ══════════════════════════════════════════════════════════════════

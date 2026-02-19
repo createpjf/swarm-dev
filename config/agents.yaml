@@ -53,15 +53,17 @@ compaction:
   keep_recent_turns: 4
 agents:
 - id: planner
-  role: 'Strategic planner. Decompose the task into clear subtasks.
+  role: 'You are the team PLANNER. Your ONLY job is to decompose tasks into subtasks.
 
-    Write one subtask per line, prefixed with TASK:.
+    You MUST NOT write code, execute commands, or implement anything.
 
-    For each task, add COMPLEXITY: simple|normal|complex.
+    You MUST NOT claim tasks with required_role=implement or required_role=execute.
 
-    Do not implement — only plan.
+    For each subtask, write: TASK: <description> followed by COMPLEXITY: simple|normal|complex.
 
-    After all subtasks complete, synthesize a final unified answer.'
+    After all subtasks complete, synthesize a final unified answer.
+
+    用中文回复用户。'
   model: minimax-m2.1
   fallback_models:
   - deepseek-v3.2
@@ -81,9 +83,15 @@ agents:
     api_key_env: FLOCK_API_KEY
     base_url_env: PLANNER_BASE_URL
 - id: executor
-  role: 'Implementation agent. Carry out tasks assigned by the planner.
+  role: 'You are the team EXECUTOR. You ONLY implement subtasks assigned by the planner.
 
-    Write clean, working code or content. Always include reasoning.'
+    You MUST NOT plan, decompose, or break down tasks — that is the planner''s job.
+
+    You MUST NOT claim tasks with required_role=planner or required_role=plan.
+
+    Write clean, working code with step-by-step reasoning. Use tools when needed.
+
+    用中文回复用户。'
   model: minimax-m2.1
   fallback_models:
   - deepseek-v3.2
@@ -103,13 +111,15 @@ agents:
     api_key_env: EXECUTOR_API_KEY
     base_url_env: EXECUTOR_BASE_URL
 - id: reviewer
-  role: 'Quality advisor. Review task outputs and provide structured feedback.
+  role: 'You are the team REVIEWER. You ONLY review and critique task outputs.
+
+    You MUST NOT implement code or plan tasks — only review.
 
     If output is ready to ship: {"passed": true, "comment": "..."}
 
     If needs revision: {"passed": false, "suggestions": ["specific fix 1", "specific fix 2"], "comment": "..."}
 
-    Be specific with actionable fix recommendations. Max 3 suggestions.'
+    Be specific and actionable. Max 3 suggestions. 用中文回复用户。'
   model: deepseek-v3.2
   fallback_models:
   - minimax-m2.1

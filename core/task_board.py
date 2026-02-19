@@ -56,12 +56,25 @@ BOARD_LOCK = ".task_board.lock"
 
 _ROLE_TO_AGENTS = {
     "planner":    {"planner"},
+    "plan":       {"planner"},
     "implement":  {"executor", "coder", "developer", "builder"},
+    "execute":    {"executor", "coder", "developer", "builder"},
+    "code":       {"executor", "coder", "developer", "builder"},
     "review":     {"reviewer", "auditor"},
+    "critique":   {"reviewer", "auditor"},
 }
 
+# Strict role guard: these roles can ONLY be claimed by their designated agents.
+# Prevents executor from stealing planner tasks or vice versa.
+_STRICT_ROLES = {"planner", "plan", "review", "critique"}
+
+
 def _role_matches(required_role: str, agent_id: str, agent_role: str | None) -> bool:
-    """Check if an agent qualifies for a required_role."""
+    """Check if an agent qualifies for a required_role.
+
+    For strict roles (planner, review), only mapped agents can claim.
+    For other roles, a loose fallback is allowed.
+    """
     req = required_role.lower()
     aid = agent_id.lower()
 
@@ -74,8 +87,11 @@ def _role_matches(required_role: str, agent_id: str, agent_role: str | None) -> 
     if allowed and aid in allowed:
         return True
 
-    # 3. Fallback: agent_id contains the required_role keyword
-    #    (but only the first word of agent_role, not the full description)
+    # 3. For strict roles, NO fallback — only mapped agents qualify
+    if req in _STRICT_ROLES:
+        return False
+
+    # 4. Fallback for non-strict roles: agent_id contains the keyword
     if req in aid:
         return True
 

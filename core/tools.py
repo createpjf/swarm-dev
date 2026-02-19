@@ -346,15 +346,30 @@ def _handle_web_fetch(url: str, max_chars: int = 8000,
     try:
         req = urllib.request.Request(url, headers={
             "User-Agent": "SwarmBot/1.0 (https://github.com/createpjf/swarm-dev)",
+            "Accept-Encoding": "gzip, deflate",
+            "Accept": "text/html,application/xhtml+xml,text/plain,*/*",
         })
         # Follow up to 5 redirects (urllib default), but cap response size
         with urllib.request.urlopen(req, timeout=int(timeout)) as resp:
             content_type = resp.headers.get("Content-Type", "")
+            encoding = resp.headers.get("Content-Encoding", "")
             # Cap at 1MB to prevent memory issues
             raw = resp.read(1_000_000)
             final_url = resp.url  # capture redirect target
 
-        text = raw.decode("utf-8", errors="ignore")
+        # Decompress if gzipped
+        if encoding == "gzip":
+            import gzip
+            raw = gzip.decompress(raw)
+        elif encoding == "deflate":
+            import zlib
+            raw = zlib.decompress(raw)
+
+        # Try to detect charset from content-type
+        charset = "utf-8"
+        if "charset=" in content_type.lower():
+            charset = content_type.lower().split("charset=")[-1].split(";")[0].strip()
+        text = raw.decode(charset, errors="ignore")
 
         if "html" in content_type.lower():
             if extract_mode == "markdown":
