@@ -20,6 +20,9 @@ Usage:
   swarm chain init <agent>     # initialize agent on-chain
   swarm chain balance          # check USDC balances
   swarm chain health           # chain health check
+  swarm install                # install from GitHub
+  swarm uninstall              # remove CLI & daemon
+  swarm update                 # pull latest from GitHub
 
 Chat commands:
   /configure  — re-run full setup wizard
@@ -29,6 +32,9 @@ Chat commands:
   /gateway    — gateway status & control
   /doctor     — system health check
   /clear      — clear task history
+  /install    — install from GitHub
+  /uninstall  — remove CLI & daemon
+  /update     — update from GitHub
   /help       — show commands
   exit        — quit
 """
@@ -174,6 +180,9 @@ def interactive_main():
                 ("/chain",           _t("help.chain")),
                 ("/doctor",          _t("help.doctor")),
                 ("/clear",           _t("help.clear")),
+                ("/install",         _t("help.install")),
+                ("/uninstall",       _t("help.uninstall")),
+                ("/update",          _t("help.update")),
                 ("exit",             _t("help.exit")),
             ]
             for c, d in _cmds:
@@ -447,6 +456,18 @@ def interactive_main():
             action = parts[1] if len(parts) > 1 else "status"
             aid = parts[2] if len(parts) > 2 else None
             cmd_chain(action, aid, console)
+            continue
+
+        if cmd == "install":
+            cmd_install(console=console)
+            continue
+
+        if cmd == "uninstall":
+            cmd_uninstall(console=console)
+            continue
+
+        if cmd == "update":
+            cmd_update(console=console)
             continue
 
         if cmd in ("setup", "configure") or _lower in ("configure", "swarm configure"):
@@ -1273,6 +1294,334 @@ def cmd_evolve_confirm(agent_id: str):
             print("  Cancelled.")
 
 
+# ── Install / Uninstall / Update ─────────────────────────────────────────────
+
+# Default GitHub repo — override with SWARM_REPO env var
+_DEFAULT_REPO = "https://github.com/createpjf/swarm-dev.git"
+
+
+def cmd_install(repo: str = "", target: str = "", console=None):
+    """Clone from GitHub, set up venv, install deps, link CLI."""
+    import subprocess
+    if console is None:
+        try:
+            from rich.console import Console
+            console = Console()
+        except ImportError:
+            console = None
+
+    def _print(msg):
+        if console:
+            console.print(msg)
+        else:
+            print(msg)
+
+    from core.i18n import t as _t
+    repo_url = repo or os.environ.get("SWARM_REPO", _DEFAULT_REPO)
+    install_dir = target or os.environ.get("SWARM_INSTALL_DIR", "")
+
+    # If already installed (we're running from the project), just run setup
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    if not install_dir and os.path.exists(os.path.join(project_root, "pyproject.toml")):
+        _print(f"  [dim]{_t('install.already', path=project_root)}[/dim]")
+        _print(f"  [dim]Running setup…[/dim]")
+        setup_sh = os.path.join(project_root, "setup.sh")
+        if os.path.exists(setup_sh):
+            result = subprocess.run(["bash", setup_sh], cwd=project_root)
+            if result.returncode == 0:
+                _print(f"  [green]✓[/green] {_t('install.done')}")
+            else:
+                _print(f"  [red]✗[/red] {_t('install.failed', err='setup.sh failed')}")
+        else:
+            # Fallback: pip install directly
+            venv_pip = os.path.join(project_root, ".venv", "bin", "pip")
+            pip_cmd = venv_pip if os.path.exists(venv_pip) else "pip"
+            result = subprocess.run(
+                [pip_cmd, "install", "-e", ".[dev]"],
+                cwd=project_root, capture_output=True, text=True,
+            )
+            if result.returncode == 0:
+                _print(f"  [green]✓[/green] {_t('install.done')}")
+            else:
+                _print(f"  [red]✗[/red] {_t('install.failed', err=result.stderr[:200])}")
+        return
+
+    # Fresh install: clone from GitHub
+    if not install_dir:
+        install_dir = os.path.expanduser("~/swarm-dev")
+
+    _print(f"  [dim]{_t('install.checking')}[/dim]")
+
+    if os.path.exists(install_dir) and os.listdir(install_dir):
+        _print(f"  [yellow]![/yellow] {_t('install.already', path=install_dir)}")
+        _print(f"  [dim]Use 'swarm update' to pull latest changes.[/dim]")
+        return
+
+    _print(f"  [dim]{_t('install.cloning')}[/dim]  {repo_url}")
+    result = subprocess.run(
+        ["git", "clone", repo_url, install_dir],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        _print(f"  [red]✗[/red] {_t('install.failed', err=result.stderr[:200])}")
+        return
+
+    _print(f"  [dim]{_t('install.installing')}[/dim]")
+    setup_sh = os.path.join(install_dir, "setup.sh")
+    if os.path.exists(setup_sh):
+        result = subprocess.run(["bash", setup_sh], cwd=install_dir)
+    else:
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-e", ".[dev]"],
+            cwd=install_dir, capture_output=True, text=True,
+        )
+
+    if result.returncode == 0:
+        _print(f"  [green]✓[/green] {_t('install.done')}")
+        _print(f"  [dim]Installed to: {install_dir}[/dim]")
+        _print(f"  [bold]Quick start:[/bold]  cd {install_dir} && swarm")
+    else:
+        err = getattr(result, 'stderr', '') or ''
+        _print(f"  [red]✗[/red] {_t('install.failed', err=err[:200])}")
+
+
+def cmd_uninstall(console=None):
+    """Remove swarm CLI symlink and daemon service. Source code stays."""
+    import subprocess
+    if console is None:
+        try:
+            from rich.console import Console
+            console = Console()
+        except ImportError:
+            console = None
+
+    def _print(msg):
+        if console:
+            console.print(msg)
+        else:
+            print(msg)
+
+    from core.i18n import t as _t
+
+    # Confirm
+    try:
+        import questionary
+        from core.onboard import STYLE
+        ok = questionary.confirm(
+            _t("uninstall.confirm"), default=False, style=STYLE,
+        ).ask()
+        if not ok:
+            _print(f"  [dim]{_t('uninstall.cancelled')}[/dim]")
+            return
+    except ImportError:
+        answer = input(f"  {_t('uninstall.confirm')} [y/N] ").strip().lower()
+        if answer != "y":
+            _print(f"  [dim]{_t('uninstall.cancelled')}[/dim]")
+            return
+
+    removed = []
+
+    # 1. Uninstall daemon if exists
+    try:
+        from core.daemon import uninstall_daemon
+        ok, msg = uninstall_daemon()
+        if ok:
+            removed.append("daemon")
+            _print(f"  [green]✓[/green] {msg}")
+    except Exception:
+        pass
+
+    # 2. Remove /usr/local/bin/swarm symlink
+    target = "/usr/local/bin/swarm"
+    if os.path.islink(target):
+        try:
+            os.remove(target)
+            removed.append("CLI symlink")
+            _print(f"  [green]✓[/green] Removed {target}")
+        except PermissionError:
+            result = subprocess.run(["sudo", "rm", "-f", target],
+                                    capture_output=True, text=True)
+            if result.returncode == 0:
+                removed.append("CLI symlink")
+                _print(f"  [green]✓[/green] Removed {target}")
+            else:
+                _print(f"  [yellow]![/yellow] Could not remove {target}")
+
+    # 3. pip uninstall the package
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    venv_pip = os.path.join(project_root, ".venv", "bin", "pip")
+    pip_cmd = venv_pip if os.path.exists(venv_pip) else "pip"
+    result = subprocess.run(
+        [pip_cmd, "uninstall", "-y", "swarm-agent-stack"],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        removed.append("pip package")
+        _print(f"  [green]✓[/green] Uninstalled pip package")
+
+    if removed:
+        _print(f"\n  [green]✓[/green] {_t('uninstall.done')} ({', '.join(removed)})")
+        _print(f"  [dim]Source code remains at: {project_root}[/dim]")
+        _print(f"  [dim]To fully remove: rm -rf {project_root}[/dim]")
+    else:
+        _print(f"  [dim]Nothing to uninstall.[/dim]")
+
+
+def cmd_update(branch: str = "", console=None):
+    """Pull latest code from GitHub and reinstall dependencies."""
+    import subprocess
+    if console is None:
+        try:
+            from rich.console import Console
+            console = Console()
+        except ImportError:
+            console = None
+
+    def _print(msg):
+        if console:
+            console.print(msg)
+        else:
+            print(msg)
+
+    from core.i18n import t as _t
+    project_root = os.path.dirname(os.path.abspath(__file__))
+
+    # Show current version info
+    try:
+        import tomllib
+    except ImportError:
+        try:
+            import tomli as tomllib
+        except ImportError:
+            tomllib = None
+
+    if tomllib:
+        try:
+            with open(os.path.join(project_root, "pyproject.toml"), "rb") as f:
+                pyproject = tomllib.load(f)
+            version = pyproject.get("project", {}).get("version", "?")
+            _print(f"  [dim]{_t('update.version', version=version)}[/dim]")
+        except Exception:
+            pass
+
+    # Get current branch
+    result = subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=project_root, capture_output=True, text=True,
+    )
+    current_branch = result.stdout.strip() if result.returncode == 0 else "main"
+    target_branch = branch or current_branch
+    _print(f"  [dim]{_t('update.branch', branch=target_branch)}[/dim]")
+
+    # Get remote name
+    result = subprocess.run(
+        ["git", "remote"],
+        cwd=project_root, capture_output=True, text=True,
+    )
+    remote = result.stdout.strip().split("\n")[0] if result.returncode == 0 else "origin"
+
+    _print(f"  [dim]{_t('update.checking')}[/dim]")
+
+    # Fetch from remote
+    _print(f"  [dim]{_t('update.fetching', remote=remote)}[/dim]")
+    result = subprocess.run(
+        ["git", "fetch", remote, target_branch],
+        cwd=project_root, capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        _print(f"  [red]✗[/red] {_t('update.failed', err=result.stderr[:200])}")
+        return
+
+    # Check if there are updates
+    result = subprocess.run(
+        ["git", "log", f"HEAD..{remote}/{target_branch}", "--oneline"],
+        cwd=project_root, capture_output=True, text=True,
+    )
+    commits = result.stdout.strip()
+    if not commits:
+        _print(f"  [green]✓[/green] {_t('update.up_to_date')}")
+        return
+
+    commit_count = len(commits.split("\n"))
+    _print(f"  [cyan]{commit_count} new commit(s) available[/cyan]")
+
+    # Show what will change
+    result = subprocess.run(
+        ["git", "diff", "--stat", f"HEAD..{remote}/{target_branch}"],
+        cwd=project_root, capture_output=True, text=True,
+    )
+    if result.stdout.strip():
+        for line in result.stdout.strip().split("\n")[-3:]:
+            _print(f"  [dim]{line.strip()}[/dim]")
+
+    # Stash local changes if any
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=project_root, capture_output=True, text=True,
+    )
+    has_local_changes = bool(result.stdout.strip())
+    if has_local_changes:
+        _print(f"  [yellow]![/yellow] Stashing local changes…")
+        subprocess.run(
+            ["git", "stash", "push", "-m", "swarm-update-auto-stash"],
+            cwd=project_root, capture_output=True, text=True,
+        )
+
+    # Pull
+    result = subprocess.run(
+        ["git", "pull", remote, target_branch],
+        cwd=project_root, capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        _print(f"  [red]✗[/red] {_t('update.failed', err=result.stderr[:200])}")
+        # Restore stash on failure
+        if has_local_changes:
+            subprocess.run(
+                ["git", "stash", "pop"],
+                cwd=project_root, capture_output=True, text=True,
+            )
+        return
+
+    # Count changed files
+    result = subprocess.run(
+        ["git", "diff", "--name-only", "HEAD~" + str(commit_count), "HEAD"],
+        cwd=project_root, capture_output=True, text=True,
+    )
+    changed_files = len(result.stdout.strip().split("\n")) if result.stdout.strip() else 0
+
+    # Reinstall dependencies
+    _print(f"  [dim]{_t('update.deps')}[/dim]")
+    venv_pip = os.path.join(project_root, ".venv", "bin", "pip")
+    pip_cmd = venv_pip if os.path.exists(venv_pip) else "pip"
+    subprocess.run(
+        [pip_cmd, "install", "-e", ".[dev]", "-q"],
+        cwd=project_root, capture_output=True, text=True,
+    )
+
+    # Pop stash if we stashed
+    if has_local_changes:
+        _print(f"  [dim]Restoring local changes…[/dim]")
+        result = subprocess.run(
+            ["git", "stash", "pop"],
+            cwd=project_root, capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            _print(f"  [yellow]![/yellow] Stash pop had conflicts — check 'git stash list'")
+
+    # Show updated version
+    if tomllib:
+        try:
+            with open(os.path.join(project_root, "pyproject.toml"), "rb") as f:
+                pyproject = tomllib.load(f)
+            new_version = pyproject.get("project", {}).get("version", "?")
+            _print(f"  [dim]{_t('update.version', version=new_version)}[/dim]")
+        except Exception:
+            pass
+
+    summary = _t("update.changes", n=changed_files)
+    _print(f"  [green]✓[/green] {_t('update.updated', summary=summary)}\n")
+
+
 def main():
     parser = argparse.ArgumentParser(prog="swarm")
     sub    = parser.add_subparsers(dest="cmd")
@@ -1310,6 +1659,18 @@ def main():
     p_chain.add_argument("agent_id", nargs="?", default=None,
                          help="Agent ID (required for init/register)")
 
+    p_install = sub.add_parser("install", help="Install swarm from GitHub")
+    p_install.add_argument("--repo", default="",
+                           help="GitHub repo URL (default: SWARM_REPO env or built-in)")
+    p_install.add_argument("--target", default="",
+                           help="Install directory (default: ~/swarm-dev)")
+
+    sub.add_parser("uninstall", help="Remove swarm CLI and daemon")
+
+    p_update = sub.add_parser("update", help="Pull latest from GitHub and reinstall")
+    p_update.add_argument("--branch", default="",
+                          help="Branch to update from (default: current branch)")
+
     p_ev = sub.add_parser("evolve", help="Manage evolution actions")
     p_ev.add_argument("agent_id")
     p_ev.add_argument("action", choices=["confirm"])
@@ -1337,6 +1698,12 @@ def main():
             cmd_agents_add(args.name)
         else:
             p_agents.print_help()
+    elif args.cmd == "install":
+        cmd_install(repo=args.repo, target=args.target)
+    elif args.cmd == "uninstall":
+        cmd_uninstall()
+    elif args.cmd == "update":
+        cmd_update(branch=args.branch)
     elif args.cmd == "evolve":
         if args.action == "confirm":
             cmd_evolve_confirm(args.agent_id)
