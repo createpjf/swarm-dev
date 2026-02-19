@@ -441,6 +441,169 @@ def run_doctor_quick(rich_console=None) -> list[tuple[bool, str, str]]:
     return run_doctor(quick_checks, rich_console)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  REPAIR MODE — OpenClaw-inspired auto-fix (swarm doctor --repair)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def run_doctor_repair(rich_console=None) -> list[tuple[bool, str, str]]:
+    """
+    Run all checks, then auto-fix what we can.
+    Repairs: missing .env, missing dirs, missing optional deps, stale tasks.
+    """
+    results = run_doctor(rich_console=rich_console)
+    if rich_console:
+        from core.i18n import t as _t
+        rich_console.print(f"\n  [bold magenta]── Auto-Repair ──[/bold magenta]\n")
+
+    repaired = 0
+
+    # Fix 1: Create .env if missing
+    if not os.path.exists(".env"):
+        if os.path.exists(".env.example"):
+            import shutil
+            shutil.copy(".env.example", ".env")
+            if rich_console:
+                rich_console.print("  [green]+[/green] Created .env from .env.example")
+            repaired += 1
+        else:
+            with open(".env", "w") as f:
+                f.write("# Swarm Agent Stack — Environment\n# Add your API key below:\n# FLOCK_API_KEY=\n")
+            if rich_console:
+                rich_console.print("  [green]+[/green] Created empty .env")
+            repaired += 1
+
+    # Fix 2: Create required directories
+    for d in ["config", ".logs", "memory", "workflows", "skills"]:
+        if not os.path.isdir(d):
+            os.makedirs(d, exist_ok=True)
+            if rich_console:
+                rich_console.print(f"  [green]+[/green] Created directory: {d}/")
+            repaired += 1
+
+    # Fix 3: Recover stale tasks (stuck in claimed/review)
+    if os.path.exists(".task_board.json"):
+        try:
+            import json
+            with open(".task_board.json") as f:
+                data = json.load(f)
+            stale_count = 0
+            now = __import__("time").time()
+            for tid, t in data.items():
+                if t.get("status") == "claimed" and (now - t.get("claimed_at", now)) > 300:
+                    t["status"] = "pending"
+                    t["agent_id"] = None
+                    stale_count += 1
+                elif t.get("status") == "review" and (now - t.get("claimed_at", now)) > 180:
+                    t["status"] = "pending"
+                    t["agent_id"] = None
+                    stale_count += 1
+            if stale_count:
+                with open(".task_board.json", "w") as f:
+                    json.dump(data, f, indent=2)
+                if rich_console:
+                    rich_console.print(f"  [green]+[/green] Recovered {stale_count} stale task(s)")
+                repaired += 1
+        except Exception:
+            pass
+
+    # Fix 4: Auto-install missing optional packages
+    fixable = _detect_fixable(results)
+    if fixable and rich_console:
+        _offer_auto_fix(rich_console, fixable)
+        repaired += len(fixable)
+
+    if rich_console:
+        if repaired:
+            rich_console.print(f"\n  [green]+[/green] Repaired {repaired} issue(s)\n")
+        else:
+            rich_console.print(f"  [dim]Nothing to repair.[/dim]\n")
+
+    return results
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  DEEP MODE — OpenClaw-inspired deep diagnostics (swarm doctor --deep)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def run_doctor_deep(rich_console=None) -> list[tuple[bool, str, str]]:
+    """
+    Deep diagnostics: all checks + connectivity test + file integrity + disk usage.
+    """
+    results = run_doctor(rich_console=rich_console)
+
+    if rich_console:
+        rich_console.print(f"\n  [bold magenta]── Deep Diagnostics ──[/bold magenta]\n")
+
+    deep_results = []
+
+    # Deep 1: Disk usage of swarm data files
+    data_files = [".task_board.json", ".context_bus.json", "memory/usage.json",
+                  "memory/reputation_cache.json"]
+    total_size = 0
+    for fp in data_files:
+        if os.path.exists(fp):
+            sz = os.path.getsize(fp)
+            total_size += sz
+    ok = total_size < 50 * 1024 * 1024  # < 50MB is healthy
+    size_mb = total_size / (1024 * 1024)
+    detail = f"{size_mb:.1f} MB total data files"
+    deep_results.append((ok, "Disk Usage", detail))
+
+    # Deep 2: Check skills directory integrity
+    skill_count = 0
+    broken_skills = []
+    if os.path.isdir("skills"):
+        for fname in os.listdir("skills"):
+            if fname.endswith(".md"):
+                skill_count += 1
+                path = os.path.join("skills", fname)
+                try:
+                    with open(path) as f:
+                        content = f.read()
+                    if not content.strip():
+                        broken_skills.append(fname)
+                except Exception:
+                    broken_skills.append(fname)
+    if broken_skills:
+        deep_results.append((False, "Skills", f"{len(broken_skills)} empty/broken: {', '.join(broken_skills[:3])}"))
+    else:
+        deep_results.append((True, "Skills", f"{skill_count} skill files OK"))
+
+    # Deep 3: Check workflow YAML validity
+    wf_count = 0
+    broken_wf = []
+    if os.path.isdir("workflows"):
+        for fname in os.listdir("workflows"):
+            if fname.endswith((".yaml", ".yml")):
+                wf_count += 1
+                try:
+                    import yaml
+                    with open(os.path.join("workflows", fname)) as f:
+                        wf = yaml.safe_load(f)
+                    if not wf or "steps" not in wf:
+                        broken_wf.append(fname)
+                except Exception:
+                    broken_wf.append(fname)
+    if broken_wf:
+        deep_results.append((False, "Workflows", f"{len(broken_wf)} invalid: {', '.join(broken_wf[:3])}"))
+    else:
+        deep_results.append((True, "Workflows", f"{wf_count} workflow files OK"))
+
+    # Deep 4: Python version check
+    v = sys.version_info
+    py_ok = v.major >= 3 and v.minor >= 10
+    deep_results.append((py_ok, "Python", f"{v.major}.{v.minor}.{v.micro}" + (" (3.10+ required)" if not py_ok else "")))
+
+    # Print deep results
+    if rich_console:
+        for ok, label, detail in deep_results:
+            icon = "[green]+[/green]" if ok else "[red]x[/red]"
+            rich_console.print(f"  {icon} [bold]{label:14}[/bold] [dim]{detail}[/dim]")
+        rich_console.print()
+
+    return results + deep_results
+
+
 def _print_rich(console, results: list[tuple[bool, str, str]]):
     """Pretty-print doctor results with rich, then offer auto-fix for fixable issues."""
     from rich.panel import Panel

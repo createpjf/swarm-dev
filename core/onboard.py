@@ -137,6 +137,10 @@ def run_quick_setup() -> bool:
         console.print()
         console.print(BANNER)
 
+        # ── Risk acknowledgment (OpenClaw pattern: first-run only) ──
+        if not os.path.exists(CONFIG_PATH):
+            _show_risk_notice()
+
         # ── Detect existing config ──
         action = _detect_existing_config()
         if action == "keep":
@@ -1867,6 +1871,30 @@ def _ask_memory() -> str | None:
 # ══════════════════════════════════════════════════════════════════════════════
 #  SHARED HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
+
+def _show_risk_notice():
+    """OpenClaw pattern: show risk acknowledgment on first run."""
+    console.print(Panel(
+        f"[{C_ACCENT}]Welcome to Swarm Agent Stack[/{C_ACCENT}]\n\n"
+        f"  Swarm is a multi-agent orchestration system.\n"
+        f"  Agents will call LLM APIs on your behalf and\n"
+        f"  may incur usage costs depending on your provider.\n\n"
+        f"  [{C_DIM}]• API calls are billed by your LLM provider[/{C_DIM}]\n"
+        f"  [{C_DIM}]• Use Ollama (free, local) to avoid costs[/{C_DIM}]\n"
+        f"  [{C_DIM}]• Set a budget: POST /v1/budget or /budget[/{C_DIM}]",
+        border_style="magenta",
+        box=box.ROUNDED,
+        title=f"[{C_WARN}]Notice[/{C_WARN}]",
+    ))
+    proceed = questionary.confirm(
+        "I understand. Continue setup?",
+        default=True,
+        style=STYLE,
+    ).ask()
+    if not proceed:
+        console.print(f"  [{C_DIM}]Setup cancelled.[/{C_DIM}]")
+        raise KeyboardInterrupt  # exits cleanly
+
 
 def _detect_existing_config() -> str:
     """

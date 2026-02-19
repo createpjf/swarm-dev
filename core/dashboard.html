@@ -173,6 +173,10 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .agent-editor .field-row{display:flex;gap:12px}
 .agent-editor .field-row>.field{flex:1}
 .agent-editor .actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;padding-top:12px;border-top:1px solid var(--bg3)}
+.btn-create-agent{background:var(--accent);color:#fff;border:none;border-radius:8px;padding:8px 16px;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s}
+.btn-create-agent:hover{filter:brightness(1.15);transform:translateY(-1px)}
+.btn-delete-agent{background:none;border:1px solid #e74c3c;color:#e74c3c;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;transition:all .15s}
+.btn-delete-agent:hover{background:#e74c3c;color:#fff}
 
 /* ── Skills Layout ────────────────────────────────────────────── */
 .skills-layout{display:flex;gap:16px;height:calc(100vh - 120px)}
@@ -622,9 +626,12 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 
 <!-- ── Panel: Agents ── -->
 <div class="panel" id="panel-agents">
-  <div class="page-header">
-    <div class="page-title">Agents</div>
-    <div style="font-size:12px;color:var(--fg3)">Click an agent card to edit</div>
+  <div class="page-header" style="display:flex;align-items:center;justify-content:space-between">
+    <div>
+      <div class="page-title">Agents</div>
+      <div style="font-size:12px;color:var(--fg3)">Click an agent card to edit</div>
+    </div>
+    <button class="btn-create-agent" onclick="showCreateAgentModal()">+ Create Agent</button>
   </div>
   <div class="agent-grid" id="agentGrid">
     <div class="empty">Loading agents…</div>
@@ -2294,10 +2301,12 @@ async function loadAgents() {
         mhtml += '</div>';
       }
 
-      mhtml += '<div class="actions">';
+      mhtml += '<div class="actions" style="justify-content:space-between">';
+      mhtml += '<button class="btn-delete-agent" onclick="deleteAgent(\'' + escHtml(a.id) + '\')">Delete Agent</button>';
+      mhtml += '<div style="display:flex;gap:8px">';
       mhtml += '<button class="btn btn-outline btn-sm" onclick="closeAgentEditor()">Cancel</button>';
       mhtml += '<button class="btn btn-green btn-sm" onclick="saveAgent(\'' + escHtml(a.id) + '\')">Save</button>';
-      mhtml += '</div>';
+      mhtml += '</div></div>';
       mhtml += '</div>'; // .agent-editor
       mhtml += '</div>'; // .agent-modal
       mhtml += '</div>'; // .agent-modal-overlay
@@ -2338,6 +2347,84 @@ async function saveAgent(id) {
     loadAgents();
   } else {
     toast(res?.error || 'Failed to update agent', 'error');
+  }
+}
+
+function showCreateAgentModal() {
+  const container = document.getElementById('agentModalContainer');
+  let mhtml = '<div class="agent-modal-overlay" onclick="closeAgentEditor()">';
+  mhtml += '<div class="agent-modal" onclick="event.stopPropagation()">';
+  mhtml += '<div class="agent-modal-header"><span class="agent-modal-title">Create Agent</span>'
+    + '<button class="agent-modal-close" onclick="closeAgentEditor()">✕</button></div>';
+  mhtml += '<div class="agent-editor">';
+
+  // ID
+  mhtml += '<div class="field"><label>Agent ID (lowercase, no spaces)</label><input class="input" id="newAgentId" placeholder="e.g. researcher"></div>';
+
+  // Role
+  mhtml += '<div class="field"><label>Role</label><textarea class="input" id="newAgentRole" rows="2" placeholder="e.g. Research analyst who gathers and synthesizes information"></textarea></div>';
+
+  // Model + Provider
+  mhtml += '<div class="field-row">';
+  mhtml += '<div class="field"><label>Model</label><input class="input" id="newAgentModel" placeholder="e.g. gpt-4o"></div>';
+  mhtml += '<div class="field"><label>Provider</label><select class="input" id="newAgentProvider">';
+  for (const p of ['flock','openai','ollama','anthropic','deepseek','custom']) {
+    mhtml += '<option>' + p + '</option>';
+  }
+  mhtml += '</select></div>';
+  mhtml += '</div>';
+
+  // API Key + Base URL (optional)
+  mhtml += '<div style="border-top:1px solid var(--bg4);margin:10px 0;padding-top:10px">';
+  mhtml += '<div style="font-size:11px;font-weight:700;color:var(--fg2);text-transform:uppercase;margin-bottom:8px">API Configuration (optional)</div>';
+  mhtml += '<div class="field-row">';
+  mhtml += '<div class="field"><label>API Key</label><input class="input" id="newAgentApiKey" type="password" placeholder="Leave empty to use global key"></div>';
+  mhtml += '<div class="field"><label>Base URL</label><input class="input" id="newAgentBaseUrl" placeholder="Leave empty for default"></div>';
+  mhtml += '</div></div>';
+
+  mhtml += '<div class="actions">';
+  mhtml += '<button class="btn btn-outline btn-sm" onclick="closeAgentEditor()">Cancel</button>';
+  mhtml += '<button class="btn btn-green btn-sm" onclick="createAgent()">Create</button>';
+  mhtml += '</div>';
+  mhtml += '</div></div></div>';
+  container.innerHTML = mhtml;
+}
+
+async function createAgent() {
+  const id = (document.getElementById('newAgentId').value||'').trim().toLowerCase().replace(/\s+/g, '_');
+  const role = (document.getElementById('newAgentRole').value||'').trim();
+  const model = (document.getElementById('newAgentModel').value||'').trim();
+  const provider = document.getElementById('newAgentProvider').value;
+  const apiKey = (document.getElementById('newAgentApiKey').value||'').trim();
+  const baseUrl = (document.getElementById('newAgentBaseUrl').value||'').trim();
+
+  if (!id) { toast('Agent ID is required', 'error'); return; }
+  if (!model) { toast('Model is required', 'error'); return; }
+  if (!/^[a-zA-Z0-9_-]+$/.test(id)) { toast('ID must be alphanumeric (a-z, 0-9, _ or -)', 'error'); return; }
+
+  const body = { id, role: role || 'general assistant', model, provider, skills: ['_base'] };
+  if (apiKey) body.api_key = apiKey;
+  if (baseUrl) body.base_url = baseUrl;
+
+  const res = await apiPost('/v1/agents', body);
+  if (res && res.ok) {
+    toast('Agent ' + id + ' created');
+    closeAgentEditor();
+    loadAgents();
+  } else {
+    toast(res?.error || 'Failed to create agent', 'error');
+  }
+}
+
+async function deleteAgent(id) {
+  if (!confirm('Delete agent "' + id + '"? This removes it from the config but preserves skill files and cognition docs.')) return;
+  const res = await apiDelete('/v1/agents/' + id);
+  if (res && res.ok) {
+    toast('Agent ' + id + ' deleted');
+    closeAgentEditor();
+    loadAgents();
+  } else {
+    toast(res?.error || 'Failed to delete agent', 'error');
   }
 }
 

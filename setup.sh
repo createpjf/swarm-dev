@@ -119,11 +119,61 @@ else
     fail "Some packages failed to import — check pip install output above"
 fi
 
+# ── 8. Shell completion (bash/zsh — OpenClaw pattern) ──
+COMP_SCRIPT="$ROOT/swarm-completion.sh"
+cat > "$COMP_SCRIPT" <<'COMPEOF'
+# Swarm CLI bash/zsh completion
+_swarm_completions() {
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+    local prev="${COMP_WORDS[COMP_CWORD-1]}"
+    local cmds="onboard run status scores doctor gateway agents workflow chain export install uninstall update"
+    case "$prev" in
+        swarm)
+            COMPREPLY=( $(compgen -W "$cmds" -- "$cur") ) ;;
+        gateway)
+            COMPREPLY=( $(compgen -W "start stop restart status install uninstall" -- "$cur") ) ;;
+        agents)
+            COMPREPLY=( $(compgen -W "create add" -- "$cur") ) ;;
+        workflow)
+            COMPREPLY=( $(compgen -W "list run" -- "$cur") ) ;;
+        chain)
+            COMPREPLY=( $(compgen -W "status balance init register health" -- "$cur") ) ;;
+        doctor)
+            COMPREPLY=( $(compgen -W "--repair --deep" -- "$cur") ) ;;
+        export)
+            COMPREPLY=( $(compgen -W "--format" -- "$cur") ) ;;
+        --format|-f)
+            COMPREPLY=( $(compgen -W "md json" -- "$cur") ) ;;
+        --template)
+            COMPREPLY=( $(compgen -W "researcher coder debugger doc_writer" -- "$cur") ) ;;
+    esac
+}
+complete -F _swarm_completions swarm
+COMPEOF
+
+INSTALLED_COMP=false
+for rcfile in "$HOME/.bashrc" "$HOME/.zshrc"; do
+    if [ -f "$rcfile" ]; then
+        if ! grep -q "swarm-completion" "$rcfile" 2>/dev/null; then
+            echo "" >> "$rcfile"
+            echo "# Swarm CLI completion" >> "$rcfile"
+            echo "[ -f \"$COMP_SCRIPT\" ] && source \"$COMP_SCRIPT\"" >> "$rcfile"
+            INSTALLED_COMP=true
+        fi
+    fi
+done
+
+if [ "$INSTALLED_COMP" = true ]; then
+    ok "Shell completion installed (restart shell to activate)"
+else
+    ok "Shell completion ready"
+fi
+
 echo ""
 echo -e "  ${GREEN}${BOLD}Setup complete!${RESET}"
 echo ""
 
-# ── 8. Launch onboarding wizard ──
+# ── 9. Launch onboarding wizard ──
 echo -e "  ${BOLD}Launching onboarding wizard...${RESET}"
 echo ""
 exec "$ROOT/$VENV_DIR/bin/swarm" onboard

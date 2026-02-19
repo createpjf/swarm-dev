@@ -208,6 +208,13 @@ _STRINGS = {
     "help.uninstall":     {"en": "remove CLI & daemon",      "zh": "移除 CLI 和守护进程"},
     "help.update":        {"en": "update from GitHub",       "zh": "从 GitHub 更新"},
     "help.exit":          {"en": "quit",                     "zh": "退出"},
+    "help.save":          {"en": "save task as template",    "zh": "保存为任务模板"},
+    "help.templates":     {"en": "run from saved templates", "zh": "从模板运行任务"},
+    "help.export":        {"en": "export last task result",  "zh": "导出上次任务结果"},
+
+    # ── Doctor repair ─────────────────────────────────────────────────
+    "doctor.repair_title": {"en": "Auto-Repair",             "zh": "自动修复"},
+    "doctor.deep_title":   {"en": "Deep Diagnostics",        "zh": "深度诊断"},
 }
 
 

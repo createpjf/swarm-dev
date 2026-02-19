@@ -8,6 +8,8 @@ Endpoints:
   POST /v1/task                     Submit a task → returns task_id
   GET  /v1/task/:id                 Get task status & result
   GET  /v1/status                   Full task board
+  POST /v1/agents                   Create a new agent
+  DELETE /v1/agents/:id             Delete an agent
   GET  /v1/scores                   Reputation scores
   GET  /v1/agents                   Agent team info
   GET  /v1/usage                    Usage statistics
@@ -240,6 +242,8 @@ class _Handler(BaseHTTPRequestHandler):
 
         if path == "/v1/task":
             self._handle_submit_task()
+        elif path == "/v1/agents":
+            self._handle_create_agent()
         elif path == "/v1/search":
             self._handle_brave_search()
         elif path == "/v1/skills/team/regenerate":
@@ -304,7 +308,10 @@ class _Handler(BaseHTTPRequestHandler):
 
         path = self.path.rstrip("/")
 
-        if path.startswith("/v1/skills/agents/"):
+        if path.startswith("/v1/agents/"):
+            agent_id = path[len("/v1/agents/"):]
+            self._handle_delete_agent(agent_id)
+        elif path.startswith("/v1/skills/agents/"):
             parts = path[len("/v1/skills/agents/"):].split("/", 1)
             if len(parts) == 2:
                 self._handle_delete_skill(parts[1], agent_id=parts[0])
@@ -700,6 +707,186 @@ class _Handler(BaseHTTPRequestHandler):
             "ok": True,
             "agent_id": agent_id,
             "updated": updated,
+        })
+
+    def _handle_create_agent(self):
+        """Create a new agent via POST /v1/agents.
+
+        Body: {id, role, model, provider, skills?, api_key?, base_url?}
+        """
+        import yaml
+        body = self._read_body()
+        if not body:
+            self._json_response(400, {"error": "Empty body"})
+            return
+
+        agent_id = body.get("id", "").strip()
+        if not agent_id:
+            self._json_response(400, {"error": "Missing 'id'"})
+            return
+        if not self._validate_name(agent_id):
+            return
+
+        role = body.get("role", "general assistant").strip()
+        model = body.get("model", "").strip()
+        provider = body.get("provider", "flock").strip()
+
+        if not model:
+            self._json_response(400, {"error": "Missing 'model'"})
+            return
+
+        # Load existing config
+        config_path = "config/agents.yaml"
+        if not os.path.exists(config_path):
+            self._json_response(400, {
+                "error": "Config not found. Run 'swarm onboard' first."})
+            return
+
+        with open(config_path) as f:
+            cfg = yaml.safe_load(f) or {}
+
+        # Check for duplicate
+        existing_ids = [a["id"] for a in cfg.get("agents", [])]
+        if agent_id in existing_ids:
+            self._json_response(409, {
+                "error": f"Agent '{agent_id}' already exists"})
+            return
+
+        # Build agent entry (inline — avoid onboard.py dependency in gateway)
+        skills = body.get("skills", ["_base"])
+        if isinstance(skills, str):
+            skills = [s.strip() for s in skills.split(",") if s.strip()]
+
+        # Provider → env var mapping
+        _PROVIDER_ENVS = {
+            "flock": ("FLOCK_API_KEY", "FLOCK_BASE_URL"),
+            "openai": ("OPENAI_API_KEY", "OPENAI_BASE_URL"),
+            "ollama": ("", "OLLAMA_URL"),
+            "anthropic": ("ANTHROPIC_API_KEY", ""),
+            "deepseek": ("DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL"),
+        }
+        key_env, url_env = _PROVIDER_ENVS.get(provider, ("", ""))
+
+        entry = {
+            "id": agent_id,
+            "role": role,
+            "model": model,
+            "skills": skills,
+            "memory": {"short_term_turns": 20, "long_term": True,
+                       "recall_top_k": 3},
+            "autonomy_level": int(body.get("autonomy_level", 1)),
+            "llm": {"provider": provider},
+        }
+        if key_env:
+            entry["llm"]["api_key_env"] = key_env
+        if url_env:
+            entry["llm"]["base_url_env"] = url_env
+
+        # Handle direct API key / base URL
+        if body.get("api_key"):
+            env_name = f"{agent_id.upper()}_API_KEY"
+            _save_env_var(env_name, body["api_key"])
+            entry["llm"]["api_key_env"] = env_name
+        if body.get("base_url"):
+            env_name = f"{agent_id.upper()}_BASE_URL"
+            _save_env_var(env_name, body["base_url"])
+            entry["llm"]["base_url_env"] = env_name
+
+        cfg.setdefault("agents", []).append(entry)
+
+        # Write config
+        try:
+            from core.config_manager import safe_write_yaml
+            safe_write_yaml(config_path, cfg,
+                            reason=f"create agent {agent_id}")
+        except ImportError:
+            os.makedirs("config", exist_ok=True)
+            with open(config_path, "w") as f:
+                yaml.dump(cfg, f, allow_unicode=True,
+                          default_flow_style=False, sort_keys=False)
+
+        # Create supporting files
+        override_dir = os.path.join("skills", "agent_overrides")
+        os.makedirs(override_dir, exist_ok=True)
+        override_path = os.path.join(override_dir, f"{agent_id}.md")
+        if not os.path.exists(override_path):
+            with open(override_path, "w") as f:
+                f.write(f"# {agent_id} — Skill Overrides\n\n"
+                        f"<!-- Add agent-specific instructions here -->\n")
+
+        cognition_dir = os.path.join("docs", agent_id)
+        os.makedirs(cognition_dir, exist_ok=True)
+        cognition_path = os.path.join(cognition_dir, "cognition.md")
+        if not os.path.exists(cognition_path):
+            with open(cognition_path, "w") as f:
+                f.write(f"# {agent_id} Cognition\n\n"
+                        f"## Role\n{role}\n\n"
+                        f"## Approach\n<!-- Define thinking approach -->\n")
+
+        # Regenerate team skill
+        try:
+            from core.team_skill import generate_team_skill
+            generate_team_skill()
+        except Exception:
+            pass
+
+        self._json_response(201, {
+            "ok": True,
+            "agent_id": agent_id,
+            "team": [a["id"] for a in cfg["agents"]],
+        })
+
+    def _handle_delete_agent(self, agent_id: str):
+        """Delete an agent via DELETE /v1/agents/:id."""
+        import yaml
+        if not self._validate_name(agent_id):
+            return
+
+        config_path = "config/agents.yaml"
+        if not os.path.exists(config_path):
+            self._json_response(404, {"error": "Config not found"})
+            return
+
+        with open(config_path) as f:
+            cfg = yaml.safe_load(f) or {}
+
+        agents = cfg.get("agents", [])
+        original_count = len(agents)
+        cfg["agents"] = [a for a in agents if a.get("id") != agent_id]
+
+        if len(cfg["agents"]) == original_count:
+            self._json_response(404, {
+                "error": f"Agent '{agent_id}' not found"})
+            return
+
+        # Don't allow deleting the last agent
+        if len(cfg["agents"]) == 0:
+            self._json_response(400, {
+                "error": "Cannot delete last agent. At least one required."})
+            cfg["agents"] = agents  # restore
+            return
+
+        # Write config
+        try:
+            from core.config_manager import safe_write_yaml
+            safe_write_yaml(config_path, cfg,
+                            reason=f"delete agent {agent_id}")
+        except ImportError:
+            with open(config_path, "w") as f:
+                yaml.dump(cfg, f, allow_unicode=True,
+                          default_flow_style=False, sort_keys=False)
+
+        # Regenerate team skill
+        try:
+            from core.team_skill import generate_team_skill
+            generate_team_skill()
+        except Exception:
+            pass
+
+        self._json_response(200, {
+            "ok": True,
+            "deleted": agent_id,
+            "remaining": [a["id"] for a in cfg["agents"]],
         })
 
     # ══════════════════════════════════════════════════════════════════════════

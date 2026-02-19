@@ -155,9 +155,36 @@ def interactive_main():
         console.print(f"  [dim]Gateway: skipped (--no-gateway)[/dim]")
     console.print()
 
-    # ── Chat loop ──
+    # ── Session persistence: check for resume ──
     from core.orchestrator import Orchestrator
     from core.task_board import TaskBoard
+
+    chat_history: list[dict] = []  # [{role: "user"/"assistant", content: str}]
+    _session_dir = os.path.join("memory", "sessions")
+    os.makedirs(_session_dir, exist_ok=True)
+
+    # Check for recent session to resume
+    _recent_session = _find_recent_session(_session_dir)
+    if _recent_session:
+        try:
+            resume = Prompt.ask(
+                f"  [dim]Resume previous session?[/dim] [bold]({_recent_session['task'][:40]})[/bold]",
+                choices=["y", "n"],
+                default="n",
+            )
+            if resume == "y":
+                chat_history = _recent_session.get("history", [])
+                console.print(f"  [dim]Restored {len(chat_history)} message(s)[/dim]")
+                # Show last result
+                for msg in reversed(chat_history):
+                    if msg.get("role") == "assistant" and msg.get("content"):
+                        try:
+                            console.print(Markdown(msg["content"][:500]))
+                        except Exception:
+                            console.print(msg["content"][:500])
+                        break
+        except (KeyboardInterrupt, EOFError):
+            pass
 
     while True:
         try:
@@ -165,6 +192,8 @@ def interactive_main():
         except (KeyboardInterrupt, EOFError):
             from core.i18n import t as _t
             console.print(f"\n[dim]{_t('cmd.bye')}[/dim]")
+            # Save session on exit
+            _save_session(_session_dir, chat_history)
             break
 
         task_text = task_text.strip()
@@ -179,6 +208,7 @@ def interactive_main():
         if _lower in ("exit", "quit"):
             from core.i18n import t as _t
             console.print(f"[dim]{_t('cmd.bye')}[/dim]")
+            _save_session(_session_dir, chat_history)
             break
 
         if cmd == "help":
@@ -197,6 +227,9 @@ def interactive_main():
                 ("/budget",          _t("help.budget")),
                 ("/cancel",          _t("help.cancel")),
                 ("/workflows",       _t("help.workflows")),
+                ("/save",            _t("help.save")),
+                ("/templates",       _t("help.templates")),
+                ("/export",          _t("help.export")),
                 ("/config",          _t("help.config")),
                 ("/config history",  _t("help.config_hist")),
                 ("/config rollback", _t("help.config_roll")),
@@ -509,6 +542,65 @@ def interactive_main():
                 console.print(f"  [dim]Agents: {agent_names}[/dim]\n")
             continue
 
+        if cmd == "save":
+            # Save last task as template
+            if chat_history:
+                last_task = None
+                for msg in reversed(chat_history):
+                    if msg.get("role") == "user":
+                        last_task = msg["content"]
+                        break
+                if last_task:
+                    _save_template(last_task)
+                    console.print(f"  [green]✓[/green] Saved template: {last_task[:40]}…\n")
+                else:
+                    console.print("  [dim]No task to save.[/dim]\n")
+            else:
+                console.print("  [dim]No task to save.[/dim]\n")
+            continue
+
+        if cmd == "templates":
+            templates = _load_templates()
+            if not templates:
+                console.print("  [dim]No saved templates. Use /save after a task.[/dim]\n")
+                continue
+            try:
+                import questionary
+                from core.onboard import STYLE
+                choices = [
+                    questionary.Choice(t[:60], value=t)
+                    for t in templates
+                ]
+                selected = questionary.select(
+                    "Choose a template to run:",
+                    choices=choices,
+                    style=STYLE,
+                ).ask()
+                if selected:
+                    task_text = selected
+                    # Fall through to submit
+                else:
+                    continue
+            except ImportError:
+                for i, t in enumerate(templates):
+                    console.print(f"  [{i}] {t[:60]}")
+                console.print()
+                continue
+
+        if cmd == "export":
+            # Export most recent task
+            if os.path.exists(".task_board.json"):
+                data = json.load(open(".task_board.json"))
+                if data:
+                    # Get most recent task (by creation order — first key)
+                    first_tid = next(iter(data))
+                    cmd_export(first_tid, fmt="md", console=console)
+                else:
+                    console.print("  [dim]No tasks to export.[/dim]\n")
+            else:
+                console.print("  [dim]No tasks to export.[/dim]\n")
+            continue
+
         # If it looks like a slash command but isn't recognized, show help hint
         if cmd is not None:
             from core.i18n import t as _t
@@ -516,6 +608,7 @@ def interactive_main():
             continue
 
         # ── Submit task to agents ──
+        chat_history.append({"role": "user", "content": task_text})
         try:
             # Clean state for this turn
             board = TaskBoard()
@@ -586,12 +679,96 @@ def interactive_main():
                 except Exception:
                     console.print(result_text)
                 console.print()
+                chat_history.append({"role": "assistant", "content": result_text})
             elif not failures:
                 from core.i18n import t as _t
                 console.print(f"\n  [yellow]{_t('cmd.no_result')}[/yellow] /status\n")
 
         except Exception as e:
             console.print(f"\n  [red]Error: {e}[/red]\n")
+
+
+# ── Rich status display ───────────────────────────────────────────────────────
+
+# ── Session persistence helpers ──────────────────────────────────────────────
+
+def _find_recent_session(session_dir: str) -> dict | None:
+    """Find the most recent session file (< 24h old)."""
+    import time
+    if not os.path.isdir(session_dir):
+        return None
+    best = None
+    best_ts = 0
+    now = time.time()
+    for fname in os.listdir(session_dir):
+        if not fname.endswith(".json"):
+            continue
+        path = os.path.join(session_dir, fname)
+        try:
+            mtime = os.path.getmtime(path)
+            if (now - mtime) < 86400 and mtime > best_ts:  # < 24h
+                best_ts = mtime
+                best = path
+        except Exception:
+            continue
+    if not best:
+        return None
+    try:
+        with open(best) as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _save_session(session_dir: str, history: list[dict]):
+    """Save chat history to a session file."""
+    if not history:
+        return
+    import time
+    os.makedirs(session_dir, exist_ok=True)
+    # Get first user task as label
+    task_label = ""
+    for msg in history:
+        if msg.get("role") == "user":
+            task_label = msg["content"][:60]
+            break
+    session = {
+        "timestamp": time.time(),
+        "task": task_label,
+        "history": history,
+    }
+    filename = time.strftime("%Y%m%d_%H%M%S") + ".json"
+    path = os.path.join(session_dir, filename)
+    with open(path, "w") as f:
+        json.dump(session, f, ensure_ascii=False, indent=2)
+
+
+# ── Task template helpers ────────────────────────────────────────────────────
+
+_TEMPLATES_PATH = os.path.join("memory", "templates.json")
+
+
+def _load_templates() -> list[str]:
+    """Load saved task templates."""
+    if not os.path.exists(_TEMPLATES_PATH):
+        return []
+    try:
+        with open(_TEMPLATES_PATH) as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def _save_template(task: str):
+    """Save a task description as a reusable template."""
+    templates = _load_templates()
+    if task not in templates:
+        templates.append(task)
+        # Keep last 20 templates
+        templates = templates[-20:]
+        os.makedirs(os.path.dirname(_TEMPLATES_PATH), exist_ok=True)
+        with open(_TEMPLATES_PATH, "w") as f:
+            json.dump(templates, f, ensure_ascii=False, indent=2)
 
 
 # ── Rich status display ───────────────────────────────────────────────────────
@@ -727,15 +904,24 @@ def cmd_scores(console=None):
         print()
 
 
-def cmd_doctor(console=None):
-    from core.doctor import run_doctor
+def cmd_doctor(console=None, repair: bool = False, deep: bool = False):
     if console is None:
         try:
             from rich.console import Console
             console = Console()
         except ImportError:
             pass
-    results = run_doctor(rich_console=console)
+
+    if repair:
+        from core.doctor import run_doctor_repair
+        results = run_doctor_repair(rich_console=console)
+    elif deep:
+        from core.doctor import run_doctor_deep
+        results = run_doctor_deep(rich_console=console)
+    else:
+        from core.doctor import run_doctor
+        results = run_doctor(rich_console=console)
+
     if console is None:
         # Plain text fallback
         for ok, label, detail in results:
@@ -867,6 +1053,123 @@ def cmd_budget(console=None):
             console.print()
     else:
         print(json.dumps(budget, indent=2))
+
+
+def cmd_export(task_id: str, fmt: str = "md", console=None):
+    """Export a task and its subtask results to markdown or JSON."""
+    if console is None:
+        try:
+            from rich.console import Console
+            console = Console()
+        except ImportError:
+            console = None
+
+    if not os.path.exists(".task_board.json"):
+        if console:
+            console.print("  [dim]No task board found.[/dim]")
+        else:
+            print("  No task board found.")
+        return
+
+    data = json.load(open(".task_board.json"))
+
+    # Find matching task (full or prefix match)
+    match_id = None
+    for tid in data:
+        if tid == task_id or tid.startswith(task_id):
+            match_id = tid
+            break
+
+    if not match_id:
+        if console:
+            console.print(f"  [red]Task not found: {task_id}[/red]")
+        else:
+            print(f"  Task not found: {task_id}")
+        return
+
+    task = data[match_id]
+
+    # Collect subtasks (matching parent_id)
+    subtasks = []
+    for tid, t in data.items():
+        if t.get("parent_id") == match_id:
+            subtasks.append((tid, t))
+
+    if fmt == "json":
+        export = {
+            "task_id": match_id,
+            "description": task.get("description", ""),
+            "status": task.get("status", ""),
+            "result": task.get("result", ""),
+            "agent_id": task.get("agent_id"),
+            "cost_usd": task.get("cost_usd", 0),
+            "subtasks": [
+                {
+                    "task_id": tid,
+                    "description": t.get("description", ""),
+                    "status": t.get("status", ""),
+                    "result": t.get("result", ""),
+                    "agent_id": t.get("agent_id"),
+                    "cost_usd": t.get("cost_usd", 0),
+                }
+                for tid, t in subtasks
+            ],
+        }
+        output = json.dumps(export, indent=2, ensure_ascii=False)
+    else:
+        # Markdown format
+        lines = []
+        lines.append(f"# Task: {task.get('description', 'Untitled')}")
+        lines.append(f"")
+        lines.append(f"**Status:** {task.get('status', '?')}")
+        lines.append(f"**Agent:** {task.get('agent_id') or '—'}")
+        cost = task.get("cost_usd", 0)
+        if cost:
+            lines.append(f"**Cost:** ~${cost:.4f}")
+        lines.append(f"**ID:** `{match_id}`")
+        lines.append("")
+
+        if task.get("result"):
+            lines.append("## Result")
+            lines.append("")
+            lines.append(task["result"])
+            lines.append("")
+
+        if subtasks:
+            lines.append("## Subtasks")
+            lines.append("")
+            for tid, t in subtasks:
+                st = t.get("status", "?")
+                icon = "✓" if st == "completed" else "✗" if st == "failed" else "○"
+                lines.append(f"### {icon} {t.get('description', 'Subtask')}")
+                lines.append(f"**Agent:** {t.get('agent_id') or '—'}  |  **Status:** {st}")
+                sub_cost = t.get("cost_usd", 0)
+                if sub_cost:
+                    lines.append(f"**Cost:** ~${sub_cost:.4f}")
+                if t.get("result"):
+                    lines.append("")
+                    lines.append(t["result"])
+                lines.append("")
+
+        # Total cost
+        total_cost = cost + sum(t.get("cost_usd", 0) for _, t in subtasks)
+        if total_cost:
+            lines.append(f"---\n**Total Cost:** ~${total_cost:.4f}")
+
+        output = "\n".join(lines)
+
+    # Write to file
+    ext = "json" if fmt == "json" else "md"
+    filename = f"export_{match_id[:8]}.{ext}"
+    with open(filename, "w") as f:
+        f.write(output)
+
+    if console:
+        console.print(f"  [green]✓[/green] Exported to [bold]{filename}[/bold]")
+        if fmt == "md":
+            console.print(f"  [dim]{len(subtasks)} subtask(s) included[/dim]")
+    else:
+        print(f"  Exported to {filename}")
 
 
 def cmd_usage(console=None):
@@ -1782,7 +2085,17 @@ def main():
 
     sub.add_parser("status", help="Show task board")
     sub.add_parser("scores", help="Show reputation scores")
-    sub.add_parser("doctor", help="System health check")
+    p_doc = sub.add_parser("doctor", help="System health check")
+    p_doc.add_argument("--repair", action="store_true",
+                        help="Auto-fix common issues (missing .env, dirs, stale tasks)")
+    p_doc.add_argument("--deep", action="store_true",
+                        help="Deep diagnostics (disk, skills, workflows, Python version)")
+
+    p_export = sub.add_parser("export", help="Export task results")
+    p_export.add_argument("task_id", help="Task ID (full or prefix)")
+    p_export.add_argument("--format", "-f", choices=["md", "json"], default="md",
+                          help="Output format (default: md)")
+
     p_gw = sub.add_parser("gateway", help="Gateway management")
     p_gw.add_argument("action", nargs="?", default="start",
                        choices=["start", "stop", "restart", "status",
@@ -1847,7 +2160,9 @@ def main():
     elif args.cmd == "scores":
         cmd_scores()
     elif args.cmd == "doctor":
-        cmd_doctor()
+        cmd_doctor(repair=args.repair, deep=args.deep)
+    elif args.cmd == "export":
+        cmd_export(args.task_id, fmt=args.format)
     elif args.cmd == "gateway":
         cmd_gateway(action=args.action, port=args.port,
                     token=args.token, force=args.force)
