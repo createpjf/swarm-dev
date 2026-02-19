@@ -279,6 +279,23 @@ class BaseAgent:
                     self.cfg.agent_id, len(result))
         return result
 
+    async def run_with_prompt(self, prompt: str, bus: "ContextBus") -> str:
+        """Ad-hoc LLM call — lighter than run(), no task lifecycle/tool loop/memory store.
+
+        Used for targeted revisions and synthesis tasks where the full
+        run() pipeline (skills, memory recall, context bus) is overkill.
+        """
+        system_prompt = f"You are {self.cfg.agent_id}.\n\n## Role\n{self.cfg.role}\n"
+        if self._soul:
+            system_prompt += f"\n## Soul\n{self._soul}\n"
+        elif self._cognition:
+            system_prompt += f"\n## Cognitive Profile\n{self._cognition}\n"
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ]
+        return await self.llm.chat(messages, self.cfg.model)
+
     async def _call_llm_streaming(self, messages: list[dict], task: "Task") -> str:
         """
         Call LLM with streaming if available, writing partial results to task board.

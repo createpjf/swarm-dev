@@ -117,8 +117,9 @@ def _agent_process(agent_cfg_dict: dict, agent_def: dict, config: dict):
 
 async def _handle_critique_request(agent, board: TaskBoard, mail: dict, sched):
     """
-    Advisor mode: structured critique instead of numeric scoring.
-    Returns pass/fail with actionable fix suggestions.
+    Advisor mode: score subtask output 1-10 with optional suggestions.
+    Reviewer is an ADVISOR, not a gatekeeper — tasks are NEVER blocked.
+    The planner reads scores/suggestions during final synthesis.
     """
     try:
         payload = json.loads(mail["content"])
@@ -130,13 +131,15 @@ async def _handle_critique_request(agent, board: TaskBoard, mail: dict, sched):
         return
 
     critique_prompt = (
-        f"Review the following task output.\n\n"
-        f"## Task\n{description}\n\n"
+        f"Score this subtask output on a scale of 1-10.\n\n"
+        f"## Subtask\n{description}\n\n"
         f"## Output\n{result}\n\n"
-        f"Decide: is this ready to deliver?\n"
-        f'If YES: {{"passed": true, "comment": "brief praise"}}\n'
-        f'If NO: {{"passed": false, "suggestions": ["fix1", "fix2"], "comment": "why"}}\n'
-        f"Max 3 suggestions, each must be specific and actionable."
+        f"IMPORTANT: This is a SUBTASK result (raw data/code), NOT a final user-facing answer.\n"
+        f"The planner will synthesize all subtask results into the final response.\n"
+        f"Judge ONLY: correctness for this specific subtask, completeness, clarity.\n\n"
+        f"Respond with JSON:\n"
+        f'{{"score": <1-10>, "suggestions": ["optional improvement 1"], "comment": "brief assessment"}}\n'
+        f"Omit suggestions if score >= 7. Max 3 suggestions if needed."
     )
     messages = [
         {"role": "system", "content": agent.cfg.role},
@@ -153,31 +156,30 @@ async def _handle_critique_request(agent, board: TaskBoard, mail: dict, sched):
             if start >= 0 and end > start:
                 json_str = json_str[start:end]
         critique_data = json.loads(json_str)
-        passed      = critique_data.get("passed", True)
+        score       = critique_data.get("score", 7)
         suggestions = critique_data.get("suggestions", [])
         comment     = critique_data.get("comment", "")
+        passed      = True  # Reviewer NEVER blocks — always pass
     except Exception as e:
         logger.error("[%s] critique LLM call failed: %s", agent.cfg.agent_id, e)
-        # On failure, pass the task through
-        passed, suggestions, comment = True, [], f"Critique failed: {e}"
+        # On failure, pass the task through with default score
+        passed, score, suggestions, comment = True, 7, [], f"Critique failed: {e}"
 
-    board.add_critique(task_id, agent.cfg.agent_id, passed, suggestions, comment)
-    await sched.on_critique(agent.cfg.agent_id, passed)
+    board.add_critique(task_id, agent.cfg.agent_id, passed, suggestions, comment,
+                       score=score)
+    await sched.on_critique(agent.cfg.agent_id, passed, score=score)
 
     task_obj = board.get(task_id)
     if task_obj and task_obj.agent_id:
         await sched.on_critique_result(
             task_obj.agent_id,
-            passed_first_time=passed,
+            passed_first_time=True,   # Always passes now
             had_revision=False,
         )
 
-    if not passed:
-        logger.info("[%s] critique REJECTED task %s with %d suggestions",
-                    agent.cfg.agent_id, task_id, len(suggestions))
-    else:
-        logger.info("[%s] critique APPROVED task %s",
-                    agent.cfg.agent_id, task_id)
+    logger.info("[%s] scored task %s: %d/10%s",
+                agent.cfg.agent_id, task_id, score,
+                f" ({len(suggestions)} suggestions)" if suggestions else "")
 
 
 # Legacy handler: forward old review_request to critique handler
@@ -630,18 +632,24 @@ async def _check_planner_closeouts(agent, bus, board: TaskBoard, config: dict):
         if not all_done:
             continue
 
-        # All subtasks done — synthesize final answer
+        # All subtasks done — synthesize final answer with reviewer feedback
         logger.info("All %d subtasks completed for parent %s, synthesizing close-out",
                      len(subtask_ids), parent_id)
-        results_text = board.collect_results(parent_id)
+        results_text, critique_text = board.collect_results_with_critiques(
+            parent_id, subtask_ids=subtask_ids)
         parent_desc = parent.get("description", "")
 
         close_prompt = (
-            f"You previously decomposed this task into subtasks.\n\n"
-            f"## Original Task\n{parent_desc}\n\n"
-            f"## Subtask Results\n{results_text}\n\n"
-            f"Please synthesize these results into a single, coherent, "
-            f"user-facing final answer. Remove internal task references."
+            f"You are synthesizing the FINAL answer for the user.\n\n"
+            f"## Original User Request\n{parent_desc}\n\n"
+            f"## Subtask Results (from executor)\n{results_text}\n\n"
+            f"## Reviewer Feedback (scores & suggestions)\n{critique_text}\n\n"
+            f"## Instructions\n"
+            f"1. Synthesize ALL subtask results into ONE coherent, polished response.\n"
+            f"2. Consider reviewer suggestions — incorporate valid improvements.\n"
+            f"3. Remove all internal task IDs, agent references, and metadata.\n"
+            f"4. Your response must DIRECTLY answer the user's original question.\n"
+            f"5. 用中文回复用户 (respond in Chinese).\n"
         )
         try:
             messages = [

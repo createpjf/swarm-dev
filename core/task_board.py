@@ -290,8 +290,14 @@ class TaskBoard:
             self._write(data)
 
     def add_critique(self, task_id: str, reviewer_id: str,
-                     passed: bool, suggestions: list[str], comment: str):
-        """Advisor submits structured critique: pass or reject with fix suggestions."""
+                     passed: bool, suggestions: list[str], comment: str,
+                     score: int = 7):
+        """Advisor submits structured critique with quality score.
+
+        IMPORTANT: Reviewer is an ADVISOR, not a gatekeeper.
+        Tasks are ALWAYS marked completed regardless of score.
+        The planner reads scores/suggestions during final synthesis.
+        """
         with self.lock:
             data = self._read()
             t = data.get(task_id)
@@ -300,17 +306,15 @@ class TaskBoard:
                 return
             t["critique"] = {
                 "reviewer": reviewer_id,
-                "passed": passed,
+                "passed": True,       # Always pass — reviewer is advisor, not gatekeeper
+                "score": score,
                 "suggestions": suggestions or [],
                 "comment": comment,
                 "ts": time.time(),
             }
-            if passed:
-                t["status"] = TaskStatus.COMPLETED.value
-                t["completed_at"] = time.time()
-            else:
-                t["status"] = TaskStatus.CRITIQUE.value
-                t["critique_round"] = t.get("critique_round", 0) + 1
+            # Always complete — reviewer never blocks tasks
+            t["status"] = TaskStatus.COMPLETED.value
+            t["completed_at"] = time.time()
             self._write(data)
 
     def claim_critique(self, agent_id: str,
@@ -586,6 +590,68 @@ class TaskBoard:
             return root["result"]
 
         return ""
+
+    def collect_results_with_critiques(self, root_task_id: str,
+                                        subtask_ids: list[str] | None = None,
+                                        ) -> tuple[str, str]:
+        """Collect executor results AND reviewer critiques for planner close-out.
+
+        Returns (results_text, critique_text) tuple:
+          - results_text: executor outputs formatted as markdown
+          - critique_text: reviewer scores + suggestions formatted as markdown
+
+        The planner uses both during final synthesis to produce a polished answer.
+        """
+        data = self._read()
+        results_parts: list[str] = []
+        critique_parts: list[str] = []
+
+        # Determine which tasks to collect from
+        target_ids = subtask_ids or []
+        if not target_ids:
+            # Fallback: all tasks with results (except planner's own)
+            target_ids = list(data.keys())
+
+        for tid in target_ids:
+            t = data.get(tid)
+            if not t or not t.get("result"):
+                continue
+            agent = t.get("agent_id", "")
+            # Skip planner's own decomposition output
+            if "planner" in agent.lower():
+                continue
+
+            desc = t.get("description", "")[:100]
+
+            # Executor result
+            results_parts.append(
+                f"### Subtask: {desc}\n"
+                f"**Agent:** {agent}\n\n"
+                f"{t['result']}"
+            )
+
+            # Reviewer critique (if exists)
+            critique = t.get("critique")
+            if critique:
+                score = critique.get("score", "N/A")
+                comment = critique.get("comment", "")
+                suggestions = critique.get("suggestions", [])
+                critique_entry = (
+                    f"### Subtask: {desc}\n"
+                    f"**Score:** {score}/10 | **Reviewer:** {critique.get('reviewer', 'unknown')}\n"
+                )
+                if comment:
+                    critique_entry += f"**Comment:** {comment}\n"
+                if suggestions:
+                    critique_entry += "**Suggestions:**\n"
+                    for s in suggestions:
+                        critique_entry += f"- {s}\n"
+                critique_parts.append(critique_entry)
+
+        results_text = "\n\n---\n\n".join(results_parts) if results_parts else "(no executor results)"
+        critique_text = "\n\n".join(critique_parts) if critique_parts else "(no reviewer feedback)"
+
+        return results_text, critique_text
 
     def clear(self, force: bool = False) -> int:
         """Remove all tasks. Returns count of removed tasks.

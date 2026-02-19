@@ -86,14 +86,16 @@ class ReputationScheduler:
         """
         self.scorer.update(agent_id, "output_quality", float(review_score))
 
-    async def on_critique(self, reviewer_id: str, passed: bool):
+    async def on_critique(self, reviewer_id: str, passed: bool,
+                           score: int = 7):
         """
-        Called after an advisor submits a critique.
-        Updates the reviewer's review_accuracy dimension.
+        Called after an advisor submits a quality score.
+        Updates the reviewer's review_accuracy dimension based on score.
+        Higher scores with differentiation → better calibrated reviewer.
         """
-        # Advisors who provide balanced feedback are better calibrated
-        # Track recent pass/fail ratio via a simple heuristic
-        accuracy_signal = 85.0 if not passed else 70.0
+        # Score-based accuracy: moderate scores (4-8) indicate careful review
+        # Extreme scores (1-2 or 9-10) are fine but less differentiating
+        accuracy_signal = min(90.0, 50.0 + score * 5)
         self.scorer.update(reviewer_id, "review_accuracy", accuracy_signal)
 
     async def on_critique_result(self, agent_id: str, passed_first_time: bool,

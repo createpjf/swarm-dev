@@ -1372,10 +1372,14 @@ function renderChatMsgHtml(m) {
         + '<span>↓ ' + fmtNum(m.completionTokens||0) + ' out</span>'
         + '</div>';
     }
+    const aM = agentMeta(m.agent || '');
+    const agentLabel = m.agent || 'Swarm';
+    const avatarLetter = agentLabel.charAt(0).toUpperCase();
+    const avatarBg = m.agent ? aM.color : 'linear-gradient(135deg,var(--accent),var(--cyan))';
     return '<div class="chat-msg assistant" data-msg-id="' + m.id + '">'
-      + '<div class="chat-avatar" style="background:linear-gradient(135deg,var(--accent),var(--cyan));border:none;color:#fff;font-size:13px;font-weight:700">S</div>'
+      + '<div class="chat-avatar" style="background:' + avatarBg + ';border:none;color:#fff;font-size:13px;font-weight:700">' + avatarLetter + '</div>'
       + '<div class="chat-bubble assistant-bubble">'
-      + '<div class="asst-header"><span class="asst-label">Swarm</span>'
+      + '<div class="asst-header"><span class="asst-label" style="color:' + aM.color + '">' + escHtml(agentLabel) + '</span>'
       + (m.taskId ? '<span>' + m.taskId.slice(0,8) + '…</span>' : '')
       + '</div>'
       + '<div class="asst-body">' + bodyHtml + '</div>'
