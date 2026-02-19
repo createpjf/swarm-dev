@@ -1006,16 +1006,23 @@ def _section_gateway(cfg: dict):
     ).ask()
     if start_gw:
         try:
-            from core.gateway import start_gateway
+            from core.gateway import start_gateway, check_gateway
+            import time
             server = start_gateway(port=port, token=token, daemon=True)
             if server:
-                console.print(f"  [{C_OK}]+[/{C_OK}] Gateway started on port {port}")
+                # Wait for the daemon thread to be ready
+                time.sleep(0.5)
+                ok, _ = check_gateway(port)
+                if ok:
+                    console.print(f"  [{C_OK}]+[/{C_OK}] Gateway running on port {port}")
+                else:
+                    console.print(f"  [{C_WARN}]Gateway started but not responding yet (may need a moment).[/{C_WARN}]")
                 import webbrowser
                 url = f"http://127.0.0.1:{port}/?token={token}"
                 webbrowser.open(url)
                 console.print(f"  [{C_DIM}]Opened dashboard in browser[/{C_DIM}]")
             else:
-                console.print(f"  [{C_WARN}]Gateway failed to start.[/{C_WARN}]")
+                console.print(f"  [{C_WARN}]Gateway failed to start (port {port} may be in use).[/{C_WARN}]")
         except Exception as e:
             console.print(f"  [{C_WARN}]Gateway start error: {e}[/{C_WARN}]")
 
@@ -1106,7 +1113,7 @@ def _section_skills(cfg: dict):
         questionary.Choice("List installed skills",            value="list"),
         questionary.Choice("Create new skill",                 value="create"),
         questionary.Choice("Install skill from path",          value="install"),
-        questionary.Choice("Assign skills to agent",           value="assign"),
+        questionary.Choice("Edit / reassign skill",            value="edit"),
         questionary.Choice("Regenerate team skill (_team.md)", value="regen"),
         questionary.Choice("Remove a skill",                   value="remove"),
     ]
@@ -1227,15 +1234,33 @@ def _section_skills(cfg: dict):
 
         console.print(f"  [{C_OK}]+[/{C_OK}] Created skill: {path}")
 
-        # If shared, ask whether to assign to agents
+        # If shared, ask which agents to assign to
         if scope == "shared":
-            assign = questionary.confirm(
-                "Assign this skill to agents now?",
-                default=False,
-                style=STYLE,
-            ).ask()
-            if assign:
-                _skills_assign_to_agents(cfg, name)
+            agents = cfg.get("agents", [])
+            if agents:
+                assign = questionary.confirm(
+                    "Assign this skill to agents now?",
+                    default=True,
+                    style=STYLE,
+                ).ask()
+                if assign:
+                    agent_choices = [
+                        questionary.Choice(a["id"], value=a["id"], checked=True)
+                        for a in agents
+                    ]
+                    selected = questionary.checkbox(
+                        f"Assign '{name}' to:",
+                        choices=agent_choices,
+                        style=STYLE,
+                    ).ask()
+                    if selected is not None:
+                        for a in agents:
+                            current = a.get("skills", [])
+                            if a["id"] in selected and name not in current:
+                                current.append(name)
+                                a["skills"] = current
+                        assigned = ", ".join(selected) if selected else "none"
+                        console.print(f"  [{C_OK}]+[/{C_OK}] Assigned to: {assigned}")
 
     # ── Install skill from path ──
     elif action == "install":
@@ -1248,29 +1273,167 @@ def _section_skills(cfg: dict):
             console.print(f"  [{C_WARN}]File not found: {src}[/{C_WARN}]")
             return
 
+        # Read and display the skill content
+        with open(src) as f:
+            content = f.read()
+        skill_name = os.path.basename(src).replace(".md", "")
+
+        # Parse frontmatter for display
+        desc_line = ""
+        if content.startswith("---"):
+            parts = content.split("---", 2)
+            if len(parts) >= 3:
+                for line in parts[1].strip().splitlines():
+                    if line.startswith("name:"):
+                        skill_name = line.split(":", 1)[1].strip()
+                    elif line.startswith("description:"):
+                        desc_line = line.split(":", 1)[1].strip()
+
+        console.print(f"  [{C_DIM}]Name: {skill_name}[/{C_DIM}]")
+        if desc_line:
+            console.print(f"  [{C_DIM}]Description: {desc_line}[/{C_DIM}]")
+        preview = content[:200].replace("\n", " ")
+        console.print(f"  [{C_DIM}]Preview: {preview}...[/{C_DIM}]")
+        console.print()
+
+        # Choose scope: shared or assign to specific agent
+        scope = questionary.select(
+            "Install as:",
+            choices=[
+                questionary.Choice("Shared (available to all agents)", value="shared"),
+                questionary.Choice("Private (single agent only)", value="private"),
+            ],
+            style=STYLE,
+        ).ask()
+        if scope is None:
+            return
+
+        if scope == "private":
+            agents = cfg.get("agents", [])
+            if not agents:
+                console.print(f"  [{C_WARN}]No agents configured. Installing as shared.[/{C_WARN}]")
+                scope = "shared"
+            else:
+                agent_id = questionary.select(
+                    "Which agent?",
+                    choices=[a["id"] for a in agents],
+                    style=STYLE,
+                ).ask()
+                if not agent_id:
+                    return
+                dest_dir = os.path.join("skills", "agents", agent_id)
+                os.makedirs(dest_dir, exist_ok=True)
+                dest = os.path.join(dest_dir, os.path.basename(src))
+                shutil.copy2(src, dest)
+                console.print(f"  [{C_OK}]+[/{C_OK}] Installed: {dest} (private to {agent_id})")
+
+                # Add to agent's skills list
+                agent = next(a for a in agents if a["id"] == agent_id)
+                current = agent.get("skills", [])
+                if skill_name not in current:
+                    current.append(skill_name)
+                    agent["skills"] = current
+                    console.print(f"  [{C_OK}]+[/{C_OK}] Added '{skill_name}' to {agent_id}'s skill list")
+                return
+
+        # Shared install
         fname = os.path.basename(src)
         dest = os.path.join("skills", fname)
         os.makedirs("skills", exist_ok=True)
         shutil.copy2(src, dest)
         console.print(f"  [{C_OK}]+[/{C_OK}] Installed: {dest}")
 
-    # ── Assign skills to agent ──
-    elif action == "assign":
+        # Ask which agents to assign to
+        agents = cfg.get("agents", [])
+        if agents:
+            assign = questionary.confirm(
+                "Assign this skill to agents now?",
+                default=True,
+                style=STYLE,
+            ).ask()
+            if assign:
+                agent_choices = [
+                    questionary.Choice(a["id"], value=a["id"],
+                                       checked=(skill_name in a.get("skills", [])))
+                    for a in agents
+                ]
+                selected_agents = questionary.checkbox(
+                    f"Assign '{skill_name}' to:",
+                    choices=agent_choices,
+                    style=STYLE,
+                ).ask()
+                if selected_agents is not None:
+                    for a in agents:
+                        current = a.get("skills", [])
+                        if a["id"] in selected_agents:
+                            if skill_name not in current:
+                                current.append(skill_name)
+                                a["skills"] = current
+                        else:
+                            if skill_name in current:
+                                current.remove(skill_name)
+                                a["skills"] = current
+                    assigned = ", ".join(selected_agents) if selected_agents else "none"
+                    console.print(f"  [{C_OK}]+[/{C_OK}] Assigned to: {assigned}")
+
+    # ── Edit / reassign skill ──
+    elif action == "edit":
         agents = cfg.get("agents", [])
         if not agents:
             console.print(f"  [{C_WARN}]No agents configured.[/{C_WARN}]")
             return
 
-        agent_id = questionary.select(
-            "Which agent?",
-            choices=[a["id"] for a in agents],
-            style=STYLE,
-        ).ask()
-        if not agent_id:
+        # Collect all available shared skills
+        all_skills = []
+        if os.path.isdir("skills"):
+            for fname in sorted(os.listdir("skills")):
+                if fname.endswith(".md") and fname != "_team.md":
+                    all_skills.append(fname.replace(".md", ""))
+
+        if not all_skills:
+            console.print(f"  [{C_DIM}]No shared skills found.[/{C_DIM}]")
             return
 
-        agent = next(a for a in agents if a["id"] == agent_id)
-        _skills_assign_to_agents(cfg, target_agent=agent)
+        # Pick which skill to edit
+        skill_name = questionary.select(
+            "Which skill to edit?",
+            choices=all_skills,
+            style=STYLE,
+        ).ask()
+        if not skill_name:
+            return
+
+        # Show current assignment
+        assigned_to = [a["id"] for a in agents if skill_name in a.get("skills", [])]
+        if assigned_to:
+            console.print(f"  [{C_DIM}]Currently assigned to: {', '.join(assigned_to)}[/{C_DIM}]")
+        else:
+            console.print(f"  [{C_DIM}]Not assigned to any agent.[/{C_DIM}]")
+
+        # Checkbox for agent assignment
+        agent_choices = [
+            questionary.Choice(a["id"], value=a["id"],
+                               checked=(skill_name in a.get("skills", [])))
+            for a in agents
+        ]
+        selected = questionary.checkbox(
+            f"Assign '{skill_name}' to:",
+            choices=agent_choices,
+            style=STYLE,
+        ).ask()
+        if selected is not None:
+            for a in agents:
+                current = a.get("skills", [])
+                if a["id"] in selected:
+                    if skill_name not in current:
+                        current.append(skill_name)
+                        a["skills"] = current
+                else:
+                    if skill_name in current:
+                        current.remove(skill_name)
+                        a["skills"] = current
+            assigned = ", ".join(selected) if selected else "none"
+            console.print(f"  [{C_OK}]+[/{C_OK}] '{skill_name}' assigned to: {assigned}")
 
     # ── Regenerate team skill ──
     elif action == "regen":

@@ -249,22 +249,22 @@ def check_chain() -> tuple[bool, str, str]:
     # Check web3
     try:
         import web3  # noqa: F401
-        parts.append("web3 \u2713")
+        parts.append("web3 ok")
     except ImportError:
         return False, "Chain", "Enabled but web3 not installed — pip3 install web3"
 
     # Check RPC URL
-    rpc_env = chain_cfg.get("rpc_url_env", "BASE_RPC_URL")
-    rpc = os.environ.get(rpc_env, "")
+    rpc_env = chain_cfg.get("rpc_url_env", "RPC_URL")
+    rpc = os.environ.get(rpc_env, "") or os.environ.get("BASE_RPC_URL", "")
     if rpc:
-        parts.append(f"RPC \u2713")
+        parts.append(f"RPC ok")
     else:
-        warnings.append(f"{rpc_env} not set")
+        warnings.append(f"RPC_URL not set")
 
     # Check operator key
     key_env = chain_cfg.get("operator_key_env", "CHAIN_PRIVATE_KEY")
     if os.environ.get(key_env):
-        parts.append("Key \u2713")
+        parts.append("Key ok")
     else:
         warnings.append("No operator key")
 
@@ -272,7 +272,7 @@ def check_chain() -> tuple[bool, str, str]:
     try:
         import lit_python_sdk  # noqa: F401
         lit_net = chain_cfg.get("lit", {}).get("network", "naga-dev")
-        parts.append(f"Lit({lit_net}) \u2713")
+        parts.append(f"Lit({lit_net}) ok")
     except ImportError:
         warnings.append("lit-python-sdk not installed")
 
@@ -281,9 +281,9 @@ def check_chain() -> tuple[bool, str, str]:
     id_reg = os.environ.get(erc_cfg.get("identity_registry_env", ""), "")
     rep_reg = os.environ.get(erc_cfg.get("reputation_registry_env", ""), "")
     if id_reg:
-        parts.append("Identity \u2713")
+        parts.append("Identity ok")
     if rep_reg:
-        parts.append("Reputation \u2713")
+        parts.append("Reputation ok")
 
     # Check chain_state for registered agents
     try:
@@ -299,11 +299,11 @@ def check_chain() -> tuple[bool, str, str]:
     # Check Safe
     safe_addr = os.environ.get(chain_cfg.get("safe", {}).get("address_env", ""), "")
     if safe_addr:
-        parts.append("Safe \u2713")
+        parts.append("Safe ok")
 
     # x402
     if chain_cfg.get("x402", {}).get("enabled"):
-        parts.append("x402 \u2713")
+        parts.append("x402 ok")
 
     detail = "  ".join(parts)
     if warnings:
