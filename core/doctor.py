@@ -408,16 +408,26 @@ def _detect_fixable(results: list[tuple[bool, str, str]]) -> list[str]:
     """Detect which optional packages could be auto-installed."""
     fixable = []
     for ok, label, detail in results:
+        detail_lower = detail.lower()
+        # Check failed results for missing packages
         if not ok:
-            detail_lower = detail.lower()
-            if "chromadb" in detail_lower and "not installed" in detail_lower:
+            if "chromadb" in detail_lower and ("not installed" in detail_lower or "not loadable" in detail_lower):
                 fixable.append("chromadb")
             elif "web3" in detail_lower and "not installed" in detail_lower:
                 fixable.append("web3")
             elif "lit" in detail_lower and "not installed" in detail_lower:
                 fixable.append("lit_python_sdk")
-        elif label == "Memory" and "install chromadb" in detail.lower():
-            fixable.append("chromadb")
+        # Also check OK results with optional deps marked as missing
+        if label == "Dependencies" and "missing" in detail_lower:
+            if "vector memory missing" in detail_lower and "chromadb" not in fixable:
+                fixable.append("chromadb")
+            if "erc-8004 chain missing" in detail_lower and "web3" not in fixable:
+                fixable.append("web3")
+            if "lit pkp missing" in detail_lower and "lit_python_sdk" not in fixable:
+                fixable.append("lit_python_sdk")
+        if label == "Memory" and "install chromadb" in detail_lower:
+            if "chromadb" not in fixable:
+                fixable.append("chromadb")
     return fixable
 
 

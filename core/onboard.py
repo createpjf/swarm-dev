@@ -39,7 +39,7 @@ STYLE = Style([
     ("question",    "bold"),
     ("answer",      "fg:#ce93d8 bold"),        # light purple answer
     ("pointer",     "fg:#b388ff bold"),        # purple arrow
-    ("highlighted", "fg:#b388ff bold"),        # purple highlighted
+    ("highlighted", ""),                       # no color on whole row
     ("selected",    "fg:#ce93d8"),             # light purple selected
     ("instruction", "fg:#9e9e9e"),             # gray hint
 ])
@@ -50,6 +50,12 @@ C_OK      = "green"              # success checkmark
 C_DIM     = "dim"                # subtle text
 C_WARN    = "yellow"             # warning
 C_AGENT   = "bold bright_magenta"  # agent names
+
+def _pause(msg: str = "Press Enter to continue..."):
+    """Show a message and wait for Enter before continuing."""
+    console.print()
+    questionary.press_any_key_to_continue(msg, style=STYLE).ask()
+
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -461,7 +467,7 @@ def _wizard_sections():
 
         console.print()
         console.print(f"  [{C_OK}]+[/{C_OK}] Config saved -> {CONFIG_PATH}")
-        # Loop back to section selector
+        _pause("Press Enter to return to configure menu...")
 
     console.print(f"\n  [{C_OK}]+[/{C_OK}] Configuration complete.\n")
 
@@ -790,17 +796,24 @@ def _section_memory(cfg: dict):
         if install:
             console.print(f"  [{C_DIM}]Installing chromadb...[/{C_DIM}]")
             import subprocess
-            result = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "chromadb"],
-                capture_output=True, text=True,
-            )
-            if result.returncode == 0:
-                console.print(f"  [{C_OK}]+[/{C_OK}] ChromaDB installed")
-            else:
-                console.print(f"  [{C_WARN}]Install failed.[/{C_WARN}]")
-                if backend == "hybrid":
-                    console.print(f"  [{C_DIM}]Hybrid will use BM25 only (no vector search).[/{C_DIM}]")
+            try:
+                result = subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "chromadb"],
+                    capture_output=True, text=True, timeout=120,
+                )
+                if result.returncode == 0:
+                    console.print(f"  [{C_OK}]+[/{C_OK}] ChromaDB installed")
                 else:
+                    console.print(f"  [{C_WARN}]Install failed.[/{C_WARN}]")
+                    if result.stderr:
+                        console.print(f"  [{C_DIM}]{result.stderr.strip()[:200]}[/{C_DIM}]")
+                    if backend == "hybrid":
+                        console.print(f"  [{C_DIM}]Hybrid will use BM25 only (no vector search).[/{C_DIM}]")
+                    else:
+                        backend = "mock"
+            except subprocess.TimeoutExpired:
+                console.print(f"  [{C_WARN}]Install timed out.[/{C_WARN}]")
+                if backend != "hybrid":
                     backend = "mock"
 
     cfg.setdefault("memory", {})["backend"] = backend
@@ -985,6 +998,27 @@ def _section_gateway(cfg: dict):
     console.print(f"  [{C_DIM}]Dashboard: http://127.0.0.1:{port}/[/{C_DIM}]")
     console.print(f"  [{C_DIM}]API Base:  http://127.0.0.1:{port}/v1[/{C_DIM}]")
 
+    # Auto-start gateway
+    start_gw = questionary.confirm(
+        "Start gateway now?",
+        default=True,
+        style=STYLE,
+    ).ask()
+    if start_gw:
+        try:
+            from core.gateway import start_gateway
+            server = start_gateway(port=port, token=token, daemon=True)
+            if server:
+                console.print(f"  [{C_OK}]+[/{C_OK}] Gateway started on port {port}")
+                import webbrowser
+                url = f"http://127.0.0.1:{port}/"
+                webbrowser.open(url)
+                console.print(f"  [{C_DIM}]Opened dashboard in browser[/{C_DIM}]")
+            else:
+                console.print(f"  [{C_WARN}]Gateway failed to start.[/{C_WARN}]")
+        except Exception as e:
+            console.print(f"  [{C_WARN}]Gateway start error: {e}[/{C_WARN}]")
+
 
 def _section_chain(cfg: dict):
     """Section: On-chain reputation toggle."""
@@ -999,19 +1033,68 @@ def _section_chain(cfg: dict):
     if new_val is None:
         return
 
-    cfg.setdefault("chain", {})["enabled"] = new_val
-
     if new_val:
-        rpc = os.environ.get("RPC_URL", "")
-        if not rpc:
-            rpc_val = questionary.text(
-                "RPC URL (for chain access):",
-                default="",
+        # Check web3 dependency
+        try:
+            import web3  # noqa: F401
+            console.print(f"  [{C_OK}]+[/{C_OK}] web3 installed")
+        except ImportError:
+            console.print(f"  [{C_WARN}]web3 is required for chain features.[/{C_WARN}]")
+            install = questionary.confirm(
+                "Install web3 now? (pip install web3)",
+                default=True,
                 style=STYLE,
             ).ask()
-            if rpc_val:
-                _write_env("RPC_URL", rpc_val)
+            if install:
+                import subprocess
+                console.print(f"  [{C_DIM}]Installing web3...[/{C_DIM}]")
+                result = subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "web3"],
+                    capture_output=True, text=True, timeout=120,
+                )
+                if result.returncode == 0:
+                    console.print(f"  [{C_OK}]+[/{C_OK}] web3 installed")
+                else:
+                    console.print(f"  [{C_WARN}]Install failed.[/{C_WARN}]")
+                    if result.stderr:
+                        console.print(f"  [{C_DIM}]{result.stderr.strip()[:200]}[/{C_DIM}]")
+                    console.print(f"  [{C_DIM}]Chain disabled — install web3 manually and retry.[/{C_DIM}]")
+                    cfg.setdefault("chain", {})["enabled"] = False
+                    console.print(f"  [{C_OK}]+[/{C_OK}] Chain: disabled")
+                    return
+            else:
+                console.print(f"  [{C_DIM}]Chain disabled — web3 is required.[/{C_DIM}]")
+                cfg.setdefault("chain", {})["enabled"] = False
+                console.print(f"  [{C_OK}]+[/{C_OK}] Chain: disabled")
+                return
 
+        # Require RPC URL
+        rpc = os.environ.get("RPC_URL", "")
+        if rpc:
+            console.print(f"  [{C_DIM}]RPC URL: {rpc}[/{C_DIM}]")
+            change = questionary.confirm(
+                "Change RPC URL?",
+                default=False,
+                style=STYLE,
+            ).ask()
+            if change:
+                rpc = ""  # fall through to ask below
+
+        if not rpc:
+            rpc_val = questionary.text(
+                "RPC URL (required for chain access):",
+                default="https://rpc.ankr.com/eth",
+                style=STYLE,
+            ).ask()
+            if not rpc_val or not rpc_val.strip():
+                console.print(f"  [{C_WARN}]No RPC URL provided — chain disabled.[/{C_WARN}]")
+                cfg.setdefault("chain", {})["enabled"] = False
+                console.print(f"  [{C_OK}]+[/{C_OK}] Chain: disabled")
+                return
+            _write_env("RPC_URL", rpc_val.strip())
+            console.print(f"  [{C_OK}]+[/{C_OK}] RPC URL saved")
+
+    cfg.setdefault("chain", {})["enabled"] = new_val
     console.print(f"  [{C_OK}]+[/{C_OK}] Chain: {'enabled' if new_val else 'disabled'}")
 
 
@@ -1298,7 +1381,13 @@ def _section_health(cfg: dict):
     """Section: Run health check."""
     from core.doctor import run_doctor
     console.print()
-    run_doctor(rich_console=console)
+    results = run_doctor(rich_console=console)
+    ok_count = sum(1 for ok, _, _ in results if ok)
+    total = len(results)
+    if ok_count == total:
+        console.print(f"  [{C_OK}]+[/{C_OK}] All {total} checks passed.")
+    else:
+        console.print(f"  [{C_WARN}]{total - ok_count} of {total} checks need attention.[/{C_WARN}]")
 
 
 # Handler mapping
