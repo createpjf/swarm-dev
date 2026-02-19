@@ -377,87 +377,96 @@ def _wizard_advanced():
 
 # Section definitions: (value, label, description, icon)
 _SECTIONS = [
+    # (value, label, description, icon)
+    # NOTE: icons must all be single-emoji (no variation selectors) for alignment
     ("model",       "Model",       "Change LLM provider, API key, or default model", "🤖"),
     ("agents",      "Agents",      "Add, remove, or edit individual agents",          "👥"),
     ("skills",      "Skills",      "Install, manage, and assign agent skills",        "📚"),
     ("memory",      "Memory",      "Switch memory backend (mock / chroma / hybrid)",  "🧠"),
-    ("resilience",  "Resilience",  "Retry count, circuit breaker, backoff timing",    "🛡️"),
+    ("resilience",  "Resilience",  "Retry count, circuit breaker, backoff timing",    "🛡"),
     ("compaction",  "Compaction",  "Context window compaction settings",              "📦"),
     ("gateway",     "Gateway",     "Port, auth token, daemon settings",               "🌐"),
-    ("chain",       "Chain",       "On-chain reputation (ERC-8004)",                  "⛓️"),
+    ("chain",       "Chain",       "On-chain reputation (ERC-8004)",                  "⛓"),
     ("health",      "Health check","Run doctor diagnostics",                          "🩺"),
 ]
 
 
 def _wizard_sections():
-    """OpenClaw-style sectional configure — multi-select which sections to edit."""
-    console.print()
-
-    # ── Section selector (checkbox) ──
-    choices = [
-        questionary.Choice(
-            f"{icon} {label}  ({desc})",
-            value=value,
-            checked=False,
-        )
-        for value, label, desc, icon in _SECTIONS
-    ]
-
-    selected = questionary.checkbox(
-        "Select sections to configure:",
-        choices=choices,
-        style=STYLE,
-    ).ask()
-
-    if selected is None:
-        console.print(f"\n  [{C_WARN}]Cancelled.[/{C_WARN}]\n")
-        return
-    if not selected:
-        console.print(f"\n  [{C_DIM}]No sections selected. No changes made.[/{C_DIM}]\n")
-        return
-
-    # Load current config
-    with open(CONFIG_PATH) as f:
-        cfg = yaml.safe_load(f) or {}
-
-    # ── Run each selected section handler ──
-    # Build section icon lookup
+    """OpenClaw-style sectional configure — loop until user exits."""
     _icon_map = {v: ic for v, _, _, ic in _SECTIONS}
     _label_map = {v: lb for v, lb, _, _ in _SECTIONS}
 
-    for i, section in enumerate(selected):
-        icon  = _icon_map.get(section, "⚙️")
-        label = _label_map.get(section, section.title())
-
-        # Section separator
-        console.print()
-        console.print(f"  [{C_ACCENT}]{'─' * 50}[/{C_ACCENT}]")
-        console.print(f"  {icon}  [{C_ACCENT}]{label}[/{C_ACCENT}]"
-                       f"  [{C_DIM}]({i+1}/{len(selected)})[/{C_DIM}]")
-        console.print(f"  [{C_ACCENT}]{'─' * 50}[/{C_ACCENT}]")
+    while True:
         console.print()
 
-        handler = _SECTION_HANDLERS.get(section)
-        if handler:
-            handler(cfg)
-        else:
-            console.print(f"  [{C_WARN}]No handler for section: {section}[/{C_WARN}]")
+        # ── Section selector (checkbox) ──
+        choices = [
+            questionary.Choice(
+                f"{icon} {label:<14s}({desc})",
+                value=value,
+                checked=False,
+            )
+            for value, label, desc, icon in _SECTIONS
+        ]
+        choices.append(questionary.Choice(
+            "✅ Done — save & exit",
+            value="_exit",
+            checked=False,
+        ))
 
-    # ── Write updated config ──
-    os.makedirs("config", exist_ok=True)
-    with open(CONFIG_PATH, "w") as f:
-        f.write("# config/agents.yaml\n\n")
-        yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+        selected = questionary.checkbox(
+            "Select sections to configure (or Done to exit):",
+            choices=choices,
+            style=STYLE,
+        ).ask()
 
-    # Auto-generate team skill after config save
-    try:
-        from core.team_skill import generate_team_skill
-        generate_team_skill()
-    except Exception:
-        pass
+        if selected is None:
+            console.print(f"\n  [{C_WARN}]Cancelled.[/{C_WARN}]\n")
+            return
+        if "_exit" in selected or not selected:
+            break
 
-    console.print()
-    console.print(f"  [{C_OK}]✓[/{C_OK}] Config saved → {CONFIG_PATH}\n")
+        # Load current config
+        with open(CONFIG_PATH) as f:
+            cfg = yaml.safe_load(f) or {}
+
+        # ── Run each selected section handler ──
+        for i, section in enumerate(selected):
+            icon  = _icon_map.get(section, "⚙️")
+            label = _label_map.get(section, section.title())
+
+            # Section separator
+            console.print()
+            console.print(f"  [{C_ACCENT}]{'─' * 50}[/{C_ACCENT}]")
+            console.print(f"  {icon}  [{C_ACCENT}]{label}[/{C_ACCENT}]"
+                           f"  [{C_DIM}]({i+1}/{len(selected)})[/{C_DIM}]")
+            console.print(f"  [{C_ACCENT}]{'─' * 50}[/{C_ACCENT}]")
+            console.print()
+
+            handler = _SECTION_HANDLERS.get(section)
+            if handler:
+                handler(cfg)
+            else:
+                console.print(f"  [{C_WARN}]No handler for section: {section}[/{C_WARN}]")
+
+        # ── Write updated config after each round ──
+        os.makedirs("config", exist_ok=True)
+        with open(CONFIG_PATH, "w") as f:
+            f.write("# config/agents.yaml\n\n")
+            yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+        # Auto-generate team skill after config save
+        try:
+            from core.team_skill import generate_team_skill
+            generate_team_skill()
+        except Exception:
+            pass
+
+        console.print()
+        console.print(f"  [{C_OK}]✓[/{C_OK}] Config saved → {CONFIG_PATH}")
+        # Loop back to section selector
+
+    console.print(f"\n  [{C_OK}]✓[/{C_OK}] Configuration complete.\n")
 
 
 def _section_model(cfg: dict):
