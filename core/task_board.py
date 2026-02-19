@@ -86,6 +86,7 @@ class TaskStatus(str, Enum):
     PENDING   = "pending"
     CLAIMED   = "claimed"
     REVIEW    = "review"      # waiting for peer review
+    CRITIQUE  = "critique"    # advisor gave fix suggestions, awaiting executor revision
     COMPLETED = "completed"
     FAILED    = "failed"
     BLOCKED   = "blocked"     # waiting for dependency
@@ -110,6 +111,9 @@ class Task:
     retry_count:     int = 0                      # number of retries
     review_scores:   list[dict] = field(default_factory=list)   # [{reviewer, score, comment}]
     evolution_flags: list[str] = field(default_factory=list)    # error tags
+    complexity:      str = "normal"                             # "simple" | "normal" | "complex"
+    critique:        dict | None = None                         # {reviewer, passed, suggestions, comment, ts}
+    critique_round:  int = 0                                    # current revision round (max=1)
 
     def to_dict(self) -> dict:
         return {
@@ -128,6 +132,9 @@ class Task:
             "retry_count":    self.retry_count,
             "review_scores":  self.review_scores,
             "evolution_flags":self.evolution_flags,
+            "complexity":     self.complexity,
+            "critique":       self.critique,
+            "critique_round": self.critique_round,
         }
 
     @classmethod
@@ -143,6 +150,9 @@ class Task:
         d.setdefault("required_role", None)
         d.setdefault("review_submitted_at", None)
         d.setdefault("retry_count", 0)
+        d.setdefault("complexity", "normal")
+        d.setdefault("critique", None)
+        d.setdefault("critique_round", 0)
         # Remove internal bookkeeping fields not in dataclass
         d.pop("_paused_from", None)
         return cls(**d)
@@ -251,27 +261,56 @@ class TaskBoard:
             })
             self._write(data)
 
+    def add_critique(self, task_id: str, reviewer_id: str,
+                     passed: bool, suggestions: list[str], comment: str):
+        """Advisor submits structured critique: pass or reject with fix suggestions."""
+        with self.lock:
+            data = self._read()
+            t = data.get(task_id)
+            if not t:
+                logger.warning("add_critique: task %s not found", task_id)
+                return
+            t["critique"] = {
+                "reviewer": reviewer_id,
+                "passed": passed,
+                "suggestions": suggestions or [],
+                "comment": comment,
+                "ts": time.time(),
+            }
+            if passed:
+                t["status"] = TaskStatus.COMPLETED.value
+                t["completed_at"] = time.time()
+            else:
+                t["status"] = TaskStatus.CRITIQUE.value
+                t["critique_round"] = t.get("critique_round", 0) + 1
+            self._write(data)
+
+    def claim_critique(self, agent_id: str,
+                       agent_role: str | None = None) -> Optional[Task]:
+        """Executor claims a CRITIQUE task for targeted revision.
+        Only the original executor can claim their own critique tasks."""
+        with self.lock:
+            data = self._read()
+            for tid, t in data.items():
+                if t["status"] != TaskStatus.CRITIQUE.value:
+                    continue
+                # Only the original executor can fix their own work
+                if t.get("agent_id") != agent_id:
+                    continue
+                t["status"] = TaskStatus.CLAIMED.value
+                t["claimed_at"] = time.time()
+                self._write(data)
+                return Task.from_dict(t)
+        return None
+
     def complete(self, task_id: str) -> Optional[Task]:
-        """Hook: TaskCompleted — only mark done if review passed."""
+        """Mark task as completed. Simplified: no score-based rejection."""
         with self.lock:
             data = self._read()
             t = data.get(task_id)
             if not t:
                 logger.warning("complete: task %s not found", task_id)
                 return None
-            avg = self._avg_review_score(t)
-            if avg < 60:
-                # Phase 4 fix: send back to PENDING (not CLAIMED)
-                # so task re-enters the claimable pool
-                t["status"]    = TaskStatus.PENDING.value
-                t["agent_id"]  = None
-                t["claimed_at"] = None
-                t["review_submitted_at"] = None
-                t.setdefault("retry_count", 0)
-                t["retry_count"] += 1
-                t.setdefault("evolution_flags", []).append("review_failed")
-                self._write(data)
-                return Task.from_dict(t)
             t["status"]       = TaskStatus.COMPLETED.value
             t["completed_at"] = time.time()
             self._write(data)
@@ -400,26 +439,13 @@ class TaskBoard:
                         logger.warning(
                             "Recovered stale CLAIMED task %s (age=%.0fs)",
                             tid, now - claimed_at)
-                # Stale REVIEW: reviewer crashed
+                # Stale REVIEW: reviewer/advisor crashed
                 elif status == TaskStatus.REVIEW.value:
                     review_at = t.get("review_submitted_at") or t.get("claimed_at", 0)
                     if review_at and (now - review_at) > REVIEW_TIMEOUT:
-                        # Auto-complete with existing review or pass-through
-                        scores = t.get("review_scores", [])
-                        if scores:
-                            avg = self._avg_review_score(t)
-                            if avg >= 60:
-                                t["status"]       = TaskStatus.COMPLETED.value
-                                t["completed_at"] = time.time()
-                            else:
-                                t["status"]    = TaskStatus.PENDING.value
-                                t["agent_id"]  = None
-                                t["claimed_at"] = None
-                                t["review_submitted_at"] = None
-                        else:
-                            # No reviews arrived — auto-complete
-                            t["status"]       = TaskStatus.COMPLETED.value
-                            t["completed_at"] = time.time()
+                        # No critique arrived — auto-complete with existing result
+                        t["status"]       = TaskStatus.COMPLETED.value
+                        t["completed_at"] = time.time()
                         t.setdefault("evolution_flags", []).append(
                             "timeout_recovered:review")
                         recovered.append(tid)
@@ -427,6 +453,20 @@ class TaskBoard:
                         logger.warning(
                             "Recovered stale REVIEW task %s (age=%.0fs)",
                             tid, now - review_at)
+                # Stale CRITIQUE: executor didn't pick up revision
+                elif status == TaskStatus.CRITIQUE.value:
+                    critique_ts = (t.get("critique") or {}).get("ts", 0)
+                    if critique_ts and (now - critique_ts) > CLAIMED_TIMEOUT:
+                        # Force complete with original result
+                        t["status"]       = TaskStatus.COMPLETED.value
+                        t["completed_at"] = time.time()
+                        t.setdefault("evolution_flags", []).append(
+                            "timeout_recovered:critique")
+                        recovered.append(tid)
+                        changed = True
+                        logger.warning(
+                            "Recovered stale CRITIQUE task %s (age=%.0fs)",
+                            tid, now - critique_ts)
             if changed:
                 self._write(data)
         return recovered
@@ -502,7 +542,7 @@ class TaskBoard:
         with self.lock:
             data = self._read()
             if not force:
-                active_states = {"pending", "claimed", "review", "blocked", "paused"}
+                active_states = {"pending", "claimed", "review", "critique", "blocked", "paused"}
                 active = sum(1 for t in data.values()
                              if t.get("status") in active_states)
                 if active > 0:

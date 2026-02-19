@@ -133,6 +133,14 @@ class PeerReviewAggregator:
 
             self._write_history(history)
 
+    # ── Critique Recording ──────────────────────────────────────────────
+
+    def record_critique(self, reviewer_id: str, target_id: str,
+                        passed: bool, suggestion_count: int = 0):
+        """Record a critique decision for anti-gaming analysis."""
+        score = 100 if passed else 30  # Map to legacy score range
+        self.record_review(reviewer_id, target_id, score)
+
     # ── Anti-Gaming Detection ─────────────────────────────────────────────
 
     def _detect_mutual_inflation(self, reviewer_id: str, target_id: str,
@@ -160,6 +168,7 @@ class PeerReviewAggregator:
         """
         Measure how much a reviewer deviates from peer consensus.
         Returns average |reviewer_score - target_avg| across recent reviews.
+        Note: with a single reviewer, this typically returns 0.
         """
         reviewer_reviews = history.get("reviewers", {}).get(reviewer_id, [])
         if len(reviewer_reviews) < 5:
@@ -183,6 +192,7 @@ class PeerReviewAggregator:
     def _detect_extreme_bias(self, reviewer_id: str, history: dict) -> bool:
         """
         True if >70% of recent scores are <10 or >90.
+        In critique mode: always_pass_bias (>80% pass rate → warning).
         """
         reviews = history.get("reviewers", {}).get(reviewer_id, [])
         if len(reviews) < 5:
@@ -191,6 +201,16 @@ class PeerReviewAggregator:
         recent = reviews[-20:]
         extreme = sum(1 for r in recent if r["score"] < 10 or r["score"] > 90)
         return extreme / len(recent) > 0.7
+
+    def _detect_always_pass_bias(self, reviewer_id: str, history: dict) -> bool:
+        """True if reviewer passes >80% of tasks (too lenient)."""
+        reviews = history.get("reviewers", {}).get(reviewer_id, [])
+        if len(reviews) < 5:
+            return False
+        recent = reviews[-20:]
+        # In critique mode, high scores (>=70) mean "passed"
+        pass_count = sum(1 for r in recent if r["score"] >= 70)
+        return pass_count / len(recent) > 0.8
 
     def get_reviewer_stats(self, reviewer_id: str) -> dict:
         """Get anti-gaming stats for a reviewer (for dashboard/API)."""
@@ -212,6 +232,7 @@ class PeerReviewAggregator:
             "consensus_deviation": round(
                 self._get_consensus_deviation(reviewer_id, history), 1),
             "extreme_bias": self._detect_extreme_bias(reviewer_id, history),
+            "always_pass_bias": self._detect_always_pass_bias(reviewer_id, history),
         }
 
     # ── Persistence ───────────────────────────────────────────────────────

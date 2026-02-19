@@ -45,17 +45,17 @@ class TestTaskBoardBasics:
         completed = board.complete(task.task_id)
         assert completed.status == TaskStatus.COMPLETED
 
-    def test_review_failed_returns_to_pending(self, tmp_workdir):
+    def test_complete_simplified(self, tmp_workdir):
+        """complete() now always marks as completed (no score-based rejection)."""
         board = TaskBoard()
         task = board.create("test task")
         board.claim_next("executor")
-        board.submit_for_review(task.task_id, "bad result")
+        board.submit_for_review(task.task_id, "result")
         board.add_review(task.task_id, "reviewer", 30, "bad")
 
         result = board.complete(task.task_id)
-        assert result.status == TaskStatus.PENDING
-        assert "review_failed" in result.evolution_flags
-        assert result.retry_count == 1
+        # Simplified: always completes regardless of score
+        assert result.status == TaskStatus.COMPLETED
 
     def test_fail_task(self, tmp_workdir):
         board = TaskBoard()
@@ -258,3 +258,157 @@ class TestResultAttribution:
         result = board.collect_results(t1.task_id)
         assert "agent:executor" in result
         assert "code output here" in result
+
+
+class TestCritiqueFlow:
+    """Test the new critique-based review flow."""
+
+    def test_critique_passed(self, tmp_workdir):
+        """Critique passed → directly completed."""
+        board = TaskBoard()
+        task = board.create("test task")
+        board.claim_next("executor")
+        board.submit_for_review(task.task_id, "good result")
+
+        board.add_critique(task.task_id, "reviewer", True, [], "looks great")
+        t = board.get(task.task_id)
+        assert t.status == TaskStatus.COMPLETED
+        assert t.completed_at is not None
+
+        # Check critique data
+        data = board._read()
+        critique = data[task.task_id]["critique"]
+        assert critique["passed"] is True
+        assert critique["reviewer"] == "reviewer"
+        assert critique["comment"] == "looks great"
+
+    def test_critique_rejected(self, tmp_workdir):
+        """Critique not passed → CRITIQUE status with suggestions."""
+        board = TaskBoard()
+        task = board.create("test task")
+        board.claim_next("executor")
+        board.submit_for_review(task.task_id, "mediocre result")
+
+        board.add_critique(
+            task.task_id, "reviewer", False,
+            ["fix bug in line 5", "add error handling"], "needs work"
+        )
+        t = board.get(task.task_id)
+        assert t.status == TaskStatus.CRITIQUE
+
+        data = board._read()
+        assert data[task.task_id]["critique_round"] == 1
+        critique = data[task.task_id]["critique"]
+        assert critique["passed"] is False
+        assert len(critique["suggestions"]) == 2
+
+    def test_critique_flow_full(self, tmp_workdir):
+        """Full flow: submit → critique(reject) → claim_critique → fix → complete."""
+        board = TaskBoard()
+        task = board.create("test task")
+        board.claim_next("executor")
+        board.submit_for_review(task.task_id, "initial result")
+
+        # Advisor rejects
+        board.add_critique(
+            task.task_id, "reviewer", False,
+            ["fix X"], "not good enough"
+        )
+        assert board.get(task.task_id).status == TaskStatus.CRITIQUE
+
+        # Executor claims critique task for revision
+        critique_task = board.claim_critique("executor")
+        assert critique_task is not None
+        assert critique_task.task_id == task.task_id
+        assert critique_task.status == TaskStatus.CLAIMED
+
+        # Executor submits revised result and completes
+        board.submit_for_review(task.task_id, "fixed result")
+        board.complete(task.task_id)
+        t = board.get(task.task_id)
+        assert t.status == TaskStatus.COMPLETED
+        assert t.result == "fixed result"
+
+    def test_claim_critique_only_original_executor(self, tmp_workdir):
+        """Only the original executor can claim their critique task."""
+        board = TaskBoard()
+        task = board.create("test task")
+        board.claim_next("executor")
+        board.submit_for_review(task.task_id, "result")
+
+        board.add_critique(task.task_id, "reviewer", False, ["fix it"], "bad")
+
+        # Different agent cannot claim
+        other = board.claim_critique("planner")
+        assert other is None
+
+        # Original executor can claim
+        mine = board.claim_critique("executor")
+        assert mine is not None
+
+    def test_simple_task_skip_review(self, tmp_workdir):
+        """Simple complexity tasks: verify the complexity field is stored."""
+        board = TaskBoard()
+        task = board.create("list all items")
+
+        # Set complexity via raw data (simulating what orchestrator does)
+        with board.lock:
+            data = board._read()
+            data[task.task_id]["complexity"] = "simple"
+            board._write(data)
+
+        data = board._read()
+        assert data[task.task_id]["complexity"] == "simple"
+
+    def test_critique_max_rounds(self, tmp_workdir):
+        """After max critique rounds, task can be force-completed."""
+        board = TaskBoard()
+        task = board.create("test task")
+        board.claim_next("executor")
+        board.submit_for_review(task.task_id, "initial")
+
+        # First critique round
+        board.add_critique(task.task_id, "reviewer", False, ["fix A"], "round 1")
+        data = board._read()
+        assert data[task.task_id]["critique_round"] == 1
+
+        # Executor claims, fixes, resubmits
+        board.claim_critique("executor")
+        board.submit_for_review(task.task_id, "fixed result")
+
+        # Force complete after max rounds
+        board.complete(task.task_id)
+        t = board.get(task.task_id)
+        assert t.status == TaskStatus.COMPLETED
+
+    def test_recover_stale_critique(self, tmp_workdir):
+        """Stale CRITIQUE tasks are force-completed after timeout."""
+        board = TaskBoard()
+        task = board.create("test task")
+        board.claim_next("executor")
+        board.submit_for_review(task.task_id, "result")
+
+        board.add_critique(task.task_id, "reviewer", False, ["fix it"], "bad")
+        assert board.get(task.task_id).status == TaskStatus.CRITIQUE
+
+        # Simulate stale: set critique ts far in the past
+        data = board._read()
+        data[task.task_id]["critique"]["ts"] = time.time() - CLAIMED_TIMEOUT - 10
+        board._write(data)
+
+        recovered = board.recover_stale_tasks()
+        assert task.task_id in recovered
+
+        t = board.get(task.task_id)
+        assert t.status == TaskStatus.COMPLETED
+        assert "timeout_recovered:critique" in t.evolution_flags
+
+    def test_add_critique_nonexistent(self, tmp_workdir):
+        """add_critique on nonexistent task should not raise."""
+        board = TaskBoard()
+        board.add_critique("nonexistent", "reviewer", True, [], "ok")
+
+    def test_claim_critique_none_available(self, tmp_workdir):
+        """claim_critique returns None when no critique tasks exist."""
+        board = TaskBoard()
+        assert board.claim_critique("executor") is None

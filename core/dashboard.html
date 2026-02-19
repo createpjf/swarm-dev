@@ -111,6 +111,7 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .status-failed{color:var(--red)}
 .status-pending{color:var(--fg3)}
 .status-review{color:var(--magenta)}
+.status-critique{color:var(--yellow,#f59e0b)}
 .task-desc{max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .task-time{font-family:var(--mono);font-size:12px;color:var(--fg2)}
 .task-agent{font-weight:500}
@@ -549,7 +550,7 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
     <div class="ov-agents" id="ovAgents">
       <div class="ov-agent-chip" id="chipPlanner"><span class="chip-icon">📋</span><span class="chip-name">Planner</span><span class="chip-dot"></span></div>
       <div class="ov-agent-chip" id="chipExecutor"><span class="chip-icon">⚙️</span><span class="chip-name">Executor</span><span class="chip-dot"></span></div>
-      <div class="ov-agent-chip" id="chipReviewer"><span class="chip-icon">🔍</span><span class="chip-name">Reviewer</span><span class="chip-dot"></span></div>
+      <div class="ov-agent-chip" id="chipReviewer"><span class="chip-icon">🧠</span><span class="chip-name">Advisor</span><span class="chip-dot"></span></div>
     </div>
   </div>
 
@@ -568,7 +569,7 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
       <div class="chat-welcome">
         <div class="chat-welcome-icon">⬡</div>
         <div class="chat-welcome-text">What can I help you with?</div>
-        <div class="chat-welcome-sub">Your task will be planned, executed, and reviewed by the Swarm agent team</div>
+        <div class="chat-welcome-sub">Your task will be planned, executed, and quality-checked by the Swarm agent team</div>
       </div>
     </div>
     <div class="chat-input-area">
@@ -921,6 +922,7 @@ function statusIcon(status) {
     case 'completed': return '<span class="status-icon status-done">✓</span>';
     case 'failed': return '<span class="status-icon status-failed">✗</span>';
     case 'review': return '<span class="status-icon status-review">◆</span>';
+    case 'critique': return '<span class="status-icon status-critique">⚠</span>';
     default: return '<span class="status-icon status-pending">○</span>';
   }
 }
@@ -1037,7 +1039,7 @@ function updateAgentStatusDots() {
 const AGENT_META = {
   planner:  {emoji:'📋', color:'var(--cyan)',    cls:'planner'},
   executor: {emoji:'⚙️', color:'var(--green)',   cls:'executor'},
-  reviewer: {emoji:'🔍', color:'var(--magenta)', cls:'reviewer'},
+  reviewer: {emoji:'🧠', color:'var(--magenta)', cls:'reviewer'},
   search:   {emoji:'🌐', color:'var(--cyan)',    cls:'planner'},
 };
 
@@ -1167,7 +1169,7 @@ function updateHeaderStatuses() {
   for (const d of latest.reverse()) {
     const agentCls = d.agent ? d.agent.toLowerCase().replace(/[^a-z]/g,'') : '';
     const colorCls = agentCls.includes('planner') ? 'planner-d' : agentCls.includes('executor') ? 'executor-d' : agentCls.includes('reviewer') ? 'reviewer-d' : '';
-    const icon = agentCls.includes('planner') ? '📋' : agentCls.includes('executor') ? '⚙️' : agentCls.includes('reviewer') ? '🔍' : '▸';
+    const icon = agentCls.includes('planner') ? '📋' : agentCls.includes('executor') ? '⚙️' : agentCls.includes('reviewer') ? '🧠' : '▸';
     html += '<div class="ov-status-item">'
       + '<span class="status-icon">' + icon + '</span>'
       + '<span class="status-agent ' + colorCls + '">' + escHtml(d.agent||'system') + '</span>'
@@ -1202,9 +1204,25 @@ function renderChatMsgHtml(m) {
     const resultText = m.result || m.text || '';
     // Format the result nicely
     let bodyHtml = formatResultBody(resultText);
-    // Score line
+    // Critique / Score line
     let scoreHtml = '';
-    if (m.score != null) {
+    if (m.critique) {
+      const cr = m.critique;
+      if (cr.passed) {
+        scoreHtml = '<div style="margin-top:8px"><span class="chat-score" style="background:rgba(34,197,94,.12);color:var(--green)">✓ Approved</span>';
+        if (cr.comment) scoreHtml += ' <span style="font-size:11px;color:var(--fg2)">' + escHtml(truncate(cr.comment, 120)) + '</span>';
+        scoreHtml += '</div>';
+      } else {
+        scoreHtml = '<div style="margin-top:8px"><span class="chat-score" style="background:rgba(239,68,68,.12);color:var(--red)">⚠ Revised</span>';
+        if (cr.comment) scoreHtml += ' <span style="font-size:11px;color:var(--fg2)">' + escHtml(truncate(cr.comment, 120)) + '</span>';
+        if (cr.suggestions && cr.suggestions.length) {
+          scoreHtml += '<ul style="margin:4px 0 0 16px;font-size:11px;color:var(--fg2)">';
+          for (const s of cr.suggestions) scoreHtml += '<li>' + escHtml(s) + '</li>';
+          scoreHtml += '</ul>';
+        }
+        scoreHtml += '</div>';
+      }
+    } else if (m.score != null) {
       const c = scoreColor(m.score);
       scoreHtml = '<div style="margin-top:8px"><span class="chat-score" style="background:rgba(124,108,240,.1);color:' + c + '">'
         + m.score + '/100</span>';
@@ -1377,7 +1395,7 @@ function renderChat() {
     chatLastRenderedIdx = 0;
     container.innerHTML = '<div class="chat-welcome"><div class="chat-welcome-icon">⬡</div>'
       + '<div class="chat-welcome-text">What can I help you with?</div>'
-      + '<div class="chat-welcome-sub">Your task will be planned, executed, and reviewed by the Swarm agent team</div></div>';
+      + '<div class="chat-welcome-sub">Your task will be planned, executed, and quality-checked by the Swarm agent team</div></div>';
     return;
   }
   // First render: replace welcome
@@ -1575,7 +1593,7 @@ function findTokensForAgent(agentId, claimedAt, completedAt) {
       out.execIn += c.prompt_tokens || 0;
       out.execOut += c.completion_tokens || 0;
     }
-    if (cAid === 'reviewer' && aid !== 'reviewer') {
+    if ((cAid === 'reviewer' || cAid === 'advisor') && aid !== 'reviewer' && aid !== 'advisor') {
       out.reviewIn += c.prompt_tokens || 0;
       out.reviewOut += c.completion_tokens || 0;
     }
@@ -1683,46 +1701,74 @@ function diffAndRoute(prev, current) {
     if (newStatus === 'review' && oldStatus !== 'review' && !seen.has('review')) {
       seen.add('review');
       const agentTokens = findTokensForAgent(agent, task.claimed_at);
+      const isSimple = (task.complexity === 'simple');
       if (task.result) {
         seen.add('result_shown');
-        addDispatch('📝', agent, 'Implementation done → review', {
+        addDispatch('📝', agent, isSimple ? 'Done (auto-completed)' : 'Done → advisor review', {
           taskId, result: task.result,
           promptTokens: agentTokens.execIn, completionTokens: agentTokens.execOut,
         });
       } else {
-        addDispatch('📤', agent, 'Sent to review', {taskId});
+        addDispatch('📤', agent, '🧠 Sent to advisor', {taskId});
       }
-      firePacket(2, 'reviewer');
+      if (!isSimple) firePacket(2, 'reviewer');
     }
 
-    // ── Completed → review score → TOP, final result → BOTTOM ──
+    // ── Critique → executor needs to fix ──
+    if (newStatus === 'critique' && oldStatus !== 'critique' && !seen.has('critique')) {
+      seen.add('critique');
+      const critique = task.critique || {};
+      const sugCount = (critique.suggestions || []).length;
+      const preview = sugCount ? sugCount + ' suggestion' + (sugCount > 1 ? 's' : '') : '';
+      addDispatch('⚠', critique.reviewer || 'advisor', 'Needs revision: ' + preview, {taskId});
+    }
+
+    // ── Completed → critique/review result → TOP, final result → BOTTOM ──
     if (newStatus === 'completed' && !seen.has('completed')) {
       seen.add('completed');
       const agentTokens = findTokensForAgent(agent, task.claimed_at, task.completed_at);
 
-      // Review score → TOP dispatch
-      const scores = task.review_scores || [];
-      if (scores.length) {
-        const last = scores[scores.length - 1];
-        addDispatch('⭐', last.reviewer || 'reviewer', 'Reviewed', {
-          taskId, score: last.score, scoreComment: last.comment,
-          promptTokens: agentTokens.reviewIn, completionTokens: agentTokens.reviewOut,
-        });
+      // Critique/review result → TOP dispatch
+      const critique = task.critique;
+      if (critique) {
+        const advisorId = critique.reviewer || 'advisor';
+        if (critique.passed) {
+          addDispatch('✓', advisorId, 'Approved', {
+            taskId,
+            promptTokens: agentTokens.reviewIn, completionTokens: agentTokens.reviewOut,
+          });
+        } else {
+          addDispatch('🧠', advisorId, 'Revised & completed', {taskId});
+        }
+      } else {
+        // Legacy: numeric scores
+        const scores = task.review_scores || [];
+        if (scores.length) {
+          const last = scores[scores.length - 1];
+          addDispatch('⭐', last.reviewer || 'reviewer', 'Reviewed', {
+            taskId, score: last.score, scoreComment: last.comment,
+            promptTokens: agentTokens.reviewIn, completionTokens: agentTokens.reviewOut,
+          });
+        }
       }
 
-      // Completion marker → TOP dispatch
-      addDispatch('✓', agent, 'Task completed', {taskId});
+      // Simple task marker
+      if (task.complexity === 'simple') {
+        addDispatch('⚡', agent, 'Simple task auto-completed', {taskId});
+      } else {
+        addDispatch('✓', agent, 'Task completed', {taskId});
+      }
 
       // ── FINAL RESULT → BOTTOM chatbox as assistant message ──
       if (task.result) {
         seen.add('result_shown');
         const totalIn = agentTokens.execIn + agentTokens.reviewIn;
         const totalOut = agentTokens.execOut + agentTokens.reviewOut;
-        const lastScore = scores.length ? scores[scores.length-1] : null;
         addChatMsg('assistant', task.result, {
           agent, taskId, result: task.result,
-          score: lastScore ? lastScore.score : null,
-          scoreComment: lastScore ? lastScore.comment : null,
+          critique: critique || null,
+          score: critique ? null : (task.review_scores && task.review_scores.length ? task.review_scores[task.review_scores.length-1].score : null),
+          scoreComment: critique ? null : (task.review_scores && task.review_scores.length ? task.review_scores[task.review_scores.length-1].comment : null),
           promptTokens: totalIn || null,
           completionTokens: totalOut || null,
         });
@@ -1783,13 +1829,14 @@ function updateWorkflow(tasks) {
   entries.forEach(t => {
     if (t.status === 'completed') done++;
     else if (t.status === 'failed') failed++;
-    else if (t.status === 'claimed' || t.status === 'review') {
+    else if (t.status === 'claimed' || t.status === 'review' || t.status === 'critique') {
       working++;
       const aid = (t.agent_id || '').toLowerCase();
       if (aid === 'planner') activePlanner = true;
       else if (aid === 'executor') activeExecutor = true;
       else if (aid === 'reviewer') activeReviewer = true;
       if (t.status === 'review') activeReviewer = true;
+      if (t.status === 'critique') { activeExecutor = true; }
     }
   });
 
