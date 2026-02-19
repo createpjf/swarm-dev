@@ -1959,12 +1959,25 @@ def _detect_existing_config() -> str:
         return "modify"
 
 
+def _detect_ollama_running() -> bool:
+    """Probe localhost:11434 to check if Ollama is running."""
+    try:
+        import httpx
+        resp = httpx.get("http://localhost:11434/api/tags", timeout=2.0)
+        return resp.status_code == 200
+    except Exception:
+        return False
+
+
 def _detect_provider_from_env() -> str | None:
-    """Auto-detect provider from existing environment variables."""
+    """Auto-detect provider from existing environment variables or running services."""
     for name, info in PROVIDERS.items():
         env_var = info["env"]
         if env_var and os.environ.get(env_var):
             return name
+    # If no API key set but Ollama is running locally, suggest it
+    if _detect_ollama_running():
+        return "ollama"
     return None
 
 
@@ -1972,12 +1985,15 @@ def _ask_provider() -> str | None:
     """Interactive provider selection with arrow-key menu."""
     choices = []
     detected = _detect_provider_from_env()
+    ollama_running = _detect_ollama_running()
 
     for key, info in PROVIDERS.items():
         label = info["label"]
         env_var = info["env"]
         if env_var and os.environ.get(env_var):
             label += "  [key detected]"
+        elif key == "ollama" and ollama_running:
+            label += "  [running locally]"
         choices.append(questionary.Choice(label, value=key))
 
     default_val = detected if detected else "flock"

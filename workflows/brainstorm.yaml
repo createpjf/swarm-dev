@@ -1,0 +1,48 @@
+# workflows/brainstorm.yaml
+# Idea generation and evaluation pipeline
+
+name: Brainstorm Pipeline
+description: Generate ideas, evaluate feasibility, and produce a ranked proposal
+
+steps:
+  - id: ideate
+    agent: planner
+    prompt: |
+      Brainstorm creative approaches for: {{task}}
+
+      Generate at least 5 distinct ideas. For each:
+      1. Brief description
+      2. Key advantages
+      3. Potential challenges
+
+  - id: evaluate
+    agent: executor
+    prompt: |
+      Evaluate the feasibility of each idea:
+
+      ## Ideas
+      {{ideate.result}}
+
+      For each idea, assess:
+      - Technical complexity (low/medium/high)
+      - Time to implement
+      - Risk factors
+      - Impact potential
+
+      Rank them from most to least promising.
+    depends_on: [ideate]
+
+  - id: propose
+    agent: reviewer
+    prompt: |
+      Create a final proposal based on the evaluation:
+
+      ## Brainstorm Ideas
+      {{ideate.result}}
+
+      ## Feasibility Evaluation
+      {{evaluate.result}}
+
+      Write a concise proposal recommending the top 1-2 approaches.
+      Include an implementation roadmap and success criteria.
+    depends_on: [evaluate]

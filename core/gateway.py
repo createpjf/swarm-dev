@@ -145,6 +145,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._handle_status()
         elif path == "/v1/scores":
             self._handle_scores()
+        elif path.startswith("/v1/scores/history"):
+            self._handle_scores_history()
         elif path == "/v1/agents":
             self._handle_agents()
         elif path == "/v1/usage":
@@ -350,6 +352,34 @@ class _Handler(BaseHTTPRequestHandler):
         with open(path) as f:
             data = json.load(f)
         self._json_response(200, {"scores": data})
+
+    def _handle_scores_history(self):
+        """GET /v1/scores/history?agent_id=...&limit=20"""
+        from urllib.parse import urlparse, parse_qs
+        qs = parse_qs(urlparse(self.path).query)
+        agent_id = qs.get("agent_id", [None])[0]
+        limit = int(qs.get("limit", [20])[0])
+
+        try:
+            from reputation.scorer import ScoreAggregator
+            scorer = ScoreAggregator()
+            if agent_id:
+                history = scorer.get_history(agent_id, limit=limit)
+                self._json_response(200, {"agent_id": agent_id, "history": history})
+            else:
+                # Return history for all agents
+                cache_path = "memory/reputation_cache.json"
+                if not os.path.exists(cache_path):
+                    self._json_response(200, {"agents": {}})
+                    return
+                with open(cache_path) as f:
+                    cache = json.load(f)
+                result = {}
+                for aid, entry in cache.items():
+                    result[aid] = entry.get("history", [])[-limit:]
+                self._json_response(200, {"agents": result})
+        except Exception as e:
+            self._json_response(500, {"error": str(e)})
 
     def _handle_agents(self):
         import yaml
@@ -1206,6 +1236,18 @@ class _Handler(BaseHTTPRequestHandler):
                     if scores:
                         avg = sum(r["score"] for r in scores) / len(scores)
                         compact_tasks[tid]["rs"] = int(avg)
+                    # Streaming: partial result (last 200 chars)
+                    pr = t.get("partial_result", "")
+                    if pr:
+                        compact_tasks[tid]["pr"] = pr[-200:]
+                    # Task cost from usage tracker
+                    cost = t.get("cost_usd")
+                    if cost is not None:
+                        compact_tasks[tid]["cost"] = round(cost, 4)
+                    # Parent ID for subtask tree
+                    pid = t.get("parent_id")
+                    if pid:
+                        compact_tasks[tid]["pid"] = pid
                 snapshot["tasks"] = compact_tasks
         except Exception:
             snapshot["tasks"] = {}

@@ -3,8 +3,8 @@
 main.py  —  Agent Stack CLI
 Usage:
   swarm                       # interactive chat mode (default)
-  swarm configure             # full setup wizard (re-configure)
-  swarm --setup               # full setup wizard, then enter chat
+  swarm onboard               # interactive setup wizard
+  swarm --setup               # setup wizard, then enter chat
   swarm run "..."             # one-shot task
   swarm status                # show task board
   swarm scores                # show reputation scores
@@ -15,17 +15,19 @@ Usage:
   swarm gateway restart       # restart gateway
   swarm gateway install       # install as background daemon
   swarm gateway uninstall     # remove background daemon
-  swarm agents add <name>     # add an agent to the team
-  swarm chain status           # on-chain identity status
-  swarm chain init <agent>     # initialize agent on-chain
-  swarm chain balance          # check USDC balances
-  swarm chain health           # chain health check
-  swarm install                # install from GitHub
-  swarm uninstall              # remove CLI & daemon
-  swarm update                 # pull latest from GitHub
+  swarm agents create <name>  # create an agent (--template researcher|coder|debugger|doc_writer)
+  swarm workflow list          # list available workflows
+  swarm workflow run <name>    # run a workflow (e.g., code_review, bug_fix, brainstorm)
+  swarm chain status          # on-chain identity status
+  swarm chain init <agent>    # initialize agent on-chain
+  swarm chain balance         # check USDC balances
+  swarm chain health          # chain health check
+  swarm install               # install from GitHub
+  swarm uninstall             # remove CLI & daemon
+  swarm update                # pull latest from GitHub
 
 Chat commands:
-  /configure  — re-run full setup wizard
+  /configure  — re-run onboarding wizard
   /config     — show current agent team
   /status     — task board
   /scores     — reputation scores
@@ -97,6 +99,9 @@ def interactive_main():
 
     # ── First-run check ──
     if not os.path.exists("config/agents.yaml"):
+        from core.i18n import t as _t
+        console.print(f"  [{_t('onboard.first_run_hint')}]")
+        console.print()
         from core.onboard import run_quick_setup
         ok = run_quick_setup()
         if not ok:
@@ -112,6 +117,26 @@ def interactive_main():
     agents = config.get("agents", [])
     agent_names = ", ".join(a["id"] for a in agents)
     console.print(f"  [dim]Agents: {agent_names}[/dim]")
+
+    # ── Preflight check ──
+    from core.doctor import run_preflight
+    from core.i18n import t as _t
+    issues = run_preflight()
+    if issues:
+        console.print()
+        console.print(Panel(
+            "\n".join(f"  [yellow]![/yellow] {issue}" for issue in issues)
+            + f"\n\n  [dim]{_t('error.suggest_doctor')}[/dim]",
+            title=f"[yellow]{_t('preflight.title')}[/yellow]",
+            border_style="yellow",
+            box=box.ROUNDED,
+        ))
+        try:
+            from rich.prompt import Confirm
+            if not Confirm.ask(f"  {_t('preflight.issues_found')}", default=True):
+                return
+        except (KeyboardInterrupt, EOFError):
+            return
 
     # ── Auto-start Gateway (daemon) ──
     if "--no-gateway" not in sys.argv:
@@ -552,6 +577,7 @@ def interactive_main():
                     console.print(f"  [red]✗ {desc[:50]}[/red]")
                     if reason:
                         console.print(f"    [dim]{reason}[/dim]")
+                console.print(f"  [dim]{_t('error.suggest_doctor')}[/dim]")
 
             if result_text:
                 console.print()
@@ -743,6 +769,68 @@ def cmd_workflows(console=None):
     else:
         for w in workflows:
             print(f"  {w['name']:25} ({w['steps']} steps)  {w['description'][:40]}")
+
+
+def cmd_workflow_run(name: str, task_input: str = ""):
+    """Run a named workflow with the given input."""
+    import asyncio
+    from core.workflow import list_workflows, load_workflow, WorkflowEngine
+
+    # Find matching workflow
+    workflows = list_workflows()
+    match = None
+    for w in workflows:
+        fname = w["file"].replace(".yaml", "").replace(".yml", "")
+        if fname == name or w["name"].lower() == name.lower():
+            match = w
+            break
+
+    if not match:
+        available = ", ".join(w["file"].replace(".yaml", "") for w in workflows)
+        print(f"  Workflow '{name}' not found.\n  Available: {available}")
+        return
+
+    if not task_input:
+        task_input = input("  Task input: ").strip()
+        if not task_input:
+            print("  No input provided. Aborting.")
+            return
+
+    print(f"\n  Running workflow: {match['name']}")
+    print(f"  Input: {task_input[:60]}{'…' if len(task_input) > 60 else ''}\n")
+
+    workflow = load_workflow(os.path.join("workflows", match["file"]))
+
+    # Load agents config
+    if not os.path.exists("config/agents.yaml"):
+        print("  No config found. Run `swarm onboard` first.")
+        return
+
+    import yaml
+    with open("config/agents.yaml") as f:
+        config = yaml.safe_load(f) or {}
+
+    engine = WorkflowEngine(config)
+
+    def on_step_complete(step):
+        status = "✓" if step.status.value == "completed" else "✗"
+        print(f"  {status} Step '{step.id}' ({step.agent}) — {step.status.value}")
+
+    try:
+        result = asyncio.run(engine.run_workflow(
+            workflow,
+            initial_vars={"task": task_input},
+            on_step_complete=on_step_complete,
+        ))
+        print(f"\n  Workflow {result.status} ({len(result.steps)} steps)")
+        # Print last step result summary
+        for step in reversed(result.steps):
+            if step.result:
+                preview = step.result[:200]
+                print(f"\n  Final output ({step.id}):\n  {preview}{'…' if len(step.result) > 200 else ''}\n")
+                break
+    except Exception as e:
+        print(f"\n  Workflow failed: {e}")
 
 
 def cmd_budget(console=None):
@@ -1069,10 +1157,34 @@ def _show_gateway_status(console, port: int = 0):
         print()
 
 
-def cmd_agents_add(name: str):
+AGENT_TEMPLATES = {
+    "researcher": {
+        "role": "Research specialist — finds information, analyzes sources, synthesizes findings",
+        "skills": ["_base", "web_search", "summarize"],
+        "cognition": "# Researcher Cognition\n\n## Role\nYou are a meticulous researcher. Your job is to find accurate, relevant information and present it clearly.\n\n## Approach\n1. Understand the question scope\n2. Search multiple sources\n3. Cross-reference findings\n4. Synthesize into a clear summary\n\n## Quality Standards\n- Always cite sources\n- Distinguish facts from opinions\n- Flag conflicting information\n",
+    },
+    "coder": {
+        "role": "Software engineer — writes, reviews, and debugs code",
+        "skills": ["_base", "code_write", "code_review"],
+        "cognition": "# Coder Cognition\n\n## Role\nYou are a pragmatic software engineer. Write clean, tested, maintainable code.\n\n## Approach\n1. Understand requirements before coding\n2. Follow existing code patterns\n3. Write minimal, focused changes\n4. Consider edge cases\n\n## Quality Standards\n- No unnecessary complexity\n- Clear variable/function names\n- Handle errors gracefully\n",
+    },
+    "debugger": {
+        "role": "Debug specialist — diagnoses issues, traces root causes, proposes fixes",
+        "skills": ["_base", "code_review", "code_write"],
+        "cognition": "# Debugger Cognition\n\n## Role\nYou are a systematic debugger. Your job is to find and fix the root cause, not just the symptom.\n\n## Approach\n1. Reproduce the issue\n2. Form hypotheses\n3. Test each hypothesis\n4. Identify root cause\n5. Propose minimal fix\n\n## Quality Standards\n- Never guess — verify\n- Explain your reasoning chain\n- Prevent regression\n",
+    },
+    "doc_writer": {
+        "role": "Documentation writer — creates clear, structured technical docs",
+        "skills": ["_base", "summarize"],
+        "cognition": "# Documentation Writer Cognition\n\n## Role\nYou write clear, user-friendly documentation. Make complex topics accessible.\n\n## Approach\n1. Identify the target audience\n2. Outline the structure\n3. Write concisely with examples\n4. Review for completeness\n\n## Quality Standards\n- Use simple language\n- Include practical examples\n- Keep sections focused\n",
+    },
+}
+
+
+def cmd_agents_add(name: str, template: str | None = None):
     """Add a new agent to the team interactively."""
     if not os.path.exists("config/agents.yaml"):
-        print("No config found. Run `swarm configure` first.")
+        print("No config found. Run `swarm onboard` first.")
         return
 
     try:
@@ -1103,28 +1215,36 @@ def cmd_agents_add(name: str):
         print(f"Agent '{name}' already exists. Choose a different name.")
         return
 
-    print(f"\n  Adding agent: {name}\n")
+    print(f"\n  Creating agent: {name}\n")
 
-    # Role selection
-    preset_choices = [
-        questionary.Choice(PRESETS[k]["label"], value=k)
-        for k in PRESETS
-    ] + [questionary.Choice("Custom (define your own)", value="custom")]
-
-    preset = questionary.select(
-        "Role:", choices=preset_choices, style=STYLE,
-    ).ask()
-    if preset is None:
-        return
-
-    if preset == "custom":
-        role = questionary.text("Role description:", style=STYLE).ask()
-        if not role:
-            return
-        skills = ["_base"]
+    # Use template if provided via --template flag
+    if template and template in AGENT_TEMPLATES:
+        tmpl = AGENT_TEMPLATES[template]
+        role = tmpl["role"]
+        skills = list(tmpl["skills"])
+        print(f"  Using template: {template}")
+        print(f"  Role: {role}\n")
     else:
-        role = PRESETS[preset]["role"]
-        skills = list(PRESETS[preset]["skills"])
+        # Interactive role selection
+        preset_choices = [
+            questionary.Choice(PRESETS[k]["label"], value=k)
+            for k in PRESETS
+        ] + [questionary.Choice("Custom (define your own)", value="custom")]
+
+        preset = questionary.select(
+            "Role:", choices=preset_choices, style=STYLE,
+        ).ask()
+        if preset is None:
+            return
+
+        if preset == "custom":
+            role = questionary.text("Role description:", style=STYLE).ask()
+            if not role:
+                return
+            skills = ["_base"]
+        else:
+            role = PRESETS[preset]["role"]
+            skills = list(PRESETS[preset]["skills"])
 
     # Provider + key + model
     provider = _ask_provider()
@@ -1146,7 +1266,33 @@ def cmd_agents_add(name: str):
     from core.config_manager import safe_write_yaml
     safe_write_yaml("config/agents.yaml", config, reason=f"add agent {name}")
 
-    print(f"\n  ✓ Agent '{name}' added → {PROVIDERS[provider]['label']}/{model}")
+    # Auto-generate skill override and cognition files
+    override_dir = os.path.join("skills", "agent_overrides")
+    os.makedirs(override_dir, exist_ok=True)
+    override_path = os.path.join(override_dir, f"{name}.md")
+    if not os.path.exists(override_path):
+        with open(override_path, "w") as f:
+            f.write(f"# {name} — Skill Overrides\n\n"
+                    f"<!-- Add agent-specific instructions here -->\n")
+
+    cognition_dir = os.path.join("docs", name)
+    os.makedirs(cognition_dir, exist_ok=True)
+    cognition_path = os.path.join(cognition_dir, "cognition.md")
+    if not os.path.exists(cognition_path):
+        # Use template cognition if available
+        if template and template in AGENT_TEMPLATES:
+            content = AGENT_TEMPLATES[template]["cognition"]
+        else:
+            content = (f"# {name} Cognition\n\n"
+                       f"## Role\n{role}\n\n"
+                       f"## Approach\n<!-- Define how this agent should think -->\n\n"
+                       f"## Quality Standards\n<!-- Define quality criteria -->\n")
+        with open(cognition_path, "w") as f:
+            f.write(content)
+
+    print(f"\n  ✓ Agent '{name}' created → {PROVIDERS[provider]['label']}/{model}")
+    print(f"  ✓ {override_path}")
+    print(f"  ✓ {cognition_path}")
     print(f"  Team: {', '.join(a['id'] for a in config['agents'])}\n")
 
 
@@ -1626,8 +1772,9 @@ def main():
     parser = argparse.ArgumentParser(prog="swarm")
     sub    = parser.add_subparsers(dest="cmd")
 
-    sub.add_parser("init", help="Full interactive setup wizard")
-    sub.add_parser("configure", help="Full interactive setup wizard (alias)")
+    sub.add_parser("onboard", help="Interactive setup wizard")
+    sub.add_parser("init", help="Interactive setup wizard (alias)")
+    sub.add_parser("configure", help="Interactive setup wizard (alias)")
     sub.add_parser("chat", help="Interactive chat mode")
 
     p_run = sub.add_parser("run", help="Submit a task and run all agents")
@@ -1650,8 +1797,21 @@ def main():
 
     p_agents = sub.add_parser("agents", help="Agent management")
     agents_sub = p_agents.add_subparsers(dest="agents_cmd")
-    p_add = agents_sub.add_parser("add", help="Add an agent to the team")
+    p_create = agents_sub.add_parser("create", help="Create a new agent")
+    p_create.add_argument("name", help="Agent ID/name")
+    p_create.add_argument("--template", choices=["researcher", "coder", "debugger", "doc_writer"],
+                          default=None, help="Use a built-in role template")
+    p_add = agents_sub.add_parser("add", help="Create a new agent (alias for create)")
     p_add.add_argument("name", help="Agent ID/name")
+    p_add.add_argument("--template", choices=["researcher", "coder", "debugger", "doc_writer"],
+                       default=None, help="Use a built-in role template")
+
+    p_wf = sub.add_parser("workflow", help="Workflow management")
+    wf_sub = p_wf.add_subparsers(dest="wf_cmd")
+    wf_sub.add_parser("list", help="List available workflows")
+    p_wf_run = wf_sub.add_parser("run", help="Run a workflow")
+    p_wf_run.add_argument("name", help="Workflow name (e.g., code_review, bug_fix)")
+    p_wf_run.add_argument("--input", "-i", default="", help="Task input for the workflow")
 
     p_chain = sub.add_parser("chain", help="On-chain identity management")
     p_chain.add_argument("action", choices=["status", "balance", "init", "register", "health"],
@@ -1676,7 +1836,7 @@ def main():
     p_ev.add_argument("action", choices=["confirm"])
 
     args = parser.parse_args()
-    if args.cmd in ("init", "configure"):
+    if args.cmd in ("onboard", "init", "configure"):
         cmd_init()
     elif args.cmd == "chat":
         interactive_main()
@@ -1693,9 +1853,16 @@ def main():
                     token=args.token, force=args.force)
     elif args.cmd == "chain":
         cmd_chain(args.action, args.agent_id)
+    elif args.cmd == "workflow":
+        if args.wf_cmd == "list":
+            cmd_workflows()
+        elif args.wf_cmd == "run":
+            cmd_workflow_run(args.name, args.input)
+        else:
+            p_wf.print_help()
     elif args.cmd == "agents":
-        if args.agents_cmd == "add":
-            cmd_agents_add(args.name)
+        if args.agents_cmd in ("create", "add"):
+            cmd_agents_add(args.name, template=getattr(args, 'template', None))
         else:
             p_agents.print_help()
     elif args.cmd == "install":

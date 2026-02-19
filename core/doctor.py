@@ -18,14 +18,88 @@ import yaml
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  CHECK FUNCTIONS — each returns (ok: bool, label: str, detail: str)
+#  PREFLIGHT — fast startup checks with fix suggestions
+# ══════════════════════════════════════════════════════════════════════════════
+
+def run_preflight() -> list[str]:
+    """
+    Quick pre-flight check before entering chat mode.
+    Returns list of human-readable issue descriptions (empty = all good).
+    Checks: API key configured, LLM reachable, gateway port free.
+    """
+    from core.i18n import t as _t
+    issues: list[str] = []
+
+    # 1. API key configured?
+    if not os.path.exists("config/agents.yaml"):
+        issues.append(_t("preflight.api_key_empty"))
+        return issues  # no point checking further
+
+    with open("config/agents.yaml") as f:
+        cfg = yaml.safe_load(f) or {}
+
+    provider = cfg.get("llm", {}).get("provider", "flock")
+    key_map = {"flock": "FLOCK_API_KEY", "openai": "OPENAI_API_KEY", "ollama": None}
+    env_var = key_map.get(provider)
+
+    if env_var and not os.environ.get(env_var):
+        issues.append(_t("preflight.api_key_empty"))
+
+    # 2. LLM endpoint reachable? (fast probe, 3s timeout)
+    url_map = {
+        "flock": os.environ.get("FLOCK_BASE_URL", "https://api.flock.io/v1"),
+        "openai": os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+        "ollama": os.environ.get("OLLAMA_URL", "http://localhost:11434"),
+    }
+    base_url = url_map.get(provider, "")
+    if base_url:
+        try:
+            import httpx
+            probe_url = f"{base_url}/api/tags" if provider == "ollama" else f"{base_url}/models"
+            headers = {}
+            if env_var:
+                key = os.environ.get(env_var, "")
+                if key:
+                    headers["Authorization"] = f"Bearer {key}"
+            resp = httpx.get(probe_url, headers=headers, timeout=3.0)
+            if resp.status_code == 401:
+                issues.append(_t("preflight.api_key_empty"))
+            elif resp.status_code >= 400:
+                issues.append(_t("preflight.llm_unreachable", url=base_url))
+        except Exception:
+            issues.append(_t("preflight.llm_unreachable", url=base_url))
+
+    # 3. Gateway port free?
+    import socket
+    gw_port = int(os.environ.get("SWARM_GATEWAY_PORT", "19789"))
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.5)
+            result = s.connect_ex(("127.0.0.1", gw_port))
+            if result == 0:
+                # Port is in use — only warn if it's not our gateway
+                try:
+                    resp = httpx.get(f"http://127.0.0.1:{gw_port}/health", timeout=1.0)
+                    if resp.status_code != 200 or "swarm" not in resp.text.lower():
+                        issues.append(_t("preflight.port_in_use", port=gw_port))
+                except Exception:
+                    issues.append(_t("preflight.port_in_use", port=gw_port))
+    except Exception:
+        pass
+
+    return issues
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  CHECK FUNCTIONS — each returns (ok: bool, label: str, detail: str, hint: str)
+#  hint is a human-readable fix suggestion (empty string if ok)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def check_config() -> tuple[bool, str, str]:
     """Check if agents.yaml exists and is valid."""
     path = "config/agents.yaml"
     if not os.path.exists(path):
-        return False, "Config", "config/agents.yaml not found — run `swarm configure`"
+        return False, "Config", "config/agents.yaml not found — run: swarm onboard"
     try:
         with open(path) as f:
             cfg = yaml.safe_load(f) or {}

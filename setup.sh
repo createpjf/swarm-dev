@@ -122,9 +122,8 @@ fi
 echo ""
 echo -e "  ${GREEN}${BOLD}Setup complete!${RESET}"
 echo ""
-echo -e "  ${BOLD}Quick start:${RESET}"
-echo "    swarm                    # interactive chat mode"
-echo "    swarm configure          # setup wizard"
-echo "    swarm doctor             # system health check"
-echo "    swarm run \"your task\"    # one-shot task"
+
+# ── 8. Launch onboarding wizard ──
+echo -e "  ${BOLD}Launching onboarding wizard...${RESET}"
 echo ""
+exec "$ROOT/$VENV_DIR/bin/swarm" onboard

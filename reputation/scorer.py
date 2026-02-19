@@ -185,6 +185,15 @@ class ScoreAggregator:
             return dict(entry.get("dimensions", {}))
         return {d: DEFAULT_SCORE for d in DIMENSIONS}
 
+    def get_history(self, agent_id: str, limit: int = 20) -> list[dict]:
+        """Return recent composite score history for an agent."""
+        cache = self._read_cache()
+        entry = cache.get(agent_id)
+        if not entry:
+            return []
+        history = entry.get("history", [])
+        return history[-limit:]
+
     def trend(self, agent_id: str) -> str:
         """
         Compare first-half vs second-half of last 10 composites.
