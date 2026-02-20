@@ -1483,6 +1483,170 @@ def _show_gateway_status(console, port: int = 0):
         print()
 
 
+def cmd_channels(action: str = "list", channel: str = None,
+                  json_output: bool = False):
+    """Channel management CLI."""
+    import yaml
+
+    try:
+        from rich.console import Console
+        from rich.table import Table
+        from rich import box
+        console = Console()
+    except ImportError:
+        console = None
+
+    config_path = "config/agents.yaml"
+
+    if action in ("list", "status"):
+        # Try gateway API first
+        from core.gateway import DEFAULT_PORT, probe_gateway
+        port = int(os.environ.get("SWARM_GATEWAY_PORT", str(DEFAULT_PORT)))
+        probe = probe_gateway(port)
+
+        channels_data = []
+        if probe.get("reachable"):
+            try:
+                import httpx
+                token = os.environ.get("SWARM_GATEWAY_TOKEN", "")
+                headers = {"Authorization": f"Bearer {token}"} if token else {}
+                resp = httpx.get(f"http://127.0.0.1:{port}/v1/channels",
+                                 headers=headers, timeout=5)
+                data = resp.json()
+                channels_data = data.get("channels", [])
+            except Exception:
+                pass
+
+        if not channels_data:
+            # Fallback: read from config
+            try:
+                with open(config_path, "r") as f:
+                    cfg = yaml.safe_load(f) or {}
+                ch_cfg = cfg.get("channels", {})
+                for name, c in ch_cfg.items():
+                    channels_data.append({
+                        "channel": name,
+                        "enabled": c.get("enabled", False),
+                        "running": False,
+                        "token_configured": False,
+                    })
+            except Exception:
+                pass
+
+        if json_output:
+            print(json.dumps(channels_data, indent=2, default=str))
+            return
+
+        if console:
+            console.print()
+            tbl = Table(title="Channel Status", box=box.ROUNDED,
+                         show_header=True, padding=(0, 1))
+            tbl.add_column("Channel", style="bold", min_width=10)
+            tbl.add_column("Enabled", justify="center", min_width=8)
+            tbl.add_column("Running", justify="center", min_width=8)
+            tbl.add_column("Token", min_width=10)
+
+            for ch in channels_data:
+                enabled = "[green]Yes[/green]" if ch.get("enabled") else "[dim]No[/dim]"
+                running = "[green]Yes[/green]" if ch.get("running") else "[dim]No[/dim]"
+                token_ok = ch.get("token_configured", False)
+                token_str = "[green]Set[/green]" if token_ok else "[red]Not Set[/red]"
+                tbl.add_row(ch["channel"], enabled, running, token_str)
+
+            console.print(tbl)
+            console.print()
+        else:
+            print(f"\n{'Channel':12} {'Enabled':9} {'Running':9} Token")
+            print("-" * 45)
+            for ch in channels_data:
+                e = "Yes" if ch.get("enabled") else "No"
+                r = "Yes" if ch.get("running") else "No"
+                t = "Set" if ch.get("token_configured") else "Not Set"
+                print(f"{ch['channel']:12} {e:9} {r:9} {t}")
+            print()
+
+    elif action == "enable":
+        if not channel:
+            print("Error: specify a channel name. e.g. swarm channels enable slack")
+            return
+        _update_channel_config(config_path, channel, enabled=True)
+
+    elif action == "disable":
+        if not channel:
+            print("Error: specify a channel name. e.g. swarm channels disable slack")
+            return
+        _update_channel_config(config_path, channel, enabled=False)
+
+    elif action == "test":
+        if not channel:
+            print("Error: specify a channel name. e.g. swarm channels test slack")
+            return
+        print(f"Testing {channel} connection...")
+        # Check if token is set
+        try:
+            with open(config_path, "r") as f:
+                cfg = yaml.safe_load(f) or {}
+            ch_cfg = cfg.get("channels", {}).get(channel, {})
+            if not ch_cfg:
+                print(f"Error: channel '{channel}' not found in config")
+                return
+
+            token_env_map = {
+                "telegram": ["TELEGRAM_BOT_TOKEN"],
+                "discord": ["DISCORD_BOT_TOKEN"],
+                "feishu": ["FEISHU_APP_ID", "FEISHU_APP_SECRET"],
+                "slack": ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"],
+            }
+            env_keys = token_env_map.get(channel, [])
+            missing = [k for k in env_keys if not os.environ.get(k)]
+            if missing:
+                print(f"Missing env vars: {', '.join(missing)}")
+                print("Set them in .env file first.")
+            else:
+                print(f"All required tokens for {channel} are set.")
+                if not ch_cfg.get("enabled"):
+                    print(f"Note: {channel} is disabled. "
+                          f"Run 'swarm channels enable {channel}' to activate.")
+        except Exception as e:
+            print(f"Error: {e}")
+
+    else:
+        print(f"Unknown channels action: {action}")
+
+
+def _update_channel_config(config_path: str, channel: str, enabled: bool):
+    """Update channel enabled status in agents.yaml."""
+    import yaml
+
+    try:
+        with open(config_path, "r") as f:
+            cfg = yaml.safe_load(f) or {}
+    except Exception as e:
+        print(f"Error loading config: {e}")
+        return
+
+    channels = cfg.get("channels", {})
+    if channel not in channels:
+        print(f"Error: channel '{channel}' not found in config")
+        print(f"Available: {', '.join(channels.keys())}")
+        return
+
+    channels[channel]["enabled"] = enabled
+
+    try:
+        from core.config_manager import safe_write_yaml
+        safe_write_yaml(config_path, cfg,
+                        f"{'enable' if enabled else 'disable'} channel {channel}")
+    except Exception as e:
+        print(f"Error saving config: {e}")
+        return
+
+    status = "enabled" if enabled else "disabled"
+    print(f"Channel '{channel}' {status}.")
+    if enabled:
+        print("Restart gateway to apply: swarm gateway restart")
+
+
 AGENT_TEMPLATES = {
     "researcher": {
         "role": "Research specialist — finds information, analyzes sources, synthesizes findings",
@@ -1913,6 +2077,263 @@ def cmd_evolve_confirm(agent_id: str):
 # ── Install / Uninstall / Update ─────────────────────────────────────────────
 
 # Default GitHub repo — override with SWARM_REPO env var
+# ── Search + Memory CLI ─────────────────────────────────────────────────────
+
+def cmd_search(query: str = None, collection: str = None,
+               limit: int = 10, reindex: bool = False):
+    """Search documents and memory using QMD FTS5 engine."""
+    try:
+        from rich.console import Console
+        from rich.table import Table
+        from rich import box
+        console = Console()
+    except ImportError:
+        console = None
+
+    from core.search import QMD, Indexer
+
+    if reindex:
+        if console:
+            console.print("[bold]Rebuilding search index...[/bold]")
+        qmd = QMD()
+        indexer = Indexer(qmd)
+        counts = indexer.reindex_all()
+        total = sum(counts.values())
+        if console:
+            console.print(f"[green]Reindexed {total} documents[/green]")
+            for col, cnt in counts.items():
+                console.print(f"  {col}: {cnt}")
+        else:
+            print(f"Reindexed {total} documents: {counts}")
+        qmd.close()
+        if not query:
+            return
+
+    if not query:
+        # Show stats if no query
+        qmd = QMD()
+        stats = qmd.stats()
+        qmd.close()
+        if console:
+            console.print("[bold]Search Index Stats[/bold]")
+            for k, v in stats.items():
+                console.print(f"  {k}: {v}")
+        else:
+            print(f"Search stats: {stats}")
+        return
+
+    qmd = QMD()
+    results = qmd.search(query, collection=collection, limit=limit)
+    qmd.close()
+
+    if not results:
+        msg = f"No results for: {query}"
+        if console:
+            console.print(f"[dim]{msg}[/dim]")
+        else:
+            print(msg)
+        return
+
+    if console:
+        table = Table(title=f"Search: {query}", box=box.ROUNDED)
+        table.add_column("#", style="dim", width=3)
+        table.add_column("Title", style="bold")
+        table.add_column("Collection")
+        table.add_column("Snippet", max_width=60)
+        table.add_column("Rank", justify="right")
+        for i, r in enumerate(results, 1):
+            table.add_row(
+                str(i),
+                r.get("title", "")[:50],
+                r.get("collection", ""),
+                r.get("snippet", "")[:60],
+                f"{r.get('rank', 0):.2f}",
+            )
+        console.print(table)
+    else:
+        for i, r in enumerate(results, 1):
+            print(f"{i}. [{r.get('collection','')}] {r.get('title','')}")
+            print(f"   {r.get('snippet','')[:80]}")
+
+
+def cmd_memory(action: str = "status", query: str = None,
+               agent: str = None):
+    """Memory management CLI."""
+    try:
+        from rich.console import Console
+        from rich.table import Table
+        from rich import box
+        console = Console()
+    except ImportError:
+        console = None
+
+    if action == "status":
+        _memory_status(console, agent)
+    elif action == "search":
+        if not query:
+            print("Usage: swarm memory search <query>")
+            return
+        _memory_search(console, query, agent)
+    elif action == "rebuild":
+        _memory_rebuild(console, agent)
+    elif action == "reindex":
+        cmd_search(reindex=True)
+    elif action == "cleanup":
+        _memory_cleanup(console, agent)
+
+
+def _memory_status(console, agent: str = None):
+    """Show memory statistics for all or specific agents."""
+    import os
+    agents_dir = "memory/agents"
+    if not os.path.isdir(agents_dir):
+        msg = "No agent memory directory found."
+        if console:
+            console.print(f"[dim]{msg}[/dim]")
+        else:
+            print(msg)
+        return
+
+    agent_ids = [agent] if agent else [
+        d for d in os.listdir(agents_dir)
+        if os.path.isdir(os.path.join(agents_dir, d)) and not d.startswith(".")
+    ]
+
+    for aid in agent_ids:
+        try:
+            from adapters.memory.episodic import EpisodicMemory
+            ep = EpisodicMemory(aid)
+            stats = ep.stats()
+            storage = ep.get_storage_size()
+            if console:
+                console.print(f"\n[bold]{aid}[/bold]")
+                console.print(f"  Episodes: {stats['episodes']}, "
+                              f"Cases: {stats['cases']}, "
+                              f"Patterns: {stats['patterns']}, "
+                              f"Daily logs: {stats['daily_logs']}")
+                console.print(f"  Storage: {storage['total_kb']} KB "
+                              f"({storage['file_count']} files)")
+                # Check MEMORY.md
+                md_path = os.path.join("memory", "agents", aid, "MEMORY.md")
+                if os.path.exists(md_path):
+                    console.print(f"  MEMORY.md: [green]exists[/green]")
+                else:
+                    console.print(f"  MEMORY.md: [dim]not generated[/dim]")
+            else:
+                print(f"\n{aid}: {stats}")
+        except Exception as e:
+            if console:
+                console.print(f"  [red]Error: {e}[/red]")
+            else:
+                print(f"  Error: {e}")
+
+    # Search index stats
+    try:
+        from core.search import QMD
+        qmd = QMD()
+        stats = qmd.stats()
+        qmd.close()
+        if console:
+            console.print(f"\n[bold]Search Index[/bold]")
+            for k, v in stats.items():
+                console.print(f"  {k}: {v}")
+        else:
+            print(f"\nSearch index: {stats}")
+    except Exception:
+        pass
+
+
+def _memory_search(console, query: str, agent: str = None):
+    """Search memory using QMD FTS5."""
+    from core.search import MemorySearch
+    ms = MemorySearch(agent_id=agent or "")
+    results = ms.search_all(query, limit=5)
+    ms.close()
+
+    total = sum(len(v) for v in results.values())
+    if not total:
+        msg = f"No memory results for: {query}"
+        if console:
+            console.print(f"[dim]{msg}[/dim]")
+        else:
+            print(msg)
+        return
+
+    for col, items in results.items():
+        if not items:
+            continue
+        if console:
+            console.print(f"\n[bold]{col.upper()}[/bold] ({len(items)} results)")
+            for r in items:
+                console.print(f"  - {r.get('title','')[:60]}")
+                snippet = r.get("snippet", "")[:80]
+                if snippet:
+                    console.print(f"    [dim]{snippet}[/dim]")
+        else:
+            print(f"\n{col.upper()} ({len(items)} results)")
+            for r in items:
+                print(f"  - {r.get('title','')[:60]}")
+
+
+def _memory_rebuild(console, agent: str = None):
+    """Rebuild MEMORY.md for all or specific agents."""
+    import os
+    agents_dir = "memory/agents"
+    if not os.path.isdir(agents_dir):
+        print("No agent memory directory found.")
+        return
+
+    agent_ids = [agent] if agent else [
+        d for d in os.listdir(agents_dir)
+        if os.path.isdir(os.path.join(agents_dir, d)) and not d.startswith(".")
+    ]
+
+    for aid in agent_ids:
+        try:
+            from adapters.memory.episodic import EpisodicMemory
+            ep = EpisodicMemory(aid)
+            content = ep.generate_memory_md()
+            lines = len(content.split("\n"))
+            if console:
+                console.print(f"[green]{aid}[/green]: MEMORY.md generated ({lines} lines)")
+            else:
+                print(f"{aid}: MEMORY.md generated ({lines} lines)")
+        except Exception as e:
+            if console:
+                console.print(f"[red]{aid}: {e}[/red]")
+            else:
+                print(f"{aid}: Error - {e}")
+
+
+def _memory_cleanup(console, agent: str = None):
+    """Clean up old episodes beyond TTL."""
+    import os
+    agents_dir = "memory/agents"
+    if not os.path.isdir(agents_dir):
+        print("No agent memory directory found.")
+        return
+
+    agent_ids = [agent] if agent else [
+        d for d in os.listdir(agents_dir)
+        if os.path.isdir(os.path.join(agents_dir, d)) and not d.startswith(".")
+    ]
+
+    for aid in agent_ids:
+        try:
+            from adapters.memory.episodic import EpisodicMemory
+            ep = EpisodicMemory(aid)
+            result = ep.cleanup()
+            if console:
+                console.print(f"[green]{aid}[/green]: archived {result['archived']} episodes")
+            else:
+                print(f"{aid}: archived {result['archived']} episodes")
+        except Exception as e:
+            if console:
+                console.print(f"[red]{aid}: {e}[/red]")
+            else:
+                print(f"{aid}: Error - {e}")
+
+
 _DEFAULT_REPO = "https://github.com/createpjf/swarm-dev.git"
 
 
@@ -2329,6 +2750,13 @@ def main():
     p_gw.add_argument("--force", action="store_true",
                        help="Kill existing process on port before starting")
 
+    p_ch = sub.add_parser("channels", help="Channel management")
+    p_ch.add_argument("action", nargs="?", default="list",
+                       choices=["list", "enable", "disable", "status", "test"],
+                       help="Channel action (default: list)")
+    p_ch.add_argument("channel", nargs="?", default=None,
+                       help="Channel name (telegram, discord, feishu, slack)")
+
     p_agents = sub.add_parser("agents", help="Agent management")
     agents_sub = p_agents.add_subparsers(dest="agents_cmd")
     p_create = agents_sub.add_parser("create", help="Create a new agent")
@@ -2365,6 +2793,24 @@ def main():
     p_update.add_argument("--branch", default="",
                           help="Branch to update from (default: current branch)")
 
+    p_search = sub.add_parser("search", help="Search documents and memory (FTS5)")
+    p_search.add_argument("query", nargs="?", help="Search query")
+    p_search.add_argument("--collection", "-c", default=None,
+                          help="Collection to search (memory/knowledge/workspace/docs)")
+    p_search.add_argument("--limit", "-n", type=int, default=10,
+                          help="Max results (default: 10)")
+    p_search.add_argument("--reindex", action="store_true",
+                          help="Rebuild search index from all data sources")
+
+    p_mem = sub.add_parser("memory", help="Memory management")
+    p_mem.add_argument("action", nargs="?", default="status",
+                       choices=["status", "search", "rebuild", "cleanup", "reindex"],
+                       help="Action to perform")
+    p_mem.add_argument("query", nargs="?", default=None,
+                       help="Search query (for 'search' action)")
+    p_mem.add_argument("--agent", default=None,
+                       help="Agent ID (for agent-specific operations)")
+
     p_ev = sub.add_parser("evolve", help="Manage evolution actions")
     p_ev.add_argument("agent_id")
     p_ev.add_argument("action", choices=["confirm"])
@@ -2391,6 +2837,9 @@ def main():
     elif args.cmd == "gateway":
         cmd_gateway(action=args.action, port=args.port,
                     token=args.token, force=args.force)
+    elif args.cmd == "channels":
+        cmd_channels(action=args.action, channel=args.channel,
+                     json_output=args.json)
     elif args.cmd == "chain":
         cmd_chain(args.action, args.agent_id)
     elif args.cmd == "workflow":
@@ -2411,6 +2860,11 @@ def main():
         cmd_uninstall()
     elif args.cmd == "update":
         cmd_update(branch=args.branch)
+    elif args.cmd == "search":
+        cmd_search(query=args.query, collection=args.collection,
+                   limit=args.limit, reindex=args.reindex)
+    elif args.cmd == "memory":
+        cmd_memory(action=args.action, query=args.query, agent=args.agent)
     elif args.cmd == "evolve":
         if args.action == "confirm":
             cmd_evolve_confirm(args.agent_id)

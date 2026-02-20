@@ -567,6 +567,9 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
     <div class="nav-item" data-panel="usage" onclick="switchPanel('usage')">
       <span class="icon">📈</span><span>Usage</span>
     </div>
+    <div class="nav-item" data-panel="channels" onclick="switchPanel('channels')">
+      <span class="icon">📡</span><span>Channels</span>
+    </div>
   </div>
 
   <div class="nav-section">
@@ -733,6 +736,20 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
       <div id="usageByModel"><div class="empty">No usage data</div></div>
     </div>
   </div>
+</div>
+
+<!-- ── Panel: Channels ── -->
+<div class="panel" id="panel-channels">
+  <div class="page-header">
+    <div class="page-title">Channels</div>
+    <div class="page-actions"><button class="btn btn-sm" onclick="loadChannels()">Refresh</button></div>
+  </div>
+  <div class="stats" id="channelStats">
+    <div class="stat"><div class="stat-value cyan" id="chTotal">0</div><div class="stat-label">Total</div></div>
+    <div class="stat"><div class="stat-value green" id="chRunning">0</div><div class="stat-label">Running</div></div>
+    <div class="stat"><div class="stat-value" id="chEnabled">0</div><div class="stat-label">Enabled</div></div>
+  </div>
+  <div class="agent-grid" id="channelGrid"><div class="empty">Loading channels...</div></div>
 </div>
 
 <!-- ── Panel: Config ── -->
@@ -1111,6 +1128,7 @@ function switchPanel(name) {
   if (name === 'logs') initLogs();
   if (name === 'chain') loadChain();
   if (name === 'memory') loadMemory();
+  if (name === 'channels') loadChannels();
   if (name === 'cron') loadCron();
 }
 
@@ -3093,6 +3111,160 @@ async function loadUsage() {
     h += '</tbody></table>';
     modelEl.innerHTML = h;
   } else { modelEl.innerHTML = '<div class="empty">No usage data</div>'; }
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  CHANNELS
+// ══════════════════════════════════════════════════════════════════
+
+const CHANNEL_META = {
+  telegram: { icon: '💬', label: 'Telegram', sdk: 'python-telegram-bot', tokenFields: ['bot_token'] },
+  discord:  { icon: '🎮', label: 'Discord',  sdk: 'discord.py',           tokenFields: ['bot_token'] },
+  feishu:   { icon: '🐦', label: 'Feishu',   sdk: 'lark-oapi',            tokenFields: ['app_id', 'app_secret'] },
+  slack:    { icon: '💼', label: 'Slack',     sdk: 'slack-sdk',            tokenFields: ['bot_token', 'app_token'] },
+};
+
+let _channelData = [];
+
+async function loadChannels() {
+  const data = await api('/v1/channels');
+  if (!data) return;
+
+  _channelData = data.channels || [];
+  const running = _channelData.filter(c => c.running).length;
+  const enabled = _channelData.filter(c => c.enabled).length;
+
+  document.getElementById('chTotal').textContent = _channelData.length;
+  document.getElementById('chRunning').textContent = running;
+  document.getElementById('chEnabled').textContent = enabled;
+
+  const grid = document.getElementById('channelGrid');
+  if (!_channelData.length) {
+    grid.innerHTML = '<div class="empty">No channels configured</div>';
+    return;
+  }
+
+  let h = '';
+  for (const ch of _channelData) {
+    const meta = CHANNEL_META[ch.channel] || { icon: '📡', label: ch.channel, sdk: '?', tokenFields: [] };
+    const statusColor = ch.running ? 'var(--green)' : ch.enabled ? 'var(--yellow)' : 'var(--fg3)';
+    const statusText = ch.running ? 'Running' : ch.enabled ? 'Enabled (not running)' : 'Disabled';
+    const tokenOk = ch.token_configured;
+
+    h += '<div class="agent-card" style="cursor:default">'
+      + '<div class="agent-card-header">'
+      + '<span style="font-size:22px">' + meta.icon + '</span>'
+      + '<span class="agent-name">' + meta.label + '</span>'
+      + '<span class="hb-dot ' + (ch.running ? 'online' : 'offline') + '"></span>'
+      + '</div>'
+      + '<div style="display:flex;gap:8px;align-items:center;margin:4px 0">'
+      + '<span style="color:' + statusColor + ';font-size:12px;font-weight:600">' + statusText + '</span>'
+      + '</div>'
+      + '<div style="display:flex;gap:8px;align-items:center;font-size:11px;color:var(--fg2)">'
+      + '<span class="key-badge ' + (tokenOk ? 'set' : 'unset') + '">'
+      + (tokenOk ? 'Token Set' : 'Token Not Set') + '</span>'
+      + '<span>SDK: <code style="font-size:10px">' + meta.sdk + '</code></span>'
+      + '</div>';
+
+    // Config details
+    if (ch.config) {
+      const mention = ch.mention_required !== undefined ? ch.mention_required : true;
+      h += '<div style="font-size:11px;color:var(--fg3);margin-top:4px">'
+        + 'Mention required: ' + (mention ? 'Yes' : 'No')
+        + '</div>';
+    }
+
+    // Action buttons
+    h += '<div style="display:flex;gap:6px;margin-top:8px;padding-top:8px;border-top:1px solid var(--bg3)">';
+    if (ch.enabled) {
+      h += '<button class="btn btn-sm btn-danger" onclick="toggleChannel(\'' + ch.channel + '\',false)">Disable</button>';
+    } else {
+      h += '<button class="btn btn-sm btn-green" onclick="toggleChannel(\'' + ch.channel + '\',true)">Enable</button>';
+    }
+    h += '<button class="btn btn-sm btn-outline" onclick="showChannelConfig(\'' + ch.channel + '\')">Configure</button>';
+    h += '</div></div>';
+  }
+  grid.innerHTML = h;
+}
+
+async function toggleChannel(name, enabled) {
+  const resp = await api('/v1/channels/' + name, 'PUT', { enabled: enabled });
+  if (resp && resp.ok) {
+    loadChannels();
+  }
+}
+
+function showChannelConfig(name) {
+  const ch = _channelData.find(c => c.channel === name);
+  const meta = CHANNEL_META[name] || { icon: '📡', label: name, tokenFields: [] };
+
+  let h = '<div class="agent-modal-overlay" onclick="if(event.target===this)this.remove()">';
+  h += '<div class="agent-modal">';
+  h += '<div class="agent-modal-header">';
+  h += '<div class="agent-modal-title">' + meta.icon + ' Configure ' + meta.label + '</div>';
+  h += '<button class="agent-modal-close" onclick="this.closest(\'.agent-modal-overlay\').remove()">&times;</button>';
+  h += '</div>';
+
+  h += '<div class="agent-editor"><form id="chConfigForm" onsubmit="saveChannelConfig(\'' + name + '\');return false">';
+
+  // Token fields
+  for (const field of meta.tokenFields) {
+    const label = field.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+    h += '<div class="field">';
+    h += '<label>' + escHtml(label) + '</label>';
+    h += '<input class="input" type="password" id="ch_' + field + '" placeholder="Enter ' + label + '..." autocomplete="off">';
+    h += '<div style="font-size:10px;color:var(--fg3);margin-top:2px">Leave empty to keep current value</div>';
+    h += '</div>';
+  }
+
+  // Mention required
+  const mention = ch ? (ch.mention_required !== undefined ? ch.mention_required : true) : true;
+  h += '<div class="field">';
+  h += '<label>Mention Required (groups)</label>';
+  h += '<select class="input" id="ch_mention" style="width:120px">';
+  h += '<option value="true"' + (mention ? ' selected' : '') + '>Yes</option>';
+  h += '<option value="false"' + (!mention ? ' selected' : '') + '>No</option>';
+  h += '</select>';
+  h += '</div>';
+
+  // Enabled toggle
+  const enabled = ch ? ch.enabled : false;
+  h += '<div class="field">';
+  h += '<label>Enabled</label>';
+  h += '<select class="input" id="ch_enabled" style="width:120px">';
+  h += '<option value="true"' + (enabled ? ' selected' : '') + '>Yes</option>';
+  h += '<option value="false"' + (!enabled ? ' selected' : '') + '>No</option>';
+  h += '</select>';
+  h += '</div>';
+
+  h += '<div class="actions">';
+  h += '<button type="button" class="btn btn-outline" onclick="this.closest(\'.agent-modal-overlay\').remove()">Cancel</button>';
+  h += '<button type="submit" class="btn">Save</button>';
+  h += '</div></form></div></div></div>';
+
+  document.body.insertAdjacentHTML('beforeend', h);
+}
+
+async function saveChannelConfig(name) {
+  const meta = CHANNEL_META[name] || { tokenFields: [] };
+  const body = {
+    enabled: document.getElementById('ch_enabled').value === 'true',
+    mention_required: document.getElementById('ch_mention').value === 'true',
+  };
+
+  // Add token values if provided
+  for (const field of meta.tokenFields) {
+    const val = document.getElementById('ch_' + field).value.trim();
+    if (val) body[field] = val;
+  }
+
+  const resp = await api('/v1/channels/' + name, 'PUT', body);
+  if (resp && resp.ok) {
+    // Close modal
+    const overlay = document.querySelector('.agent-modal-overlay');
+    if (overlay) overlay.remove();
+    loadChannels();
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════

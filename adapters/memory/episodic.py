@@ -398,6 +398,10 @@ class EpisodicMemory:
         if cases:
             case_section = "### Relevant Cases\n"
             for c in cases:
+                # Track usage frequency for MEMORY.md P0 ranking
+                case_id = c.get("id", "")
+                if case_id:
+                    self.increment_use_count(case_id)
                 entry = (f"- **Problem:** {c['problem'][:200]}\n"
                          f"  **Solution:** {c['solution'][:300]}\n")
                 if used + len(entry) > budget_chars:
@@ -566,3 +570,135 @@ class EpisodicMemory:
             "daily_logs": daily_count,
             "dates": sorted(self._list_dates()),
         }
+
+    # ── MEMORY.md Generation (P0/P1/P2 tiers) ─────────────────────────────
+
+    def increment_use_count(self, case_id: str):
+        """Increment use_count for a case (tracks how often it's recalled)."""
+        path = os.path.join(self.cases_dir, f"{case_id}.json")
+        if not os.path.exists(path):
+            return
+        try:
+            with open(path) as f:
+                case = json.load(f)
+            case["use_count"] = case.get("use_count", 0) + 1
+            with open(path, "w") as f:
+                json.dump(case, f, ensure_ascii=False, indent=2)
+        except (json.JSONDecodeError, OSError) as e:
+            logger.debug("[%s] increment_use_count failed for %s: %s",
+                         self.agent_id, case_id, e)
+
+    def generate_memory_md(self, max_lines: int = 200) -> str:
+        """Generate MEMORY.md with P0/P1/P2 priority tiers.
+
+        P0 (Permanent): High-frequency cases (by use_count) — core knowledge
+        P1 (90-day TTL): Active patterns (by occurrences) — learned behaviors
+        P2 (30-day TTL): Recent daily summaries — short-term context
+
+        Writes to memory/agents/{agent_id}/MEMORY.md
+        Returns the generated content.
+        """
+        lines = [f"# Memory — {self.agent_id}", ""]
+
+        # P0: Top cases by use_count (permanent core knowledge)
+        lines.append("## P0 — Core Knowledge (Permanent)")
+        cases = []
+        if os.path.isdir(self.cases_dir):
+            for fname in os.listdir(self.cases_dir):
+                if not fname.endswith(".json") or fname.startswith("."):
+                    continue
+                try:
+                    with open(os.path.join(self.cases_dir, fname)) as f:
+                        case = json.load(f)
+                    cases.append(case)
+                except (json.JSONDecodeError, OSError):
+                    continue
+
+        # Sort by use_count descending, take top entries
+        cases.sort(key=lambda c: c.get("use_count", 0), reverse=True)
+        p0_cases = [c for c in cases if c.get("use_count", 0) >= 1][:10]
+        if p0_cases:
+            for c in p0_cases:
+                problem = c.get("problem", "")[:150]
+                solution = c.get("solution", "")[:200]
+                use_count = c.get("use_count", 0)
+                lines.append(f"- [{use_count}x] **{problem}**")
+                lines.append(f"  → {solution}")
+        else:
+            lines.append("- (no frequently used cases yet)")
+        lines.append("")
+
+        # P1: Active patterns by occurrences (90-day TTL)
+        lines.append("## P1 — Active Patterns (90-day TTL)")
+        now = time.time()
+        ttl_90d = 90 * 86400
+        patterns = []
+        if os.path.isdir(self.patterns_dir):
+            for fname in os.listdir(self.patterns_dir):
+                if not fname.endswith(".json") or fname.startswith("."):
+                    continue
+                try:
+                    with open(os.path.join(self.patterns_dir, fname)) as f:
+                        pat = json.load(f)
+                    created = pat.get("created_at", 0)
+                    if (now - created) <= ttl_90d:
+                        patterns.append(pat)
+                except (json.JSONDecodeError, OSError):
+                    continue
+
+        patterns.sort(key=lambda p: p.get("occurrences", 1), reverse=True)
+        for p in patterns[:10]:
+            occ = p.get("occurrences", 1)
+            lines.append(f"- [{occ}x] {p.get('pattern', '')[:200]}")
+        if not patterns:
+            lines.append("- (no active patterns)")
+        lines.append("")
+
+        # P2: Recent daily summaries (30-day TTL)
+        lines.append("## P2 — Recent Activity (30-day TTL)")
+        ttl_30d = 30 * 86400
+        daily_files = []
+        if os.path.isdir(self.daily_dir):
+            for fname in sorted(os.listdir(self.daily_dir), reverse=True):
+                if not fname.endswith(".md") or fname.startswith("."):
+                    continue
+                fpath = os.path.join(self.daily_dir, fname)
+                try:
+                    mtime = os.path.getmtime(fpath)
+                    if (now - mtime) <= ttl_30d:
+                        daily_files.append(fpath)
+                except OSError:
+                    continue
+
+        for fpath in daily_files[:7]:  # last 7 daily logs
+            try:
+                with open(fpath) as f:
+                    content = f.read().strip()
+                # Take first few lines as summary
+                summary_lines = content.split("\n")[:5]
+                for sl in summary_lines:
+                    lines.append(sl)
+                    if len(lines) >= max_lines - 5:
+                        break
+            except OSError:
+                continue
+            if len(lines) >= max_lines - 5:
+                break
+        if not daily_files:
+            lines.append("- (no recent daily logs)")
+
+        # Truncate to max_lines
+        content = "\n".join(lines[:max_lines])
+
+        # Write to disk
+        md_path = os.path.join(self.base, "MEMORY.md")
+        try:
+            with open(md_path, "w") as f:
+                f.write(content)
+            logger.debug("[%s] generated MEMORY.md (%d lines)",
+                         self.agent_id, min(len(lines), max_lines))
+        except OSError as e:
+            logger.warning("[%s] failed to write MEMORY.md: %s",
+                           self.agent_id, e)
+
+        return content

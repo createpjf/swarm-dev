@@ -53,6 +53,12 @@ channels:
     enabled: false
     app_id_env: FEISHU_APP_ID
     app_secret_env: FEISHU_APP_SECRET
+  slack:
+    enabled: false
+    bot_token_env: SLACK_BOT_TOKEN
+    app_token_env: SLACK_APP_TOKEN
+    allowed_channels: []
+    mention_required: true
 
 workspace:
   path: workspace

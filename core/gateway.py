@@ -48,7 +48,8 @@ Endpoints:
   GET  /v1/memory/kb/notes           Shared knowledge base notes
   GET  /v1/memory/kb/moc             Map of Content
   GET  /v1/memory/kb/insights        Cross-agent insights feed
-  GET  /v1/channels                   Channel adapter status (Telegram/Discord/Feishu)
+  GET  /v1/channels                   Channel adapter status (Telegram/Discord/Feishu/Slack)
+  PUT  /v1/channels/:name              Update channel config (enable/disable, tokens)
   GET  /v1/tools                      List built-in tools and availability
 
 Default port: 19789  (configurable via SWARM_GATEWAY_PORT or config)
@@ -326,6 +327,9 @@ class _Handler(BaseHTTPRequestHandler):
         elif path.startswith("/v1/skills/"):
             name = path[len("/v1/skills/"):]
             self._handle_update_skill(name)
+        elif path.startswith("/v1/channels/"):
+            channel_name = path[len("/v1/channels/"):]
+            self._handle_update_channel(channel_name)
         elif path.startswith("/v1/agents/"):
             agent_id = path[len("/v1/agents/"):]
             self._handle_update_agent(agent_id)
@@ -1542,11 +1546,103 @@ class _Handler(BaseHTTPRequestHandler):
         if _channel_manager:
             statuses = _channel_manager.get_status()
         else:
+            # Return known channels with config info even if manager not running
             statuses = []
+            try:
+                import yaml as _yaml
+                with open("config/agents.yaml", "r") as _f:
+                    cfg = _yaml.safe_load(_f) or {}
+                ch_cfg = cfg.get("channels", {})
+                known = ["telegram", "discord", "feishu", "slack"]
+                for name in known:
+                    c = ch_cfg.get(name, {})
+                    statuses.append({
+                        "channel": name,
+                        "enabled": c.get("enabled", False),
+                        "running": False,
+                        "token_configured": False,
+                        "mention_required": c.get("mention_required", True),
+                        "config": {k: v for k, v in c.items()
+                                   if k != "enabled"},
+                    })
+            except Exception:
+                pass
         self._json_response(200, {
             "channels": statuses,
             "total": len(statuses),
             "manager_running": _channel_manager is not None,
+        })
+
+    def _handle_update_channel(self, channel_name: str):
+        """PUT /v1/channels/:name — update channel config (enable/disable, tokens)."""
+        import yaml
+        from core.config_manager import safe_write_yaml
+
+        body = self._read_json_body()
+        if body is None:
+            return
+
+        valid_channels = {"telegram", "discord", "feishu", "slack"}
+        if channel_name not in valid_channels:
+            self._json_response(400, {
+                "error": f"Unknown channel: {channel_name}",
+                "valid": sorted(valid_channels),
+            })
+            return
+
+        # Load current config
+        config_path = "config/agents.yaml"
+        try:
+            with open(config_path, "r") as f:
+                config = yaml.safe_load(f) or {}
+        except Exception as e:
+            self._json_response(500, {"error": f"Failed to load config: {e}"})
+            return
+
+        channels = config.setdefault("channels", {})
+        ch_cfg = channels.setdefault(channel_name, {})
+
+        # Update fields
+        if "enabled" in body:
+            ch_cfg["enabled"] = bool(body["enabled"])
+
+        if "mention_required" in body:
+            ch_cfg["mention_required"] = bool(body["mention_required"])
+
+        if "allowed_channels" in body:
+            ch_cfg["allowed_channels"] = body["allowed_channels"]
+
+        if "allowed_users" in body:
+            ch_cfg["allowed_users"] = body["allowed_users"]
+
+        # Handle token values — save to .env, not YAML
+        token_map = {
+            "telegram": {"bot_token": "TELEGRAM_BOT_TOKEN"},
+            "discord": {"bot_token": "DISCORD_BOT_TOKEN"},
+            "feishu": {"app_id": "FEISHU_APP_ID", "app_secret": "FEISHU_APP_SECRET"},
+            "slack": {"bot_token": "SLACK_BOT_TOKEN", "app_token": "SLACK_APP_TOKEN"},
+        }
+
+        env_keys = token_map.get(channel_name, {})
+        for field_name, default_env_key in env_keys.items():
+            value = body.get(field_name)
+            if value:
+                env_key = ch_cfg.get(f"{field_name}_env", default_env_key)
+                _save_env_var(env_key, value)
+
+        # Write updated config
+        try:
+            safe_write_yaml(config_path, config, f"update channel {channel_name}")
+        except Exception as e:
+            self._json_response(500, {"error": f"Failed to save config: {e}"})
+            return
+
+        self._json_response(200, {
+            "ok": True,
+            "channel": channel_name,
+            "config": ch_cfg,
+            "message": f"Channel '{channel_name}' updated. "
+                       "Restart gateway to apply changes.",
         })
 
     # ══════════════════════════════════════════════════════════════════════════

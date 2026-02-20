@@ -167,8 +167,10 @@ class BaseAgent:
         # 2. Reference documents (per-agent + shared)
         docs_text = self.skill_loader.load_docs(self.cfg.agent_id)
 
-        # 3. Context bus snapshot
-        context_snap = json.dumps(bus.snapshot(), indent=2, ensure_ascii=False)
+        # 3. Context bus snapshot (layered — filtered by agent visibility)
+        context_snap = json.dumps(
+            bus.snapshot_for_agent(self.cfg.agent_id),
+            indent=2, ensure_ascii=False)
 
         # 4. Long-term memory recall (NEW — activates dormant memory)
         memory_section = ""
@@ -292,8 +294,10 @@ class BaseAgent:
         # 8a. Store to long-term memory (episodic + vector)
         self._store_to_memory(task, result)
 
-        # 8b. Publish to context bus
-        bus.publish(self.cfg.agent_id, "last_result", result)
+        # 8b. Publish to context bus (short-term layer — 1 day TTL)
+        from core.context_bus import LAYER_SHORT
+        bus.publish(self.cfg.agent_id, "last_result", result,
+                    layer=LAYER_SHORT)
 
         logger.info("[%s] task completed, result length=%d",
                     self.cfg.agent_id, len(result))
@@ -421,6 +425,18 @@ class BaseAgent:
         """
         parts = []
 
+        # Hot Memory: MEMORY.md (P0/P1/P2 crystallized knowledge)
+        memory_md_path = os.path.join(
+            "memory", "agents", self.cfg.agent_id, "MEMORY.md")
+        if os.path.exists(memory_md_path):
+            try:
+                with open(memory_md_path) as f:
+                    md_content = f.read().strip()[:1500]
+                if md_content:
+                    parts.append(f"## Persistent Memory\n{md_content}")
+            except OSError:
+                pass
+
         # Episodic memory recall (per-agent)
         if self.episodic:
             try:
@@ -465,6 +481,22 @@ class BaseAgent:
             except Exception as e:
                 logger.debug("[%s] vector recall failed: %s",
                              self.cfg.agent_id, e)
+
+        # FTS5 search augmentation (QMD engine)
+        try:
+            from core.search import QMD
+            qmd = QMD()
+            fts_results = qmd.search(query, collection="memory", limit=3)
+            qmd.close()
+            if fts_results:
+                fts_section = "## FTS5 Search Results\n"
+                for r in fts_results:
+                    title = r.get("title", "")
+                    snippet = r.get("snippet", "")[:200]
+                    fts_section += f"- {title}: {snippet}\n"
+                parts.append(fts_section)
+        except Exception:
+            pass  # FTS5 is optional enhancement
 
         return "\n".join(parts)
 

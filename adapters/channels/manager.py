@@ -31,6 +31,7 @@ PLATFORM_LIMITS = {
     "telegram": 4096,
     "discord": 2000,
     "feishu": 10000,
+    "slack": 4000,
 }
 
 TASK_TIMEOUT = 600  # 10 minutes
@@ -115,23 +116,66 @@ class ChannelManager:
 
     def get_status(self) -> list[dict]:
         """Return status of all adapters (for /v1/channels endpoint)."""
+        # Canonical list of known channels
+        known_channels = ["telegram", "discord", "feishu", "slack"]
         statuses = []
-        for adapter in self.adapters:
-            statuses.append({
-                "channel": adapter.channel_name,
-                "enabled": adapter.is_enabled(),
-                "running": adapter._running,
-            })
-        # Include disabled channels from config
+
+        for name in known_channels:
+            cfg = self.channels_config.get(name, {})
+            adapter = self._get_adapter(name)
+
+            status: dict = {
+                "channel": name,
+                "enabled": cfg.get("enabled", False),
+                "running": adapter._running if adapter else False,
+            }
+
+            # Add config details for dashboard
+            token_env_keys = self._get_token_env_keys(name, cfg)
+            status["token_configured"] = all(
+                bool(os.environ.get(cfg.get(k, ""), ""))
+                for k in token_env_keys
+            ) if token_env_keys else False
+            status["mention_required"] = cfg.get("mention_required", True)
+            status["config"] = {
+                k: v for k, v in cfg.items()
+                if k not in ("enabled",) and not k.endswith("_token")
+            }
+
+            if not adapter and cfg.get("enabled", False):
+                status["reason"] = "SDK not installed"
+            elif not cfg.get("enabled", False):
+                status["reason"] = "disabled"
+
+            statuses.append(status)
+
+        # Include any extra channels from config not in the known list
         for name in self.channels_config:
-            if not any(a.channel_name == name for a in self.adapters):
+            if name not in known_channels:
+                cfg = self.channels_config[name]
+                adapter = self._get_adapter(name)
                 statuses.append({
                     "channel": name,
-                    "enabled": False,
-                    "running": False,
+                    "enabled": cfg.get("enabled", False),
+                    "running": adapter._running if adapter else False,
+                    "token_configured": False,
+                    "mention_required": cfg.get("mention_required", True),
+                    "config": {},
                     "reason": "disabled or SDK not installed",
                 })
+
         return statuses
+
+    @staticmethod
+    def _get_token_env_keys(channel_name: str, cfg: dict) -> list[str]:
+        """Return the config keys that reference env vars for tokens."""
+        if channel_name in ("telegram", "discord"):
+            return ["bot_token_env"]
+        elif channel_name == "feishu":
+            return ["app_id_env", "app_secret_env"]
+        elif channel_name == "slack":
+            return ["bot_token_env", "app_token_env"]
+        return []
 
     # ── Internal ──
 
@@ -175,6 +219,16 @@ class ChannelManager:
                 logger.warning(
                     "Feishu adapter skipped: lark-oapi not installed. "
                     "Install with: pip install lark-oapi")
+                return None
+
+        elif name == "slack":
+            try:
+                from .slack import SlackAdapter
+                return SlackAdapter(cfg)
+            except ImportError:
+                logger.warning(
+                    "Slack adapter skipped: slack-sdk not installed. "
+                    "Install with: pip install 'slack-sdk[socket-mode]'")
                 return None
 
         else:

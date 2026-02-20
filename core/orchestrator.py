@@ -298,6 +298,7 @@ def _infer_role(description: str) -> str:
     # Planner keywords
     if any(kw in desc_lower for kw in [
         "plan", "decompose", "architect", "outline",
+        "synthesize", "summary", "综合", "总结",
     ]):
         return "planner"  # matches planner's "Strategic planner"
 
@@ -855,6 +856,28 @@ def _extract_and_store_memories(agent, task, result: str):
     except Exception as e:
         logger.debug("[%s] memory extraction failed (non-critical): %s",
                      agent.cfg.agent_id, e)
+
+    # FTS5 incremental indexing — index task result for future search
+    try:
+        from core.search import QMD
+        qmd = QMD()
+        qmd.index(
+            title=task.description[:120],
+            content=result[:2000],
+            collection="memory",
+            agent_id=agent_id,
+            source_type="episode",
+        )
+        qmd.close()
+    except Exception:
+        pass  # search index is optional enhancement
+
+    # Refresh MEMORY.md from episodic data
+    if agent.episodic:
+        try:
+            agent.episodic.generate_memory_md()
+        except Exception:
+            pass  # MEMORY.md generation is non-critical
 
 
 # ── Orchestrator ────────────────────────────────────────────────────────────

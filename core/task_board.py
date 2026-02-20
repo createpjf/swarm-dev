@@ -68,6 +68,31 @@ _ROLE_TO_AGENTS = {
 # Prevents executor from stealing planner tasks or vice versa.
 _STRICT_ROLES = {"planner", "plan", "review", "critique"}
 
+# Agent claim restrictions: certain agents can ONLY claim specific role types.
+# This prevents reviewer from stealing executor/planner tasks when required_role=None.
+_AGENT_CLAIM_RESTRICTIONS: dict[str, set[str]] = {
+    "reviewer": {"review", "critique"},
+    "auditor":  {"review", "critique"},
+}
+
+
+def _agent_may_claim(agent_id: str, required_role: str | None) -> bool:
+    """Check if agent is allowed to claim a task based on agent-level restrictions.
+
+    Restricted agents (reviewer, auditor) can ONLY claim tasks whose
+    required_role matches their allowed set.  If required_role is None
+    (generic task), restricted agents are blocked.
+
+    Non-restricted agents (executor, planner) are always allowed.
+    """
+    aid = agent_id.lower()
+    for restricted_keyword, allowed_roles in _AGENT_CLAIM_RESTRICTIONS.items():
+        if restricted_keyword in aid:
+            if required_role is None:
+                return False
+            return required_role.lower() in allowed_roles
+    return True
+
 
 def _role_matches(required_role: str, agent_id: str, agent_role: str | None) -> bool:
     """Check if an agent qualifies for a required_role.
@@ -244,8 +269,12 @@ class TaskBoard:
                 if any(b not in completed_ids for b in t.get("blocked_by", [])):
                     continue
 
-                # Phase 6: role-based routing
+                # Agent claim restrictions (prevents reviewer stealing executor tasks)
                 req_role = t.get("required_role")
+                if not _agent_may_claim(agent_id, req_role):
+                    continue
+
+                # Phase 6: role-based routing
                 if req_role:
                     if not _role_matches(req_role, agent_id, agent_role):
                         continue

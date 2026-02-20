@@ -8,6 +8,12 @@ questionary>=2.0.0
 # ── Memory (recommended) ──
 chromadb>=0.4.0
 
+# ── Channels (optional) ──
+# python-telegram-bot>=21.0         # Telegram
+# discord.py>=2.3                   # Discord
+# lark-oapi>=1.3.0                  # Feishu / Lark
+# slack-sdk[socket-mode]>=3.27      # Slack
+
 # ── On-chain (optional) ──
 # web3>=6.0.0
 # eth-account>=0.9.0

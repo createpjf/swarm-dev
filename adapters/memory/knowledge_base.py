@@ -209,6 +209,7 @@ class KnowledgeBase:
                     "tags": note.get("tags", []),
                     "contributors": note.get("contributors", []),
                     "update_count": note.get("update_count", 1),
+                    "links": note.get("links", []),
                 })
             except (json.JSONDecodeError, OSError):
                 continue
@@ -243,9 +244,11 @@ class KnowledgeBase:
             lines.append(f"\n## {tag.title()}\n")
             for n in sorted(by_tag[tag], key=lambda x: x["topic"]):
                 contributors = ", ".join(n.get("contributors", []))
+                link_count = len(n.get("links", []))
+                links_str = f", {link_count} links" if link_count else ""
                 lines.append(
                     f"- **{n['topic']}** "
-                    f"({n.get('update_count', 1)} updates, "
+                    f"({n.get('update_count', 1)} updates{links_str}, "
                     f"by {contributors})")
 
         moc = "\n".join(lines)
