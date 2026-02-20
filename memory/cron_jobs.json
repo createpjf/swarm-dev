@@ -1,0 +1,62 @@
+[
+  {
+    "id": "02104ba877a0",
+    "name": "会议提醒 - 今天下午2点",
+    "action": "task",
+    "payload": "提醒：今天下午2点有一个会议，请准时参加！",
+    "schedule_type": "once",
+    "schedule": "2026-02-20T14:00:00",
+    "agent_id": "",
+    "enabled": false,
+    "created_at": "2026-02-20T05:01:44.504693+00:00",
+    "last_run": "2026-02-20T06:00:16.447532+00:00",
+    "next_run": null,
+    "run_count": 1,
+    "last_error": null
+  },
+  {
+    "id": "406861d95afb",
+    "name": "会议提醒 - 今天下午2点",
+    "action": "task",
+    "payload": "提醒：今天下午2点有一个会议，请准时参加！",
+    "schedule_type": "once",
+    "schedule": "2026-02-20T14:00:00",
+    "agent_id": "",
+    "enabled": false,
+    "created_at": "2026-02-20T06:00:43.975601+00:00",
+    "last_run": "2026-02-20T06:00:46.586056+00:00",
+    "next_run": null,
+    "run_count": 1,
+    "last_error": null
+  },
+  {
+    "id": "d88641ffb6c2",
+    "name": "会议提醒 - 今天下午2点",
+    "action": "task",
+    "payload": "提醒：今天下午2点有一个会议，请准时参加！",
+    "schedule_type": "once",
+    "schedule": "2026-02-20T14:00:00",
+    "agent_id": "",
+    "enabled": false,
+    "created_at": "2026-02-20T06:01:10.136659+00:00",
+    "last_run": "2026-02-20T06:01:16.765735+00:00",
+    "next_run": null,
+    "run_count": 1,
+    "last_error": null
+  },
+  {
+    "id": "7ca98b7599d7",
+    "name": "会议提醒 - 今天下午2点",
+    "action": "webhook",
+    "payload": "提醒：今天下午2点有一个会议，请准时参加！",
+    "schedule_type": "once",
+    "schedule": "2026-02-20T14:00:00",
+    "agent_id": "",
+    "enabled": false,
+    "created_at": "2026-02-20T06:01:47.862466+00:00",
+    "last_run": "2026-02-20T06:02:16.898911+00:00",
+    "next_run": null,
+    "run_count": 1,
+    "last_error": "unknown url type: '提醒：今天下午2点有一个会议，请准时参加！'"
+  }
+]

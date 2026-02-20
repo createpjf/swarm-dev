@@ -1,0 +1,71 @@
+{
+  "_comment": "Contract addresses and minimal ABIs for on-chain operations",
+  "networks": {
+    "base": {
+      "chain_id": 8453,
+      "rpc_url": "https://mainnet.base.org",
+      "explorer": "https://basescan.org"
+    },
+    "base-sepolia": {
+      "chain_id": 84532,
+      "rpc_url": "https://sepolia.base.org",
+      "explorer": "https://sepolia.basescan.org"
+    }
+  },
+  "contracts": {
+    "erc8004_identity_registry": {
+      "base-sepolia": "0xd5271339C5f1bae8445fc1d81FD3520b6cA239a3",
+      "base": "",
+      "abi": [
+        "function registerAgent(string memory agentCardCid) external returns (uint256 agentId)",
+        "function setAgentWallet(uint256 agentId, address newWallet, bytes calldata sig) external",
+        "function isRegisteredAgent(address wallet) external view returns (bool)",
+        "function getAgentId(address wallet) external view returns (uint256)",
+        "function tokenURI(uint256 tokenId) external view returns (string)",
+        "function ownerOf(uint256 tokenId) external view returns (address)",
+        "event AgentRegistered(uint256 indexed agentId, address indexed wallet, string agentCardCid)"
+      ]
+    },
+    "erc8004_reputation_registry": {
+      "base-sepolia": "0x3b20aa85d8Fb47741102A6d189fcA14b7810E7AD",
+      "base": "",
+      "abi": [
+        "function submitReputation(uint256 agentId, uint256 score, string calldata signalsCid) external",
+        "function getReputation(uint256 agentId) external view returns (uint256 score, uint256 submissions, uint256 lastUpdate)",
+        "event ReputationSubmitted(uint256 indexed agentId, uint256 score, address indexed submitter)"
+      ]
+    },
+    "usdc": {
+      "base-sepolia": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+      "base": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "abi": [
+        "function balanceOf(address account) external view returns (uint256)",
+        "function transfer(address to, uint256 amount) external returns (bool)",
+        "function approve(address spender, uint256 amount) external returns (bool)",
+        "function allowance(address owner, address spender) external view returns (uint256)",
+        "function transferWithAuthorization(address from, address to, uint256 value, uint256 validAfter, uint256 validBefore, bytes32 nonce, bytes calldata signature) external"
+      ]
+    },
+    "gnosis_safe_proxy_factory": {
+      "base-sepolia": "0xa6B71E26C5e0845f74c812102Ca7114b6a896AB2",
+      "base": "0xa6B71E26C5e0845f74c812102Ca7114b6a896AB2",
+      "abi": [
+        "function createProxyWithNonce(address singleton, bytes memory initializer, uint256 saltNonce) external returns (address proxy)"
+      ]
+    }
+  },
+  "lit_protocol": {
+    "naga-dev": {
+      "description": "Naga Dev — centralized devnet for development",
+      "chronicle_chain": "yellowstone"
+    },
+    "naga-test": {
+      "description": "Naga Test — decentralized testnet",
+      "chronicle_chain": "yellowstone"
+    },
+    "naga": {
+      "description": "Naga Mainnet — production",
+      "chronicle_chain": "yellowstone"
+    }
+  }
+}

@@ -372,9 +372,9 @@ def _wizard_advanced():
 
     # Write gateway config to .env
     if gateway_port:
-        _write_env("SWARM_GATEWAY_PORT", str(gateway_port))
+        _write_env("CLEO_GATEWAY_PORT", str(gateway_port))
     if gateway_token:
-        _write_env("SWARM_GATEWAY_TOKEN", gateway_token)
+        _write_env("CLEO_GATEWAY_TOKEN", gateway_token)
 
     # ── Step 5: Health Check ──
     console.print(f"\n  [{C_ACCENT}]Step 5/5 · Health Check[/{C_ACCENT}]")
@@ -1039,8 +1039,8 @@ def _section_gateway(cfg: dict):
     """Section: Gateway port & token."""
     from core.gateway import DEFAULT_PORT, generate_token
 
-    current_port = os.environ.get("SWARM_GATEWAY_PORT", str(DEFAULT_PORT))
-    current_token = os.environ.get("SWARM_GATEWAY_TOKEN", "")
+    current_port = os.environ.get("CLEO_GATEWAY_PORT", str(DEFAULT_PORT))
+    current_token = os.environ.get("CLEO_GATEWAY_TOKEN", "")
 
     console.print(f"  [{C_DIM}]Current port: {current_port}[/{C_DIM}]")
     if current_token:
@@ -1076,9 +1076,9 @@ def _section_gateway(cfg: dict):
         token = generate_token()
         console.print(f"  [{C_OK}]+[/{C_OK}] Generated token: [{C_DIM}]{token}[/{C_DIM}]")
 
-    _write_env("SWARM_GATEWAY_PORT", str(port))
+    _write_env("CLEO_GATEWAY_PORT", str(port))
     if token:
-        _write_env("SWARM_GATEWAY_TOKEN", token)
+        _write_env("CLEO_GATEWAY_TOKEN", token)
 
     console.print(f"  [{C_OK}]+[/{C_OK}] Gateway: http://127.0.0.1:{port}/")
     console.print(f"  [{C_DIM}]Dashboard: http://127.0.0.1:{port}/[/{C_DIM}]")
@@ -1969,8 +1969,8 @@ def _ask_daemon(port: int, token: str):
 def _show_gateway_summary(provider: str, model: str):
     """Show gateway-style summary after quick setup."""
     info = PROVIDERS[provider]
-    gateway_token = os.environ.get("SWARM_GATEWAY_TOKEN", "")
-    gateway_port  = os.environ.get("SWARM_GATEWAY_PORT", "19789")
+    gateway_token = os.environ.get("CLEO_GATEWAY_TOKEN", "")
+    gateway_port  = os.environ.get("CLEO_GATEWAY_PORT", "19789")
     token_line = f"  Token      [{C_DIM}]{gateway_token}[/{C_DIM}]\n" if gateway_token else ""
 
     console.print()
@@ -2017,7 +2017,7 @@ def _show_gateway_summary_full(agents_cfg: list[dict], memory: str, chain: bool,
         box=box.ROUNDED,
     ))
     console.print(table)
-    gateway_token = os.environ.get("SWARM_GATEWAY_TOKEN", "")
+    gateway_token = os.environ.get("CLEO_GATEWAY_TOKEN", "")
 
     console.print(f"  Memory   [{C_DIM}]{mem_label}[/{C_DIM}]")
     console.print(f"  Chain    [{C_DIM}]{chain_label}[/{C_DIM}]")
@@ -2264,8 +2264,8 @@ def _detect_existing_config() -> str:
         lines.append(f"    [{C_AGENT}]{a['id']:10}[/{C_AGENT}] [{C_DIM}]{p}/{a.get('model', '?')}{fb_str}[/{C_DIM}]")
 
     # Gateway token
-    gateway_token = os.environ.get("SWARM_GATEWAY_TOKEN", "")
-    gateway_port  = os.environ.get("SWARM_GATEWAY_PORT", "19789")
+    gateway_token = os.environ.get("CLEO_GATEWAY_TOKEN", "")
+    gateway_port  = os.environ.get("CLEO_GATEWAY_PORT", "19789")
 
     console.print()
     console.print(f"  [{C_DIM}]provider:[/{C_DIM}]      {global_provider}")

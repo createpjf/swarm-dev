@@ -71,7 +71,7 @@ def run_preflight() -> list[str]:
 
     # 3. Gateway port free?
     import socket
-    gw_port = int(os.environ.get("SWARM_GATEWAY_PORT", "19789"))
+    gw_port = int(os.environ.get("CLEO_GATEWAY_PORT", "19789"))
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(0.5)
@@ -297,7 +297,7 @@ def check_gateway() -> tuple[bool, str, str]:
     """Check if the gateway is running."""
     from core.gateway import check_gateway as _check, DEFAULT_PORT
 
-    port = int(os.environ.get("SWARM_GATEWAY_PORT", str(DEFAULT_PORT)))
+    port = int(os.environ.get("CLEO_GATEWAY_PORT", str(DEFAULT_PORT)))
     ok, msg = _check(port)
     if ok:
         return True, "Gateway", f"http://127.0.0.1:{port} — {msg}"

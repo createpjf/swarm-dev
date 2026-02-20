@@ -149,8 +149,8 @@ def interactive_main():
     if "--no-gateway" not in sys.argv:
         try:
             from core.gateway import start_gateway, DEFAULT_PORT
-            gw_port = int(os.environ.get("SWARM_GATEWAY_PORT", str(DEFAULT_PORT)))
-            gw_token = os.environ.get("SWARM_GATEWAY_TOKEN", "")
+            gw_port = int(os.environ.get("CLEO_GATEWAY_PORT", str(DEFAULT_PORT)))
+            gw_token = os.environ.get("CLEO_GATEWAY_TOKEN", "")
             gw_server = start_gateway(port=gw_port, token=gw_token, daemon=True)
             if gw_server:
                 console.print(f"  [dim]Gateway:[/dim] [bold]http://127.0.0.1:{gw_port}/[/bold]  [dim]/gateway for status[/dim]")
@@ -474,7 +474,7 @@ def interactive_main():
                 _show_gateway_status(console)
             elif gw_action == "stop":
                 from core.gateway import kill_port, DEFAULT_PORT
-                gw_port = int(os.environ.get("SWARM_GATEWAY_PORT", str(DEFAULT_PORT)))
+                gw_port = int(os.environ.get("CLEO_GATEWAY_PORT", str(DEFAULT_PORT)))
                 from core.i18n import t as _t
                 console.print(f"  [dim]{_t('gw.stopping')}[/dim]")
                 killed = kill_port(gw_port)
@@ -484,8 +484,8 @@ def interactive_main():
                     console.print(f"  [dim]{_t('gw.not_running')}[/dim]\n")
             elif gw_action == "restart":
                 from core.gateway import kill_port, start_gateway, DEFAULT_PORT
-                gw_port = int(os.environ.get("SWARM_GATEWAY_PORT", str(DEFAULT_PORT)))
-                gw_token = os.environ.get("SWARM_GATEWAY_TOKEN", "")
+                gw_port = int(os.environ.get("CLEO_GATEWAY_PORT", str(DEFAULT_PORT)))
+                gw_token = os.environ.get("CLEO_GATEWAY_TOKEN", "")
                 from core.i18n import t as _t
                 console.print(f"  [dim]{_t('gw.restarting')}[/dim]")
                 kill_port(gw_port)
@@ -499,8 +499,8 @@ def interactive_main():
             elif gw_action == "install":
                 from core.gateway import generate_token, DEFAULT_PORT
                 from core.daemon import install_daemon
-                gw_port = int(os.environ.get("SWARM_GATEWAY_PORT", str(DEFAULT_PORT)))
-                gw_token = os.environ.get("SWARM_GATEWAY_TOKEN", "")
+                gw_port = int(os.environ.get("CLEO_GATEWAY_PORT", str(DEFAULT_PORT)))
+                gw_token = os.environ.get("CLEO_GATEWAY_TOKEN", "")
                 if not gw_token:
                     gw_token = generate_token()
                 ok, msg = install_daemon(gw_port, gw_token)
@@ -1287,8 +1287,8 @@ def cmd_gateway(action: str = "start", port: int = 0, token: str = "",
     from core.gateway import DEFAULT_PORT
     from core.i18n import t as _t
 
-    port = port or int(os.environ.get("SWARM_GATEWAY_PORT", str(DEFAULT_PORT)))
-    token = token or os.environ.get("SWARM_GATEWAY_TOKEN", "")
+    port = port or int(os.environ.get("CLEO_GATEWAY_PORT", str(DEFAULT_PORT)))
+    token = token or os.environ.get("CLEO_GATEWAY_TOKEN", "")
 
     try:
         from rich.console import Console
@@ -1370,7 +1370,7 @@ def _show_gateway_status(console, port: int = 0):
     from core.daemon import daemon_status
     from core.i18n import t as _t
 
-    port = port or int(os.environ.get("SWARM_GATEWAY_PORT", str(DEFAULT_PORT)))
+    port = port or int(os.environ.get("CLEO_GATEWAY_PORT", str(DEFAULT_PORT)))
 
     # Probe the gateway
     probe = probe_gateway(port)
@@ -1397,7 +1397,7 @@ def _show_gateway_status(console, port: int = 0):
             tbl.add_row(_t("gw.url"), f"http://127.0.0.1:{port}/")
 
             # Mask token for display
-            token = os.environ.get("SWARM_GATEWAY_TOKEN", "")
+            token = os.environ.get("CLEO_GATEWAY_TOKEN", "")
             if token:
                 masked = token[:10] + "..." + token[-4:] if len(token) > 16 else "***"
                 tbl.add_row(_t("gw.token"), f"[dim]{masked}[/dim]")
@@ -1508,14 +1508,14 @@ def cmd_channels(action: str = "list", channel: str = None,
     if action in ("list", "status"):
         # Try gateway API first
         from core.gateway import DEFAULT_PORT, probe_gateway
-        port = int(os.environ.get("SWARM_GATEWAY_PORT", str(DEFAULT_PORT)))
+        port = int(os.environ.get("CLEO_GATEWAY_PORT", str(DEFAULT_PORT)))
         probe = probe_gateway(port)
 
         channels_data = []
         if probe.get("reachable"):
             try:
                 import httpx
-                token = os.environ.get("SWARM_GATEWAY_TOKEN", "")
+                token = os.environ.get("CLEO_GATEWAY_TOKEN", "")
                 headers = {"Authorization": f"Bearer {token}"} if token else {}
                 resp = httpx.get(f"http://127.0.0.1:{port}/v1/channels",
                                  headers=headers, timeout=5)
@@ -2751,7 +2751,7 @@ def main():
                                 "install", "uninstall"],
                        help="Gateway action (default: start)")
     p_gw.add_argument("-p", "--port", type=int, default=0,
-                       help="Port (default: 19789 or SWARM_GATEWAY_PORT)")
+                       help="Port (default: 19789 or CLEO_GATEWAY_PORT)")
     p_gw.add_argument("-t", "--token", default="",
                        help="Bearer token (default: auto-generate)")
     p_gw.add_argument("--force", action="store_true",

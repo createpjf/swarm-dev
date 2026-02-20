@@ -956,16 +956,22 @@ if (!localStorage.getItem('cleo_token') && localStorage.getItem('swarm_token')) 
   localStorage.setItem('cleo_token', localStorage.getItem('swarm_token'));
 }
 
-// Auto-login: read token from URL param (?token=xxx) or localStorage
+// Auto-login: prefer server-injected token > URL param > localStorage
 let TOKEN = (function() {
+  // 1. Token injected by gateway into <head> — highest priority
+  if (window.__CLEO_TOKEN__) {
+    localStorage.setItem('cleo_token', window.__CLEO_TOKEN__);
+    return window.__CLEO_TOKEN__;
+  }
+  // 2. URL param (?token=xxx)
   const p = new URLSearchParams(window.location.search);
   const t = p.get('token');
   if (t) {
     localStorage.setItem('cleo_token', t);
-    // Clean URL without reloading
     history.replaceState(null, '', window.location.pathname);
     return t;
   }
+  // 3. localStorage fallback
   return localStorage.getItem('cleo_token') || '';
 })();
 

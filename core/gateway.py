@@ -52,8 +52,8 @@ Endpoints:
   PUT  /v1/channels/:name              Update channel config (enable/disable, tokens)
   GET  /v1/tools                      List built-in tools and availability
 
-Default port: 19789  (configurable via SWARM_GATEWAY_PORT or config)
-Auth: Bearer token  (auto-generated, configurable via SWARM_GATEWAY_TOKEN)
+Default port: 19789  (configurable via CLEO_GATEWAY_PORT or config)
+Auth: Bearer token  (auto-injected into dashboard, configurable via CLEO_GATEWAY_TOKEN)
 """
 
 from __future__ import annotations
@@ -637,15 +637,22 @@ class _Handler(BaseHTTPRequestHandler):
 
     # ── Dashboard ──
     def _serve_dashboard(self):
-        """Serve the embedded web dashboard."""
+        """Serve the embedded web dashboard with auto-injected auth token."""
         html_path = os.path.join(os.path.dirname(__file__), "dashboard.html")
         if not os.path.exists(html_path):
             self._json_response(404, {"error": "dashboard.html not found"})
             return
         try:
-            with open(html_path, "rb") as f:
-                content = f.read()
-            self._html_response(200, content)
+            with open(html_path, "r", encoding="utf-8") as f:
+                html = f.read()
+            # Auto-inject gateway token so the dashboard can authenticate
+            # without requiring the user to manually enter it.
+            if _token:
+                inject_script = (
+                    f'\n<script>window.__CLEO_TOKEN__="{_token}";</script>\n'
+                )
+                html = html.replace("</head>", inject_script + "</head>", 1)
+            self._html_response(200, html.encode("utf-8"))
         except Exception as e:
             self._json_response(500, {"error": f"Failed to serve dashboard: {e}"})
 
@@ -2212,8 +2219,10 @@ def start_gateway(port: int = 0, token: str = "",
     """
     global _start_time, _token, _config
 
-    port = port or int(os.environ.get("SWARM_GATEWAY_PORT", str(DEFAULT_PORT)))
-    token = token or os.environ.get("SWARM_GATEWAY_TOKEN", "")
+    port = port or int(os.environ.get("CLEO_GATEWAY_PORT",
+                        os.environ.get("SWARM_GATEWAY_PORT", str(DEFAULT_PORT))))
+    token = token or os.environ.get("CLEO_GATEWAY_TOKEN",
+                      os.environ.get("SWARM_GATEWAY_TOKEN", ""))
 
     _start_time = time.time()
     _token = token
@@ -2325,13 +2334,15 @@ def run_gateway_cli(port: int = 0, token: str = ""):
         else:
             i += 1
 
-    token = token or os.environ.get("SWARM_GATEWAY_TOKEN", "")
+    token = token or os.environ.get("CLEO_GATEWAY_TOKEN",
+                      os.environ.get("SWARM_GATEWAY_TOKEN", ""))
     if not token:
         token = generate_token()
         print(f"  Generated token: {token}")
 
-    port = port or int(os.environ.get("SWARM_GATEWAY_PORT",
-                                       str(DEFAULT_PORT)))
+    port = port or int(os.environ.get("CLEO_GATEWAY_PORT",
+                        os.environ.get("SWARM_GATEWAY_PORT",
+                                       str(DEFAULT_PORT))))
     print(f"  Dashboard: http://127.0.0.1:{port}/")
     print(f"  API Base:  http://127.0.0.1:{port}/v1")
     print()
@@ -2377,7 +2388,8 @@ def probe_gateway(port: int = 0) -> dict:
         return result
 
     # Heartbeat probe (requires token — try without, tolerate 401)
-    token = os.environ.get("SWARM_GATEWAY_TOKEN", "")
+    token = os.environ.get("CLEO_GATEWAY_TOKEN",
+              os.environ.get("SWARM_GATEWAY_TOKEN", ""))
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     try:
         resp = httpx.get(f"{base}/v1/heartbeat", headers=headers, timeout=3.0)

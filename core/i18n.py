@@ -169,8 +169,8 @@ _STRINGS = {
         "zh": "无法连接 LLM {url} — 检查网络或 Base URL 配置",
     },
     "preflight.port_in_use": {
-        "en": "Port {port} is already in use — change SWARM_GATEWAY_PORT or stop the other process",
-        "zh": "端口 {port} 已被占用 — 修改 SWARM_GATEWAY_PORT 或停止其他进程",
+        "en": "Port {port} is already in use — change CLEO_GATEWAY_PORT or stop the other process",
+        "zh": "端口 {port} 已被占用 — 修改 CLEO_GATEWAY_PORT 或停止其他进程",
     },
     "error.suggest_doctor": {
         "en": "Run [bold]cleo doctor[/bold] for full diagnostics",

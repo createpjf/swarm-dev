@@ -1,0 +1,171 @@
+# config/agents.yaml
+
+llm:
+  provider: minimax
+memory:
+  backend: hybrid
+  long_term: true
+  episodic:
+    enabled: true
+    recall_budget_tokens: 1500
+  knowledge_base:
+    enabled: true
+    recall_budget_tokens: 800
+chain:
+  enabled: true
+  network: base-sepolia
+  rpc_url_env: BASE_RPC_URL
+  operator_key_env: CHAIN_PRIVATE_KEY
+  lit:
+    network: naga-dev
+  erc8004:
+    identity_registry_env: ERC8004_IDENTITY_REGISTRY
+    reputation_registry_env: ERC8004_REPUTATION_REGISTRY
+  safe:
+    address_env: GNOSIS_SAFE_ADDRESS
+  x402:
+    enabled: false
+    facilitator_url: https://x402.coinbase.com
+    max_payment_usd: '0.10'
+  reputation_sync:
+    enabled: true
+    min_score_delta: 5.0
+    max_writes_per_hour: 10
+reputation:
+  peer_review_agents:
+  - reviewer
+  evolution:
+    prompt_auto_apply: true
+    model_swap_require_confirm: true
+    role_vote_threshold: 0.6
+channels:
+  telegram:
+    enabled: false
+    bot_token_env: TELEGRAM_BOT_TOKEN
+    allowed_users: []
+    mention_required: true
+  discord:
+    enabled: false
+    bot_token_env: DISCORD_BOT_TOKEN
+    allowed_channels: []
+    mention_required: true
+  feishu:
+    enabled: false
+    app_id_env: FEISHU_APP_ID
+    app_secret_env: FEISHU_APP_SECRET
+  slack:
+    enabled: false
+    bot_token_env: SLACK_BOT_TOKEN
+    app_token_env: SLACK_APP_TOKEN
+    allowed_channels: []
+    mention_required: true
+workspace:
+  path: workspace
+  shared: true
+max_idle_cycles: 30
+resilience:
+  max_retries: 3
+  base_delay: 1.0
+  max_delay: 30.0
+  jitter: 0.5
+  circuit_breaker_threshold: 3
+  circuit_breaker_cooldown: 120
+compaction:
+  enabled: true
+  max_context_tokens: 10000
+  summary_target_tokens: 1500
+  keep_recent_turns: 4
+agents:
+- id: planner
+  role: 'You are the team BRAIN and coordinator. You receive tasks FIRST, decompose
+    into subtasks, and produce the FINAL user-facing answer during closeout.
+
+    Phase 1 (Decomposition): Write TASK: <description> + COMPLEXITY: simple|normal|complex.
+
+    Phase 2 (Closeout): Synthesize ALL executor results + reviewer feedback into ONE
+    polished, complete, user-facing answer. This is the most important step.
+
+    You MUST NOT write code, execute commands, or implement anything.
+
+    用中文回复用户。'
+  model: MiniMax-M2.5
+  fallback_models:
+  - deepseek-v3.2
+  - qwen3-235b-thinking
+  skills:
+  - brainstorming
+  - _base
+  - planning
+  tools:
+    profile: minimal
+  memory:
+    short_term_turns: 20
+    long_term: true
+    recall_top_k: 3
+    episodic_recall_budget: 1500
+    kb_recall_budget: 800
+  autonomy_level: 1
+  llm:
+    provider: minimax
+    api_key_env: PLANNER_API_KEY
+    base_url_env: PLANNER_BASE_URL
+- id: executor
+  role: 'You are the team EXECUTOR. You implement subtasks assigned by the planner
+    and return RAW results (code, data, analysis).
+
+    The PLANNER synthesizes your output into the final user-facing answer.
+
+    You MUST NOT plan, decompose, or break down tasks — that is the planner''s job.
+
+    Write clean, working code with step-by-step reasoning. Use tools when needed.
+
+    用中文回复用户。'
+  model: MiniMax-M2.5
+  fallback_models:
+  - deepseek-v3.2
+  - qwen3-235b-thinking
+  skills:
+  - _base
+  - coding
+  tools:
+    profile: coding
+  memory:
+    short_term_turns: 20
+    long_term: true
+    recall_top_k: 3
+    episodic_recall_budget: 2000
+    kb_recall_budget: 800
+  autonomy_level: 1
+  llm:
+    provider: minimax
+    api_key_env: EXECUTOR_API_KEY
+    base_url_env: EXECUTOR_BASE_URL
+- id: reviewer
+  role: 'You are the team QUALITY ADVISOR. Score subtask outputs 1-10 and provide
+    optional improvement suggestions.
+
+    You are an ADVISOR, not a gatekeeper — you NEVER block tasks from completing.
+
+    The planner reads your scores/suggestions during final synthesis.
+
+    Respond with: {"score": <1-10>, "suggestions": ["optional"], "comment": "..."}
+
+    Omit suggestions if score >= 7. Max 3 suggestions. 用中文回复用户。'
+  model: MiniMax-M2.5
+  fallback_models:
+  - minimax-m2.1
+  - qwen3-235b-thinking
+  skills:
+  - _base
+  - review
+  memory:
+    short_term_turns: 20
+    long_term: true
+    recall_top_k: 3
+    episodic_recall_budget: 1000
+    kb_recall_budget: 1000
+  autonomy_level: 1
+  llm:
+    provider: minimax
+    api_key_env: REVIEWER_API_KEY
+    base_url_env: REVIEWER_BASE_URL

@@ -6,7 +6,7 @@ Inspired by OpenViking's 6-category extraction:
   User-owned:  profile, preferences, entities, events
   Agent-owned: cases (problem→solution), patterns (recurring observations)
 
-In Swarm, we focus on agent-owned extraction:
+In Cleo, we focus on agent-owned extraction:
   - Cases:    "When I encountered X, the solution was Y"
   - Patterns: "Tasks involving X tend to need Y"
   - Insights: Cross-agent learnings shared via KnowledgeBase
@@ -126,7 +126,7 @@ def extract_insight(task_description: str, result: str,
                 return f"{insight} (from: {task_description[:80]})"
 
     # If result is a review with score, share the quality signal
-    if '"score"' in result_lower and agent_id == "reviewer":
+    if '"score"' in result_lower and agent_id == "alic":
         try:
             import json
             data = json.loads(result)

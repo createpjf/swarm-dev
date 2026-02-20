@@ -197,7 +197,7 @@ Each agent can have its own provider, API key, model, fallback chain, skills, an
 
 **"Cannot reach LLM"** — Check your internet connection and Base URL. Run `cleo doctor` for diagnostics.
 
-**"Port 19789 in use"** — Another gateway is running. Use `cleo gateway stop` first, or set `SWARM_GATEWAY_PORT` in `.env`.
+**"Port 19789 in use"** — Another gateway is running. Use `cleo gateway stop` first, or set `CLEO_GATEWAY_PORT` in `.env`.
 
 **Tasks stuck in "claimed"** — Agent may have crashed. Tasks auto-recover after 5 min timeout, or use `/cancel` to manually cancel.
 
@@ -209,7 +209,7 @@ Each agent can have its own provider, API key, model, fallback chain, skills, an
 
 ## API Endpoints
 
-Gateway runs on port **19789** (`SWARM_GATEWAY_PORT`). Auth: `Authorization: Bearer <token>`.
+Gateway runs on port **19789** (`CLEO_GATEWAY_PORT`). Auth: `Authorization: Bearer <token>`.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
