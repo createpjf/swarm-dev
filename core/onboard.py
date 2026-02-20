@@ -95,6 +95,13 @@ PROVIDERS = {
         "base_url": "https://api.flock.io/v1",
         "model": "qwen3-30b-a3b-instruct-2507",
     },
+    "minimax": {
+        "label": "Minimax",
+        "env": "MINIMAX_API_KEY",
+        "url_env": "MINIMAX_BASE_URL",
+        "base_url": "https://api.minimax.io/v1",
+        "model": "MiniMax-M2.5",
+    },
     "openai": {
         "label": "OpenAI",
         "env": "OPENAI_API_KEY",
@@ -2065,6 +2072,16 @@ def _fetch_models(provider: str, api_key: str) -> tuple[list[str], str]:
             return [], f"Ollama returned {e.response.status_code} — is it running?"
         except Exception as e:
             return [], f"Ollama: {e}"
+
+    # Minimax doesn't expose /v1/models — return known models
+    if provider == "minimax":
+        return [
+            "MiniMax-M2.5",
+            "MiniMax-M2.5-highspeed",
+            "MiniMax-M2.1",
+            "MiniMax-M2.1-highspeed",
+            "MiniMax-M2",
+        ], ""
 
     # OpenAI-compatible /v1/models
     if not actual_key:

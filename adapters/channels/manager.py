@@ -114,6 +114,55 @@ class ChannelManager:
             except Exception as e:
                 logger.error("Error stopping %s: %s", adapter.channel_name, e)
 
+    async def reload(self):
+        """Hot-reload: stop all adapters, re-read config, restart enabled ones."""
+        logger.info("Reloading channel manager...")
+
+        # Stop existing adapters
+        for adapter in self.adapters:
+            try:
+                await adapter.stop()
+            except Exception as e:
+                logger.error("Error stopping %s during reload: %s",
+                             adapter.channel_name, e)
+        self.adapters.clear()
+
+        # Re-read config from disk
+        import yaml
+        try:
+            with open("config/agents.yaml", "r") as f:
+                fresh_config = yaml.safe_load(f) or {}
+            self.channels_config = fresh_config.get("channels", {})
+            self.config["channels"] = self.channels_config
+        except Exception as e:
+            logger.error("Failed to reload channels config: %s", e)
+            return
+
+        # Re-load .env into os.environ
+        try:
+            from core.env_loader import load_dotenv
+            load_dotenv()
+        except Exception:
+            pass
+
+        # Load and start adapters
+        self._load_adapters()
+        for adapter in self.adapters:
+            try:
+                adapter.set_callback(self._on_message)
+                await adapter.start()
+                logger.info("Channel adapter restarted: %s", adapter.channel_name)
+            except Exception as e:
+                logger.error("Failed to restart %s adapter: %s",
+                             adapter.channel_name, e)
+
+        # Ensure processor task is running
+        if not self._processor_task or self._processor_task.done():
+            self._processor_task = asyncio.create_task(self._task_processor())
+
+        logger.info("Channel manager reloaded: %d adapter(s) running",
+                     len(self.adapters))
+
     def get_status(self) -> list[dict]:
         """Return status of all adapters (for /v1/channels endpoint)."""
         # Canonical list of known channels
@@ -451,27 +500,21 @@ class ChannelManager:
         return chunks
 
 
-def start_channel_manager(config: dict) -> Optional[ChannelManager]:
+def start_channel_manager(config: dict) -> ChannelManager:
     """
-    Start channel adapters in a dedicated asyncio thread.
+    Start channel manager in a dedicated asyncio thread.
     Called from gateway.start_gateway().
-    Returns the ChannelManager instance (or None if no channels enabled).
+
+    Always creates a ChannelManager instance (even if no channels are
+    currently enabled) so that channels enabled later via the Dashboard
+    can be hot-reloaded without restarting the gateway.
     """
-    channels_config = config.get("channels", {})
-    if not channels_config:
-        return None
-
-    has_enabled = any(
-        ch.get("enabled", False) for ch in channels_config.values()
-    )
-    if not has_enabled:
-        return None
-
     manager = ChannelManager(config)
 
     def _run_loop():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        manager._loop = loop
         try:
             loop.run_until_complete(manager.start())
             loop.run_forever()

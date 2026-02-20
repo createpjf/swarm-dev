@@ -1055,6 +1055,15 @@ function fmtNum(n) { return n != null ? n.toLocaleString() : '0'; }
 function truncate(s, n) { return s && s.length > n ? s.slice(0,n-1)+'…' : (s||''); }
 function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
+function showToast(msg, type) {
+  const el = document.createElement('div');
+  const bg = type === 'error' ? 'var(--red)' : type === 'success' ? 'var(--green)' : 'var(--accent)';
+  el.style.cssText = 'position:fixed;bottom:24px;right:24px;padding:10px 18px;border-radius:8px;font-size:13px;color:#fff;z-index:10000;background:' + bg + ';box-shadow:0 4px 12px rgba(0,0,0,.3);transition:opacity .3s';
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }, 3000);
+}
+
 function statusIcon(status) {
   switch(status) {
     case 'claimed': return '<span class="status-icon status-working">●</span>';
@@ -1408,8 +1417,21 @@ function renderChatMsgHtml(m) {
 }
 
 // Format result text into nice readable HTML — lightweight markdown renderer
+function stripLlmTags(text) {
+  // Strip <think>...</think> blocks (LLM reasoning traces)
+  text = text.replace(/<think>[\s\S]*?<\/think>/g, '');
+  // Strip <tool_code>...</tool_code> blocks (tool invocations — shown separately)
+  text = text.replace(/<tool_code>[\s\S]*?<\/tool_code>/g, '');
+  // Clean up excessive blank lines left after stripping
+  text = text.replace(/\n{3,}/g, '\n\n');
+  return text.trim();
+}
+
 function formatResultBody(text) {
   if (!text) return '';
+  // Strip LLM artifacts before rendering
+  text = stripLlmTags(text);
+  if (!text) return '<span style="color:var(--fg3)">Processing...</span>';
   // Try JSON pretty-print
   try {
     const obj = JSON.parse(text);
@@ -1854,9 +1876,10 @@ function updateStreamingBubble(taskId, agent, partial) {
     const body = bubble.querySelector('.stream-body');
     const charCount = bubble.querySelector('.char-count');
     if (body) {
-      // Show only the last non-empty line + ellipsis
-      const lastLine = partial.split('\n').filter(Boolean).pop() || '';
-      body.textContent = lastLine.slice(0, 80) + (partial.length > 80 ? '…' : '');
+      // Strip <think> and <tool_code> blocks, show last visible line
+      const cleaned = stripLlmTags(partial);
+      const lastLine = cleaned.split('\n').filter(Boolean).pop() || 'thinking…';
+      body.textContent = lastLine.slice(0, 80) + (cleaned.length > 80 ? '…' : '');
     }
     if (charCount) {
       charCount.textContent = partial.length + ' chars';
@@ -1891,13 +1914,13 @@ function showStreamingDetail(taskId) {
     + '</div>';
   document.body.appendChild(overlay);
   const body = document.getElementById('streamDetailBody');
-  if (body) body.innerHTML = renderMarkdown(full);
+  if (body) body.innerHTML = renderMarkdown(stripLlmTags(full));
   // Auto-refresh every 2s
   _streamDetailInterval = setInterval(function() {
     const latest = _streamingFullText[taskId];
     if (!latest) { closeStreamingDetail(); return; }
     const bd = document.getElementById('streamDetailBody');
-    if (bd) bd.innerHTML = renderMarkdown(latest);
+    if (bd) bd.innerHTML = renderMarkdown(stripLlmTags(latest));
   }, 2000);
 }
 
@@ -3118,10 +3141,30 @@ async function loadUsage() {
 // ══════════════════════════════════════════════════════════════════
 
 const CHANNEL_META = {
-  telegram: { icon: '💬', label: 'Telegram', sdk: 'python-telegram-bot', tokenFields: ['bot_token'] },
-  discord:  { icon: '🎮', label: 'Discord',  sdk: 'discord.py',           tokenFields: ['bot_token'] },
-  feishu:   { icon: '🐦', label: 'Feishu',   sdk: 'lark-oapi',            tokenFields: ['app_id', 'app_secret'] },
-  slack:    { icon: '💼', label: 'Slack',     sdk: 'slack-sdk',            tokenFields: ['bot_token', 'app_token'] },
+  telegram: {
+    icon: '💬', label: 'Telegram', sdk: 'python-telegram-bot',
+    tokenFields: ['bot_token'],
+    guide: 'https://core.telegram.org/bots#how-do-i-create-a-bot',
+    guideSteps: ['1. Message @BotFather on Telegram', '2. Send /newbot and follow prompts', '3. Copy the API token and paste below'],
+  },
+  discord: {
+    icon: '🎮', label: 'Discord', sdk: 'discord.py',
+    tokenFields: ['bot_token'],
+    guide: 'https://discord.com/developers/applications',
+    guideSteps: ['1. Create app at Discord Developer Portal', '2. Go to Bot tab, Reset Token', '3. Enable Message Content Intent'],
+  },
+  feishu: {
+    icon: '🐦', label: 'Feishu', sdk: 'lark-oapi',
+    tokenFields: ['app_id', 'app_secret'],
+    guide: 'https://open.feishu.cn/document/home/introduction-to-custom-app-development/self-built-application-development-process',
+    guideSteps: ['1. Create app at Feishu Open Platform', '2. Copy App ID and App Secret', '3. Enable Bot capability under Features'],
+  },
+  slack: {
+    icon: '💼', label: 'Slack', sdk: 'slack-sdk',
+    tokenFields: ['bot_token', 'app_token'],
+    guide: 'https://api.slack.com/apps',
+    guideSteps: ['1. Create app at Slack API portal', '2. Enable Socket Mode, copy App Token (xapp-...)', '3. Install to workspace, copy Bot Token (xoxb-...)'],
+  },
 };
 
 let _channelData = [];
@@ -3188,7 +3231,7 @@ async function loadChannels() {
 }
 
 async function toggleChannel(name, enabled) {
-  const resp = await api('/v1/channels/' + name, 'PUT', { enabled: enabled });
+  const resp = await apiPut('/v1/channels/' + name, { enabled: enabled });
   if (resp && resp.ok) {
     loadChannels();
   }
@@ -3196,7 +3239,7 @@ async function toggleChannel(name, enabled) {
 
 function showChannelConfig(name) {
   const ch = _channelData.find(c => c.channel === name);
-  const meta = CHANNEL_META[name] || { icon: '📡', label: name, tokenFields: [] };
+  const meta = CHANNEL_META[name] || { icon: '📡', label: name, tokenFields: [], guideSteps: [] };
 
   let h = '<div class="agent-modal-overlay" onclick="if(event.target===this)this.remove()">';
   h += '<div class="agent-modal">';
@@ -3207,6 +3250,21 @@ function showChannelConfig(name) {
 
   h += '<div class="agent-editor"><form id="chConfigForm" onsubmit="saveChannelConfig(\'' + name + '\');return false">';
 
+  // Setup guide
+  if (meta.guideSteps && meta.guideSteps.length) {
+    h += '<div style="background:var(--bg2);border:1px solid var(--bg3);border-radius:8px;padding:10px 12px;margin-bottom:12px">';
+    h += '<div style="font-size:11px;font-weight:600;color:var(--accent);margin-bottom:6px">Setup Guide</div>';
+    for (const step of meta.guideSteps) {
+      h += '<div style="font-size:11px;color:var(--fg2);margin:2px 0">' + escHtml(step) + '</div>';
+    }
+    if (meta.guide) {
+      h += '<a href="' + meta.guide + '" target="_blank" rel="noopener" '
+        + 'style="font-size:11px;color:var(--accent);text-decoration:none;display:inline-block;margin-top:4px">'
+        + 'Open Developer Portal &rarr;</a>';
+    }
+    h += '</div>';
+  }
+
   // Token fields
   for (const field of meta.tokenFields) {
     const label = field.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
@@ -3216,6 +3274,12 @@ function showChannelConfig(name) {
     h += '<div style="font-size:10px;color:var(--fg3);margin-top:2px">Leave empty to keep current value</div>';
     h += '</div>';
   }
+
+  // Test token button + result area
+  h += '<div style="margin:8px 0">';
+  h += '<button type="button" class="btn btn-sm btn-outline" onclick="testChannelToken(\'' + name + '\')" id="ch_test_btn">Test Connection</button>';
+  h += '<span id="ch_test_result" style="font-size:12px;margin-left:8px"></span>';
+  h += '</div>';
 
   // Mention required
   const mention = ch ? (ch.mention_required !== undefined ? ch.mention_required : true) : true;
@@ -3245,6 +3309,38 @@ function showChannelConfig(name) {
   document.body.insertAdjacentHTML('beforeend', h);
 }
 
+async function testChannelToken(name) {
+  const meta = CHANNEL_META[name] || { tokenFields: [] };
+  const btn = document.getElementById('ch_test_btn');
+  const result = document.getElementById('ch_test_result');
+
+  btn.disabled = true;
+  btn.textContent = 'Testing...';
+  result.innerHTML = '';
+
+  const body = {};
+  for (const field of meta.tokenFields) {
+    const val = document.getElementById('ch_' + field).value.trim();
+    if (val) body[field.replace('bot_', '')] = val;
+    if (field === 'bot_token' && val) body.token = val;
+    if (field === 'app_id' && val) body.token = val;
+  }
+
+  try {
+    const resp = await apiPost('/v1/channels/' + name + '/test', body);
+    if (resp && resp.ok) {
+      result.innerHTML = '<span style="color:var(--green)">&#10003; ' + escHtml(resp.message || 'Connected') + '</span>';
+    } else {
+      result.innerHTML = '<span style="color:var(--red)">&#10007; ' + escHtml((resp && resp.error) || 'Connection failed') + '</span>';
+    }
+  } catch (e) {
+    result.innerHTML = '<span style="color:var(--red)">&#10007; Network error</span>';
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'Test Connection';
+}
+
 async function saveChannelConfig(name) {
   const meta = CHANNEL_META[name] || { tokenFields: [] };
   const body = {
@@ -3258,12 +3354,16 @@ async function saveChannelConfig(name) {
     if (val) body[field] = val;
   }
 
-  const resp = await api('/v1/channels/' + name, 'PUT', body);
+  const resp = await apiPut('/v1/channels/' + name, body);
   if (resp && resp.ok) {
     // Close modal
     const overlay = document.querySelector('.agent-modal-overlay');
     if (overlay) overlay.remove();
     loadChannels();
+    // Show success toast
+    showToast(resp.message || ('Channel ' + name + ' saved.'), 'success');
+  } else {
+    showToast((resp && resp.error) || 'Save failed', 'error');
   }
 }
 

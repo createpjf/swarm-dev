@@ -304,6 +304,13 @@ class _Handler(BaseHTTPRequestHandler):
         elif path.startswith("/v1/cron/") and path.endswith("/run"):
             job_id = path[len("/v1/cron/"):-len("/run")]
             self._handle_cron_run(job_id)
+        # ── Channel token test ──
+        elif path.startswith("/v1/channels/") and path.endswith("/test"):
+            channel_name = path[len("/v1/channels/"):-len("/test")]
+            self._handle_test_channel(channel_name)
+        # ── Channel reload ──
+        elif path == "/v1/channels/reload":
+            self._handle_reload_channels()
         else:
             self._json_response(404, {"error": "Not found"})
 
@@ -1578,8 +1585,9 @@ class _Handler(BaseHTTPRequestHandler):
         import yaml
         from core.config_manager import safe_write_yaml
 
-        body = self._read_json_body()
-        if body is None:
+        body = self._read_body()
+        if not body:
+            self._json_response(400, {"error": "Empty request body"})
             return
 
         valid_channels = {"telegram", "discord", "feishu", "slack"}
@@ -1629,6 +1637,8 @@ class _Handler(BaseHTTPRequestHandler):
             if value:
                 env_key = ch_cfg.get(f"{field_name}_env", default_env_key)
                 _save_env_var(env_key, value)
+                # Ensure YAML references the env var name (for adapter lookup)
+                ch_cfg[f"{field_name}_env"] = env_key
 
         # Write updated config
         try:
@@ -1637,13 +1647,195 @@ class _Handler(BaseHTTPRequestHandler):
             self._json_response(500, {"error": f"Failed to save config: {e}"})
             return
 
+        # Auto-reload channel manager so changes take effect immediately
+        reload_msg = ""
+        global _channel_manager
+        if _channel_manager and _channel_manager._loop:
+            try:
+                import asyncio
+                future = asyncio.run_coroutine_threadsafe(
+                    _channel_manager.reload(), _channel_manager._loop)
+                future.result(timeout=15)
+                reload_msg = " Channels reloaded."
+            except Exception as e:
+                logger.warning("Channel auto-reload failed: %s", e)
+                reload_msg = " Auto-reload failed, restart gateway to apply."
+        else:
+            reload_msg = " Restart gateway to apply."
+
         self._json_response(200, {
             "ok": True,
             "channel": channel_name,
             "config": ch_cfg,
-            "message": f"Channel '{channel_name}' updated. "
-                       "Restart gateway to apply changes.",
+            "message": f"Channel '{channel_name}' updated.{reload_msg}",
         })
+
+    def _handle_test_channel(self, channel_name: str):
+        """POST /v1/channels/:name/test — verify channel token by calling its API."""
+        import os
+        valid_channels = {"telegram", "discord", "feishu", "slack"}
+        if channel_name not in valid_channels:
+            self._json_response(400, {"error": f"Unknown channel: {channel_name}"})
+            return
+
+        body = self._read_body()
+        token = body.get("token", "")
+
+        # If no token provided, try loading from env
+        if not token:
+            env_map = {
+                "telegram": "TELEGRAM_BOT_TOKEN",
+                "discord": "DISCORD_BOT_TOKEN",
+                "slack": "SLACK_BOT_TOKEN",
+                "feishu": "FEISHU_APP_ID",
+            }
+            token = os.environ.get(env_map.get(channel_name, ""), "")
+
+        if not token:
+            self._json_response(200, {
+                "ok": False,
+                "error": "No token configured",
+                "channel": channel_name,
+            })
+            return
+
+        # Verify token by calling the channel's API
+        import urllib.request
+        import urllib.error
+
+        try:
+            if channel_name == "telegram":
+                url = f"https://api.telegram.org/bot{token}/getMe"
+                req = urllib.request.Request(url)
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    import json as _json
+                    data = _json.loads(resp.read())
+                    if data.get("ok"):
+                        bot_info = data.get("result", {})
+                        self._json_response(200, {
+                            "ok": True,
+                            "channel": channel_name,
+                            "bot_name": bot_info.get("first_name", ""),
+                            "bot_username": bot_info.get("username", ""),
+                            "message": f"Connected as @{bot_info.get('username', '?')}",
+                        })
+                    else:
+                        self._json_response(200, {
+                            "ok": False,
+                            "error": data.get("description", "Unknown error"),
+                            "channel": channel_name,
+                        })
+
+            elif channel_name == "discord":
+                url = "https://discord.com/api/v10/users/@me"
+                req = urllib.request.Request(url, headers={
+                    "Authorization": f"Bot {token}",
+                })
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    import json as _json
+                    data = _json.loads(resp.read())
+                    self._json_response(200, {
+                        "ok": True,
+                        "channel": channel_name,
+                        "bot_name": data.get("username", ""),
+                        "message": f"Connected as {data.get('username', '?')}#{data.get('discriminator', '')}",
+                    })
+
+            elif channel_name == "slack":
+                url = "https://slack.com/api/auth.test"
+                req = urllib.request.Request(url, headers={
+                    "Authorization": f"Bearer {token}",
+                })
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    import json as _json
+                    data = _json.loads(resp.read())
+                    if data.get("ok"):
+                        self._json_response(200, {
+                            "ok": True,
+                            "channel": channel_name,
+                            "bot_name": data.get("bot_id", ""),
+                            "team": data.get("team", ""),
+                            "message": f"Connected to {data.get('team', '?')}",
+                        })
+                    else:
+                        self._json_response(200, {
+                            "ok": False,
+                            "error": data.get("error", "Unknown error"),
+                            "channel": channel_name,
+                        })
+
+            elif channel_name == "feishu":
+                # Feishu requires app_id + app_secret; test with tenant access token
+                app_secret = body.get("app_secret", "") or os.environ.get("FEISHU_APP_SECRET", "")
+                if not app_secret:
+                    self._json_response(200, {
+                        "ok": False,
+                        "error": "App secret not configured",
+                        "channel": channel_name,
+                    })
+                    return
+                import json as _json
+                payload = _json.dumps({
+                    "app_id": token,
+                    "app_secret": app_secret,
+                }).encode()
+                req = urllib.request.Request(
+                    "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+                    data=payload,
+                    headers={"Content-Type": "application/json; charset=utf-8"},
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data = _json.loads(resp.read())
+                    if data.get("code") == 0:
+                        self._json_response(200, {
+                            "ok": True,
+                            "channel": channel_name,
+                            "message": "Feishu app credentials verified",
+                        })
+                    else:
+                        self._json_response(200, {
+                            "ok": False,
+                            "error": data.get("msg", "Unknown error"),
+                            "channel": channel_name,
+                        })
+
+        except urllib.error.HTTPError as e:
+            self._json_response(200, {
+                "ok": False,
+                "error": f"HTTP {e.code}: {e.reason}",
+                "channel": channel_name,
+            })
+        except Exception as e:
+            self._json_response(200, {
+                "ok": False,
+                "error": str(e),
+                "channel": channel_name,
+            })
+
+    def _handle_reload_channels(self):
+        """POST /v1/channels/reload — hot-reload all channel adapters."""
+        global _channel_manager
+        if not _channel_manager or not _channel_manager._loop:
+            self._json_response(503, {
+                "error": "Channel manager not running. Restart gateway.",
+            })
+            return
+        try:
+            import asyncio
+            future = asyncio.run_coroutine_threadsafe(
+                _channel_manager.reload(), _channel_manager._loop)
+            future.result(timeout=15)
+            # Return updated status
+            statuses = _channel_manager.get_status()
+            running = [s for s in statuses if s.get("running")]
+            self._json_response(200, {
+                "ok": True,
+                "message": f"Channels reloaded. {len(running)} adapter(s) running.",
+                "channels": statuses,
+            })
+        except Exception as e:
+            logger.exception("Channel reload failed: %s", e)
+            self._json_response(500, {"error": f"Reload failed: {e}"})
 
     # ══════════════════════════════════════════════════════════════════════════
     #  CRON HANDLERS
@@ -2027,20 +2219,21 @@ def start_gateway(port: int = 0, token: str = "",
         except Exception as e:
             logger.warning("Cron scheduler failed to start: %s", e)
 
-        # Start channel manager (Telegram/Discord/Feishu)
+        # Start channel manager (Telegram/Discord/Feishu/Slack)
+        # Always start the manager so channels can be enabled later via Dashboard
         global _channel_manager
         try:
             import yaml
             cfg_path = os.path.join(
                 os.path.dirname(os.path.dirname(__file__)),
                 "config", "agents.yaml")
+            full_config = {}
             if os.path.exists(cfg_path):
                 with open(cfg_path) as f:
                     full_config = yaml.safe_load(f) or {}
-                from adapters.channels.manager import start_channel_manager
-                _channel_manager = start_channel_manager(full_config)
-                if _channel_manager:
-                    logger.info("Channel manager started with adapters")
+            from adapters.channels.manager import start_channel_manager
+            _channel_manager = start_channel_manager(full_config)
+            logger.info("Channel manager started (hot-reload ready)")
         except Exception as e:
             logger.warning("Channel manager failed to start: %s", e)
     else:

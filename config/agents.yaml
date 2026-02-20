@@ -1,7 +1,5 @@
-# config/agents.yaml
-
 llm:
-  provider: flock
+  provider: minimax
 memory:
   backend: hybrid
   long_term: true
@@ -40,14 +38,14 @@ reputation:
     role_vote_threshold: 0.6
 channels:
   telegram:
-    enabled: false
+    enabled: true
     bot_token_env: TELEGRAM_BOT_TOKEN
-    allowed_users: []       # empty = allow all
-    mention_required: true  # require @mention in groups
+    allowed_users: []
+    mention_required: true
   discord:
     enabled: false
     bot_token_env: DISCORD_BOT_TOKEN
-    allowed_channels: []    # empty = allow all
+    allowed_channels: []
     mention_required: true
   feishu:
     enabled: false
@@ -59,11 +57,9 @@ channels:
     app_token_env: SLACK_APP_TOKEN
     allowed_channels: []
     mention_required: true
-
 workspace:
   path: workspace
   shared: true
-
 max_idle_cycles: 30
 resilience:
   max_retries: 3
@@ -90,13 +86,16 @@ agents:
     You MUST NOT write code, execute commands, or implement anything.
 
     用中文回复用户。'
-  model: minimax-m2.1
+  model: MiniMax-M2.5
   fallback_models:
   - deepseek-v3.2
   - qwen3-235b-thinking
   skills:
+  - brainstorming
   - _base
   - planning
+  tools:
+    profile: minimal
   memory:
     short_term_turns: 20
     long_term: true
@@ -105,8 +104,8 @@ agents:
     kb_recall_budget: 800
   autonomy_level: 1
   llm:
-    provider: flock
-    api_key_env: FLOCK_API_KEY
+    provider: minimax
+    api_key_env: PLANNER_API_KEY
     base_url_env: PLANNER_BASE_URL
 - id: executor
   role: 'You are the team EXECUTOR. You implement subtasks assigned by the planner
@@ -119,13 +118,15 @@ agents:
     Write clean, working code with step-by-step reasoning. Use tools when needed.
 
     用中文回复用户。'
-  model: minimax-m2.1
+  model: MiniMax-M2.5
   fallback_models:
   - deepseek-v3.2
   - qwen3-235b-thinking
   skills:
   - _base
   - coding
+  tools:
+    profile: coding
   memory:
     short_term_turns: 20
     long_term: true
@@ -134,7 +135,7 @@ agents:
     kb_recall_budget: 800
   autonomy_level: 1
   llm:
-    provider: flock
+    provider: minimax
     api_key_env: EXECUTOR_API_KEY
     base_url_env: EXECUTOR_BASE_URL
 - id: reviewer
@@ -148,7 +149,7 @@ agents:
     Respond with: {"score": <1-10>, "suggestions": ["optional"], "comment": "..."}
 
     Omit suggestions if score >= 7. Max 3 suggestions. 用中文回复用户。'
-  model: deepseek-v3.2
+  model: MiniMax-M2.5
   fallback_models:
   - minimax-m2.1
   - qwen3-235b-thinking
@@ -163,6 +164,6 @@ agents:
     kb_recall_budget: 1000
   autonomy_level: 1
   llm:
-    provider: flock
+    provider: minimax
     api_key_env: REVIEWER_API_KEY
     base_url_env: REVIEWER_BASE_URL

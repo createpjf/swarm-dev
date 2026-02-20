@@ -2629,9 +2629,12 @@ def cmd_update(branch: str = "", console=None):
     # Reinstall dependencies
     _print(f"  [dim]{_t('update.deps')}[/dim]")
     venv_pip = os.path.join(project_root, ".venv", "bin", "pip")
-    pip_cmd = venv_pip if os.path.exists(venv_pip) else "pip"
+    if os.path.exists(venv_pip):
+        pip_cmd = [venv_pip]
+    else:
+        pip_cmd = [sys.executable, "-m", "pip"]
     subprocess.run(
-        [pip_cmd, "install", "-e", ".[dev]", "-q"],
+        [*pip_cmd, "install", "-e", ".[dev]", "-q"],
         cwd=project_root, capture_output=True, text=True,
     )
 
