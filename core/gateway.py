@@ -151,6 +151,11 @@ class _Handler(BaseHTTPRequestHandler):
             self._handle_health()
             return
 
+        # Agent avatars — public (no auth required)
+        if path.startswith("/avatars/"):
+            self._serve_avatar(path.split("/avatars/", 1)[1])
+            return
+
         if not self._check_auth():
             return
 
@@ -655,6 +660,28 @@ class _Handler(BaseHTTPRequestHandler):
             self._html_response(200, html.encode("utf-8"))
         except Exception as e:
             self._json_response(500, {"error": f"Failed to serve dashboard: {e}"})
+
+    def _serve_avatar(self, filename: str):
+        """Serve agent avatar images from core/avatars/."""
+        import re
+        if not re.match(r'^[a-zA-Z0-9_-]+\.png$', filename):
+            self._json_response(404, {"error": "not found"})
+            return
+        avatar_path = os.path.join(os.path.dirname(__file__), "avatars", filename)
+        if not os.path.exists(avatar_path):
+            self._json_response(404, {"error": "avatar not found"})
+            return
+        try:
+            with open(avatar_path, "rb") as f:
+                data = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "public, max-age=86400")
+            self.end_headers()
+            self.wfile.write(data)
+        except Exception:
+            self._json_response(500, {"error": "failed to serve avatar"})
 
     # ── Usage stats ──
     def _handle_usage(self):
