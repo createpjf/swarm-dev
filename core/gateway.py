@@ -2225,36 +2225,40 @@ def start_gateway(port: int = 0, token: str = "",
         logger.error("Cannot start gateway on port %d: %s", port, e)
         return None
 
+    # ── Start background services (both daemon and foreground modes) ──
+
+    # Cron scheduler
+    try:
+        from core.cron import start_scheduler
+        start_scheduler(interval=30)
+    except Exception as e:
+        logger.warning("Cron scheduler failed to start: %s", e)
+
+    # Channel manager (Telegram/Discord/Feishu/Slack)
+    # Always start so channels can be enabled later via Dashboard
+    global _channel_manager
+    try:
+        import yaml
+        cfg_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "config", "agents.yaml")
+        full_config = {}
+        if os.path.exists(cfg_path):
+            with open(cfg_path) as f:
+                full_config = yaml.safe_load(f) or {}
+        from adapters.channels.manager import start_channel_manager
+        _channel_manager = start_channel_manager(full_config)
+        logger.info("Channel manager started (hot-reload ready)")
+    except Exception as e:
+        logger.warning("Channel manager failed to start: %s", e)
+
+    # ── Serve ──
+
     if daemon:
         thread = Thread(target=server.serve_forever, daemon=True)
         thread.start()
         logger.info("Gateway started on http://127.0.0.1:%d", port)
         logger.info("Dashboard: http://127.0.0.1:%d/", port)
-
-        # Start cron scheduler alongside gateway
-        try:
-            from core.cron import start_scheduler
-            start_scheduler(interval=30)
-        except Exception as e:
-            logger.warning("Cron scheduler failed to start: %s", e)
-
-        # Start channel manager (Telegram/Discord/Feishu/Slack)
-        # Always start the manager so channels can be enabled later via Dashboard
-        global _channel_manager
-        try:
-            import yaml
-            cfg_path = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)),
-                "config", "agents.yaml")
-            full_config = {}
-            if os.path.exists(cfg_path):
-                with open(cfg_path) as f:
-                    full_config = yaml.safe_load(f) or {}
-            from adapters.channels.manager import start_channel_manager
-            _channel_manager = start_channel_manager(full_config)
-            logger.info("Channel manager started (hot-reload ready)")
-        except Exception as e:
-            logger.warning("Channel manager failed to start: %s", e)
     else:
         logger.info("Gateway running on http://127.0.0.1:%d (foreground)",
                      port)
