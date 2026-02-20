@@ -5,7 +5,7 @@ Mint a Lit Protocol PKP on Naga network for a Cleo agent.
 
 Usage:
     python scripts/mint_naga_pkp.py                  # mint for all agents
-    python scripts/mint_naga_pkp.py planner          # mint for specific agent
+    python scripts/mint_naga_pkp.py leo              # mint for specific agent
     python scripts/mint_naga_pkp.py --network naga   # use mainnet
 
 Requires:

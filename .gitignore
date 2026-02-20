@@ -14,6 +14,7 @@ build/
 venv/
 env/
 bin/swarm
+bin/cleo
 
 # ── Runtime state (auto-created) ──
 .task_board.json

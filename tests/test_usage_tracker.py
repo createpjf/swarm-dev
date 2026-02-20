@@ -14,7 +14,7 @@ class TestUsageTracking:
 
     def test_record_and_summary(self, tmp_workdir):
         tracker = UsageTracker()
-        tracker.record("executor", "test-model",
+        tracker.record("jerry", "test-model",
                         prompt_tokens=100, completion_tokens=50)
 
         summary = tracker.get_summary()
@@ -25,18 +25,18 @@ class TestUsageTracking:
 
     def test_per_agent_breakdown(self, tmp_workdir):
         tracker = UsageTracker()
-        tracker.record("planner", "model-a", prompt_tokens=100, completion_tokens=50)
-        tracker.record("executor", "model-b", prompt_tokens=200, completion_tokens=100)
+        tracker.record("leo", "model-a", prompt_tokens=100, completion_tokens=50)
+        tracker.record("jerry", "model-b", prompt_tokens=200, completion_tokens=100)
 
         summary = tracker.get_summary()
-        assert "planner" in summary["by_agent"]
-        assert "executor" in summary["by_agent"]
-        assert summary["by_agent"]["planner"]["tokens"] == 150
-        assert summary["by_agent"]["executor"]["tokens"] == 300
+        assert "leo" in summary["by_agent"]
+        assert "jerry" in summary["by_agent"]
+        assert summary["by_agent"]["leo"]["tokens"] == 150
+        assert summary["by_agent"]["jerry"]["tokens"] == 300
 
     def test_clear(self, tmp_workdir):
         tracker = UsageTracker()
-        tracker.record("executor", "model", prompt_tokens=100, completion_tokens=50)
+        tracker.record("jerry", "model", prompt_tokens=100, completion_tokens=50)
         tracker.clear()
         summary = tracker.get_summary()
         assert summary["aggregate"] == {}
@@ -66,7 +66,7 @@ class TestBudgetEnforcement:
 
         with pytest.raises(BudgetExceeded):
             # Record a call that pushes cost over limit
-            tracker.record("executor", "qwen3-235b-thinking",
+            tracker.record("jerry", "qwen3-235b-thinking",
                            prompt_tokens=100000, completion_tokens=50000)
 
     def test_budget_warning_creates_alert(self, tmp_workdir):
@@ -74,7 +74,7 @@ class TestBudgetEnforcement:
                                 enabled=True)
         tracker = UsageTracker()
         # Record enough to trigger warning (>10% of $10 = $1)
-        tracker.record("executor", "qwen3-235b-thinking",
+        tracker.record("jerry", "qwen3-235b-thinking",
                         prompt_tokens=500000, completion_tokens=200000)
 
         alerts = UsageTracker.get_alerts()
@@ -86,7 +86,7 @@ class TestBudgetEnforcement:
                                 enabled=True)
         tracker = UsageTracker()
         # Use big token count to ensure measurable cost
-        tracker.record("executor", "qwen3-235b-thinking",
+        tracker.record("jerry", "qwen3-235b-thinking",
                         prompt_tokens=1000000, completion_tokens=500000)
 
         budget = UsageTracker.get_budget()

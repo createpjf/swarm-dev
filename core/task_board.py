@@ -591,7 +591,7 @@ class TaskBoard:
                 continue
             agent = t.get("agent_id", "")
             desc  = t.get("description", "")[:80]
-            if "planner" in agent.lower():
+            if agent.lower() in ("leo", "planner") or "planner" in agent.lower():
                 planner_result = t["result"]
                 planner_agent = agent
             else:
@@ -648,7 +648,7 @@ class TaskBoard:
                 continue
             agent = t.get("agent_id", "")
             # Skip planner's own decomposition output
-            if "planner" in agent.lower():
+            if agent.lower() in ("leo", "planner") or "planner" in agent.lower():
                 continue
 
             desc = t.get("description", "")[:100]

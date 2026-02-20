@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-Swarm Agent Stack — Interactive CLI.
+Cleo Agent Stack — Interactive CLI.
 
 Usage:
-  swarm                    # interactive chat (default)
-  swarm configure          # full setup wizard (re-configure)
-  swarm --setup            # alias for configure
-  swarm run "task"         # one-shot task
-  swarm status             # task board
-  swarm scores             # reputation scores
-  swarm doctor             # system health check
-  swarm gateway            # start HTTP gateway (foreground)
-  swarm agents add <name>  # add an agent to the team
+  cleo                    # interactive chat (default)
+  cleo configure          # full setup wizard (re-configure)
+  cleo --setup            # alias for configure
+  cleo run "task"         # one-shot task
+  cleo status             # task board
+  cleo scores             # reputation scores
+  cleo doctor             # system health check
+  cleo gateway            # start HTTP gateway (foreground)
+  cleo agents add <name>  # add an agent to the team
 """
 import os
 import sys

@@ -33,18 +33,18 @@ class TestHeartbeat:
 
     def test_read_all_includes_config_agents(self, tmp_workdir):
         agents = read_all_heartbeats()
-        # From conftest agents.yaml: planner, executor, reviewer
+        # From conftest agents.yaml: leo, jerry, alic
         agent_ids = {a["agent_id"] for a in agents}
-        assert "planner" in agent_ids
-        assert "executor" in agent_ids
-        assert "reviewer" in agent_ids
+        assert "leo" in agent_ids
+        assert "jerry" in agent_ids
+        assert "alic" in agent_ids
         # All should be offline (no heartbeat files)
         assert all(not a["online"] for a in agents)
 
     def test_online_detection(self, tmp_workdir):
-        hb = Heartbeat("executor")
+        hb = Heartbeat("jerry")
         hb.beat("working")
         agents = read_all_heartbeats()
-        executor = next(a for a in agents if a["agent_id"] == "executor")
-        assert executor["online"] is True
+        jerry = next(a for a in agents if a["agent_id"] == "jerry")
+        assert jerry["online"] is True
         hb.stop()

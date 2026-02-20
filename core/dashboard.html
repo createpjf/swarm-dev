@@ -950,6 +950,12 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
    ══════════════════════════════════════════════════════════════════ */
 
 const API = '';  // same origin
+
+// Migrate legacy 'swarm_token' → 'cleo_token' (one-time, non-destructive)
+if (!localStorage.getItem('cleo_token') && localStorage.getItem('swarm_token')) {
+  localStorage.setItem('cleo_token', localStorage.getItem('swarm_token'));
+}
+
 // Auto-login: read token from URL param (?token=xxx) or localStorage
 let TOKEN = (function() {
   const p = new URLSearchParams(window.location.search);

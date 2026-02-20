@@ -20,20 +20,20 @@ class TestTaskBoardBasics:
         assert task.status == TaskStatus.PENDING
         assert task.task_id
 
-        claimed = board.claim_next("executor")
+        claimed = board.claim_next("jerry")
         assert claimed is not None
         assert claimed.task_id == task.task_id
         assert claimed.status == TaskStatus.CLAIMED
-        assert claimed.agent_id == "executor"
+        assert claimed.agent_id == "jerry"
 
     def test_claim_returns_none_when_empty(self, tmp_workdir):
         board = TaskBoard()
-        assert board.claim_next("executor") is None
+        assert board.claim_next("jerry") is None
 
     def test_submit_review_complete(self, tmp_workdir):
         board = TaskBoard()
         task = board.create("test task")
-        board.claim_next("executor")
+        board.claim_next("jerry")
 
         board.submit_for_review(task.task_id, "result text")
         t = board.get(task.task_id)
@@ -41,7 +41,7 @@ class TestTaskBoardBasics:
         assert t.result == "result text"
         assert t.review_submitted_at is not None
 
-        board.add_review(task.task_id, "reviewer", 80, "good")
+        board.add_review(task.task_id, "alic", 80, "good")
         completed = board.complete(task.task_id)
         assert completed.status == TaskStatus.COMPLETED
 
@@ -49,9 +49,9 @@ class TestTaskBoardBasics:
         """complete() now always marks as completed (no score-based rejection)."""
         board = TaskBoard()
         task = board.create("test task")
-        board.claim_next("executor")
+        board.claim_next("jerry")
         board.submit_for_review(task.task_id, "result")
-        board.add_review(task.task_id, "reviewer", 30, "bad")
+        board.add_review(task.task_id, "alic", 30, "bad")
 
         result = board.complete(task.task_id)
         # Simplified: always completes regardless of score
@@ -60,7 +60,7 @@ class TestTaskBoardBasics:
     def test_fail_task(self, tmp_workdir):
         board = TaskBoard()
         task = board.create("test task")
-        board.claim_next("executor")
+        board.claim_next("jerry")
         board.fail(task.task_id, "some error")
         t = board.get(task.task_id)
         assert t.status == TaskStatus.FAILED
@@ -68,11 +68,11 @@ class TestTaskBoardBasics:
     def test_role_based_routing(self, tmp_workdir):
         board = TaskBoard()
         board.create("review code", required_role="review")
-        # Executor should NOT match review role
-        claimed = board.claim_next("executor", agent_role="Implementation agent")
+        # jerry (executor) should NOT match review role
+        claimed = board.claim_next("jerry", agent_role="Implementation agent")
         assert claimed is None
-        # Reviewer should match
-        claimed = board.claim_next("reviewer", agent_role="Peer reviewer")
+        # alic (reviewer) should match
+        claimed = board.claim_next("alic", agent_role="Peer reviewer")
         assert claimed is not None
 
 
@@ -86,7 +86,7 @@ class TestSafeAccess:
 
     def test_add_review_nonexistent_task(self, tmp_workdir):
         board = TaskBoard()
-        board.add_review("nonexistent", "reviewer", 80, "ok")
+        board.add_review("nonexistent", "alic", 80, "ok")
 
     def test_complete_nonexistent_task(self, tmp_workdir):
         board = TaskBoard()
@@ -115,13 +115,13 @@ class TestCancelPauseRetry:
     def test_cancel_claimed(self, tmp_workdir):
         board = TaskBoard()
         task = board.create("test task")
-        board.claim_next("executor")
+        board.claim_next("jerry")
         assert board.cancel(task.task_id) is True
 
     def test_cannot_cancel_completed(self, tmp_workdir):
         board = TaskBoard()
         task = board.create("test task")
-        board.claim_next("executor")
+        board.claim_next("jerry")
         board.submit_for_review(task.task_id, "result")
         board.complete(task.task_id)
         assert board.cancel(task.task_id) is False
@@ -134,7 +134,7 @@ class TestCancelPauseRetry:
         assert t.status == TaskStatus.PAUSED
 
         # Cannot claim paused task
-        assert board.claim_next("executor") is None
+        assert board.claim_next("jerry") is None
 
         # Resume
         assert board.resume(task.task_id) is True
@@ -142,12 +142,12 @@ class TestCancelPauseRetry:
         assert t.status == TaskStatus.PENDING
 
         # Now claimable
-        assert board.claim_next("executor") is not None
+        assert board.claim_next("jerry") is not None
 
     def test_retry_failed(self, tmp_workdir):
         board = TaskBoard()
         task = board.create("test task")
-        board.claim_next("executor")
+        board.claim_next("jerry")
         board.fail(task.task_id, "error")
 
         assert board.retry(task.task_id) is True
@@ -177,7 +177,7 @@ class TestTimeoutRecovery:
     def test_recover_stale_claimed(self, tmp_workdir):
         board = TaskBoard()
         task = board.create("test task")
-        board.claim_next("executor")
+        board.claim_next("jerry")
 
         # Simulate stale: set claimed_at far in the past
         data = board._read()
@@ -194,7 +194,7 @@ class TestTimeoutRecovery:
     def test_recover_stale_review_no_scores(self, tmp_workdir):
         board = TaskBoard()
         task = board.create("test task")
-        board.claim_next("executor")
+        board.claim_next("jerry")
         board.submit_for_review(task.task_id, "result")
 
         # Simulate stale review
@@ -212,7 +212,7 @@ class TestTimeoutRecovery:
     def test_no_recovery_for_fresh_tasks(self, tmp_workdir):
         board = TaskBoard()
         task = board.create("test task")
-        board.claim_next("executor")
+        board.claim_next("jerry")
         # Fresh claim — should NOT be recovered
         recovered = board.recover_stale_tasks()
         assert len(recovered) == 0
@@ -246,17 +246,17 @@ class TestResultAttribution:
     def test_attribution_in_results(self, tmp_workdir):
         board = TaskBoard()
         t1 = board.create("plan", required_role="planner")
-        board.claim_next("planner")
+        board.claim_next("leo")
         board.submit_for_review(t1.task_id, "plan output")
         board.complete(t1.task_id)
 
         t2 = board.create("implement")
-        board.claim_next("executor")
+        board.claim_next("jerry")
         board.submit_for_review(t2.task_id, "code output here")
         board.complete(t2.task_id)
 
         result = board.collect_results(t1.task_id)
-        assert "agent:executor" in result
+        assert "agent:jerry" in result
         assert "code output here" in result
 
 
@@ -267,10 +267,10 @@ class TestCritiqueFlow:
         """Critique passed → directly completed."""
         board = TaskBoard()
         task = board.create("test task")
-        board.claim_next("executor")
+        board.claim_next("jerry")
         board.submit_for_review(task.task_id, "good result")
 
-        board.add_critique(task.task_id, "reviewer", True, [], "looks great")
+        board.add_critique(task.task_id, "alic", True, [], "looks great")
         t = board.get(task.task_id)
         assert t.status == TaskStatus.COMPLETED
         assert t.completed_at is not None
@@ -279,18 +279,18 @@ class TestCritiqueFlow:
         data = board._read()
         critique = data[task.task_id]["critique"]
         assert critique["passed"] is True
-        assert critique["reviewer"] == "reviewer"
+        assert critique["reviewer"] == "alic"
         assert critique["comment"] == "looks great"
 
     def test_critique_rejected(self, tmp_workdir):
         """Critique not passed → CRITIQUE status with suggestions."""
         board = TaskBoard()
         task = board.create("test task")
-        board.claim_next("executor")
+        board.claim_next("jerry")
         board.submit_for_review(task.task_id, "mediocre result")
 
         board.add_critique(
-            task.task_id, "reviewer", False,
+            task.task_id, "alic", False,
             ["fix bug in line 5", "add error handling"], "needs work"
         )
         t = board.get(task.task_id)
@@ -306,23 +306,23 @@ class TestCritiqueFlow:
         """Full flow: submit → critique(reject) → claim_critique → fix → complete."""
         board = TaskBoard()
         task = board.create("test task")
-        board.claim_next("executor")
+        board.claim_next("jerry")
         board.submit_for_review(task.task_id, "initial result")
 
         # Advisor rejects
         board.add_critique(
-            task.task_id, "reviewer", False,
+            task.task_id, "alic", False,
             ["fix X"], "not good enough"
         )
         assert board.get(task.task_id).status == TaskStatus.CRITIQUE
 
-        # Executor claims critique task for revision
-        critique_task = board.claim_critique("executor")
+        # jerry claims critique task for revision
+        critique_task = board.claim_critique("jerry")
         assert critique_task is not None
         assert critique_task.task_id == task.task_id
         assert critique_task.status == TaskStatus.CLAIMED
 
-        # Executor submits revised result and completes
+        # jerry submits revised result and completes
         board.submit_for_review(task.task_id, "fixed result")
         board.complete(task.task_id)
         t = board.get(task.task_id)
@@ -333,17 +333,17 @@ class TestCritiqueFlow:
         """Only the original executor can claim their critique task."""
         board = TaskBoard()
         task = board.create("test task")
-        board.claim_next("executor")
+        board.claim_next("jerry")
         board.submit_for_review(task.task_id, "result")
 
-        board.add_critique(task.task_id, "reviewer", False, ["fix it"], "bad")
+        board.add_critique(task.task_id, "alic", False, ["fix it"], "bad")
 
         # Different agent cannot claim
-        other = board.claim_critique("planner")
+        other = board.claim_critique("leo")
         assert other is None
 
         # Original executor can claim
-        mine = board.claim_critique("executor")
+        mine = board.claim_critique("jerry")
         assert mine is not None
 
     def test_simple_task_skip_review(self, tmp_workdir):
@@ -364,16 +364,16 @@ class TestCritiqueFlow:
         """After max critique rounds, task can be force-completed."""
         board = TaskBoard()
         task = board.create("test task")
-        board.claim_next("executor")
+        board.claim_next("jerry")
         board.submit_for_review(task.task_id, "initial")
 
         # First critique round
-        board.add_critique(task.task_id, "reviewer", False, ["fix A"], "round 1")
+        board.add_critique(task.task_id, "alic", False, ["fix A"], "round 1")
         data = board._read()
         assert data[task.task_id]["critique_round"] == 1
 
-        # Executor claims, fixes, resubmits
-        board.claim_critique("executor")
+        # jerry claims, fixes, resubmits
+        board.claim_critique("jerry")
         board.submit_for_review(task.task_id, "fixed result")
 
         # Force complete after max rounds
@@ -385,10 +385,10 @@ class TestCritiqueFlow:
         """Stale CRITIQUE tasks are force-completed after timeout."""
         board = TaskBoard()
         task = board.create("test task")
-        board.claim_next("executor")
+        board.claim_next("jerry")
         board.submit_for_review(task.task_id, "result")
 
-        board.add_critique(task.task_id, "reviewer", False, ["fix it"], "bad")
+        board.add_critique(task.task_id, "alic", False, ["fix it"], "bad")
         assert board.get(task.task_id).status == TaskStatus.CRITIQUE
 
         # Simulate stale: set critique ts far in the past
@@ -406,9 +406,9 @@ class TestCritiqueFlow:
     def test_add_critique_nonexistent(self, tmp_workdir):
         """add_critique on nonexistent task should not raise."""
         board = TaskBoard()
-        board.add_critique("nonexistent", "reviewer", True, [], "ok")
+        board.add_critique("nonexistent", "alic", True, [], "ok")
 
     def test_claim_critique_none_available(self, tmp_workdir):
         """claim_critique returns None when no critique tasks exist."""
         board = TaskBoard()
-        assert board.claim_critique("executor") is None
+        assert board.claim_critique("jerry") is None

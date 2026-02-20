@@ -67,9 +67,9 @@ class TestPeerReviewAntiCheating:
     def test_critique_recording(self, tmp_workdir):
         from reputation.peer_review import PeerReviewAggregator
         pr = PeerReviewAggregator()
-        pr.record_critique("reviewer", "executor", True, 0)
-        pr.record_critique("reviewer", "executor", False, 2)
-        stats = pr.get_reviewer_stats("reviewer")
+        pr.record_critique("alic", "jerry", True, 0)
+        pr.record_critique("alic", "jerry", False, 2)
+        stats = pr.get_reviewer_stats("alic")
         assert stats["total_reviews"] == 2
 
     def test_always_pass_bias(self, tmp_workdir):
@@ -105,9 +105,9 @@ class TestPathCVoting:
 
         eng = EvolutionEngine(ScoreAggregator(), TaskBoard())
         # First create a vote request
-        eng._write_vote_request("executor", {"proposal": "test restructure"})
+        eng._write_vote_request("jerry", {"proposal": "test restructure"})
 
-        result = eng.cast_vote("executor", "planner", approve=True)
+        result = eng.cast_vote("jerry", "leo", approve=True)
         assert result.get("error") != "no pending vote", "Vote file should exist"
 
         pending = eng.get_pending_votes()
@@ -120,9 +120,9 @@ class TestPathCVoting:
         from core.task_board import TaskBoard
 
         eng = EvolutionEngine(ScoreAggregator(), TaskBoard())
-        eng._write_vote_request("executor", {"proposal": "test restructure"})
-        eng.cast_vote("executor", "reviewer", approve=True)
-        result = eng.cast_vote("executor", "reviewer", approve=False)
+        eng._write_vote_request("jerry", {"proposal": "test restructure"})
+        eng.cast_vote("jerry", "alic", approve=True)
+        result = eng.cast_vote("jerry", "alic", approve=False)
         assert result.get("error") == "already voted"
 
 
@@ -141,14 +141,14 @@ class TestStructuredLogging:
         set_correlation_id("abc")
         fmt = StructuredFormatter()
         record = logging.LogRecord(
-            name="agent.planner", level=logging.INFO,
+            name="agent.leo", level=logging.INFO,
             pathname="", lineno=0, msg="test msg",
             args=None, exc_info=None,
         )
         output = fmt.format(record)
         parsed = json.loads(output)
         assert parsed["msg"] == "test msg"
-        assert parsed["agent"] == "planner"
+        assert parsed["agent"] == "leo"
         assert parsed["cid"] == "abc"
 
     def test_setup_logging(self, tmp_workdir):
