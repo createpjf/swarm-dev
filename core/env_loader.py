@@ -7,13 +7,19 @@ Loads KEY=VALUE pairs into os.environ at startup.
 import os
 
 
-def load_dotenv(path: str = ".env"):
+def load_dotenv(path: str = ""):
     """
     Load KEY=VALUE pairs from a .env file into os.environ.
     - Skips blank lines and comments (lines starting with #)
     - Strips surrounding quotes (' or ") from values
     - Uses os.environ.setdefault so real env vars take precedence
+    - Defaults to project root .env if no path given
     """
+    if not path:
+        # Default: project root (parent of core/)
+        path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            ".env")
     if not os.path.exists(path):
         return
 

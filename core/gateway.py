@@ -1561,13 +1561,25 @@ class _Handler(BaseHTTPRequestHandler):
                     cfg = _yaml.safe_load(_f) or {}
                 ch_cfg = cfg.get("channels", {})
                 known = ["telegram", "discord", "feishu", "slack"]
+                _token_env_map = {
+                    "telegram": ["bot_token_env"],
+                    "discord": ["bot_token_env"],
+                    "feishu": ["app_id_env", "app_secret_env"],
+                    "slack": ["bot_token_env", "app_token_env"],
+                }
                 for name in known:
                     c = ch_cfg.get(name, {})
+                    # Check if tokens are set in os.environ
+                    env_keys = _token_env_map.get(name, [])
+                    tok_ok = all(
+                        bool(os.environ.get(c.get(k, ""), ""))
+                        for k in env_keys
+                    ) if env_keys else False
                     statuses.append({
                         "channel": name,
                         "enabled": c.get("enabled", False),
                         "running": False,
-                        "token_configured": False,
+                        "token_configured": tok_ok,
                         "mention_required": c.get("mention_required", True),
                         "config": {k: v for k, v in c.items()
                                    if k != "enabled"},
@@ -1598,8 +1610,9 @@ class _Handler(BaseHTTPRequestHandler):
             })
             return
 
-        # Load current config
-        config_path = "config/agents.yaml"
+        # Load current config (absolute path for reliability)
+        _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        config_path = os.path.join(_root, "config", "agents.yaml")
         try:
             with open(config_path, "r") as f:
                 config = yaml.safe_load(f) or {}
@@ -2148,11 +2161,16 @@ class _Handler(BaseHTTPRequestHandler):
 #  .env FILE MANAGEMENT
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _save_env_var(key: str, value: str, env_path: str = ".env"):
+def _save_env_var(key: str, value: str, env_path: str = ""):
     """
     Save or update a KEY=VALUE pair in the .env file.
     Also sets it in the current process's os.environ immediately.
+    Uses absolute path (project root) by default for reliability.
     """
+    if not env_path:
+        _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        env_path = os.path.join(_root, ".env")
+
     os.environ[key] = value
 
     lines = []
@@ -2174,6 +2192,7 @@ def _save_env_var(key: str, value: str, env_path: str = ".env"):
 
     with open(env_path, "w") as f:
         f.writelines(lines)
+    logger.debug("Saved env var %s to %s", key, env_path)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

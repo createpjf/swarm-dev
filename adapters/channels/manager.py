@@ -127,21 +127,25 @@ class ChannelManager:
                              adapter.channel_name, e)
         self.adapters.clear()
 
-        # Re-read config from disk
+        # Re-read config from disk (use absolute path for reliability)
         import yaml
+        _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        config_path = os.path.join(_project_root, "config", "agents.yaml")
         try:
-            with open("config/agents.yaml", "r") as f:
+            with open(config_path, "r") as f:
                 fresh_config = yaml.safe_load(f) or {}
             self.channels_config = fresh_config.get("channels", {})
             self.config["channels"] = self.channels_config
         except Exception as e:
-            logger.error("Failed to reload channels config: %s", e)
+            logger.error("Failed to reload channels config from %s: %s",
+                         config_path, e)
             return
 
-        # Re-load .env into os.environ
+        # Re-load .env into os.environ (absolute path)
+        env_path = os.path.join(_project_root, ".env")
         try:
             from core.env_loader import load_dotenv
-            load_dotenv()
+            load_dotenv(env_path)
         except Exception:
             pass
 
