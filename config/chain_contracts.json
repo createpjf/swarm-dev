@@ -15,8 +15,12 @@
   "contracts": {
     "erc8004_identity_registry": {
       "base-sepolia": "0xd5271339C5f1bae8445fc1d81FD3520b6cA239a3",
-      "base": "",
-      "abi": [
+      "base": "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432",
+      "abi_variant": {
+        "base-sepolia": "custom",
+        "base": "official"
+      },
+      "abi_custom": [
         "function registerAgent(string memory agentCardCid) external returns (uint256 agentId)",
         "function setAgentWallet(uint256 agentId, address newWallet, bytes calldata sig) external",
         "function isRegisteredAgent(address wallet) external view returns (bool)",
@@ -24,15 +28,37 @@
         "function tokenURI(uint256 tokenId) external view returns (string)",
         "function ownerOf(uint256 tokenId) external view returns (address)",
         "event AgentRegistered(uint256 indexed agentId, address indexed wallet, string agentCardCid)"
+      ],
+      "abi_official": [
+        "function register(string calldata agentURI) external returns (uint256 agentId)",
+        "function setAgentURI(uint256 agentId, string calldata newURI) external",
+        "function setAgentWallet(uint256 agentId, address newWallet, uint256 deadline, bytes calldata signature) external",
+        "function getAgentWallet(uint256 agentId) external view returns (address)",
+        "function getMetadata(uint256 agentId, string memory metadataKey) external view returns (bytes memory)",
+        "function setMetadata(uint256 agentId, string memory metadataKey, bytes memory metadataValue) external",
+        "function ownerOf(uint256 tokenId) external view returns (address)",
+        "function tokenURI(uint256 tokenId) external view returns (string memory)",
+        "event Registered(uint256 indexed agentId, string agentURI, address indexed owner)"
       ]
     },
     "erc8004_reputation_registry": {
       "base-sepolia": "0x3b20aa85d8Fb47741102A6d189fcA14b7810E7AD",
-      "base": "",
-      "abi": [
+      "base": "0x8004BAa17C55a88189AE136b182e5fdA19dE9b63",
+      "abi_variant": {
+        "base-sepolia": "custom",
+        "base": "official"
+      },
+      "abi_custom": [
         "function submitReputation(uint256 agentId, uint256 score, string calldata signalsCid) external",
         "function getReputation(uint256 agentId) external view returns (uint256 score, uint256 submissions, uint256 lastUpdate)",
         "event ReputationSubmitted(uint256 indexed agentId, uint256 score, address indexed submitter)"
+      ],
+      "abi_official": [
+        "function giveFeedback(uint256 agentId, int128 value, uint8 valueDecimals, string calldata tag1, string calldata tag2, string calldata endpoint, string calldata feedbackURI, bytes32 feedbackHash) external",
+        "function getSummary(uint256 agentId, address[] calldata clientAddresses, string calldata tag1, string calldata tag2) external view returns (uint64 count, int128 summaryValue, uint8 summaryValueDecimals)",
+        "function readFeedback(uint256 agentId, address clientAddress, uint64 feedbackIndex) external view returns (int128 value, uint8 valueDecimals, string memory tag1, string memory tag2, bool isRevoked)",
+        "function getClients(uint256 agentId) external view returns (address[] memory)",
+        "event NewFeedback(uint256 indexed agentId, address indexed clientAddress, uint64 feedbackIndex, int128 value, uint8 valueDecimals, string indexed indexedTag1, string tag1, string tag2, string endpoint, string feedbackURI, bytes32 feedbackHash)"
       ]
     },
     "usdc": {

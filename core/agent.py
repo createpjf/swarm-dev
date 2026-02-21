@@ -13,9 +13,17 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
+
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+def _strip_think(text: str) -> str:
+    """Strip <think>...</think> blocks from LLM output."""
+    text = _THINK_RE.sub("", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 if TYPE_CHECKING:
     from core.context_bus import ContextBus
@@ -98,9 +106,15 @@ class BaseAgent:
         self._short_term: list[dict] = []  # conversation window
         self._cognition: str = ""          # cached cognition profile
         self._soul: str = ""               # cached soul.md (OpenClaw pattern)
+        self._tools_md: str = ""           # cached TOOLS.md (per-agent tool spec)
+        self._user_md: str = ""            # cached USER.md (user identity)
         os.makedirs(MAILBOX_DIR, exist_ok=True)
-        # Load soul + cognition profiles
+        # Load soul + cognition + tools + user profiles
         self._load_soul()
+        self._load_tools_md()
+        self._load_user_md()
+        # Restore short-term memory from disk (survives restarts)
+        self._load_short_term()
 
     def _load_soul(self):
         """Load agent personality — prefers soul.md (OpenClaw pattern), falls back to cognition.md.
@@ -148,6 +162,94 @@ class BaseAgent:
                     break
                 except OSError:
                     continue
+
+    def _load_tools_md(self):
+        """Load per-agent TOOLS.md — tool usage specification (OpenClaw pattern).
+
+        Search order:
+          1. skills/agents/{agent_id}/TOOLS.md
+          2. docs/{agent_id}/TOOLS.md
+        """
+        tools_paths = [
+            os.path.join("skills", "agents", self.cfg.agent_id, "TOOLS.md"),
+            os.path.join("docs", self.cfg.agent_id, "TOOLS.md"),
+        ]
+        for p in tools_paths:
+            if os.path.exists(p):
+                try:
+                    with open(p) as f:
+                        self._tools_md = f.read().strip()
+                    logger.info("[%s] loaded TOOLS.md from %s",
+                                self.cfg.agent_id, p)
+                    break
+                except OSError:
+                    continue
+
+    def _load_user_md(self):
+        """Load shared USER.md — user identity and preferences.
+
+        Search order:
+          1. docs/shared/USER.md
+          2. docs/USER.md
+        """
+        user_paths = [
+            os.path.join("docs", "shared", "USER.md"),
+            os.path.join("docs", "USER.md"),
+        ]
+        for p in user_paths:
+            if os.path.exists(p):
+                try:
+                    with open(p) as f:
+                        self._user_md = f.read().strip()
+                    logger.info("[%s] loaded USER.md from %s",
+                                self.cfg.agent_id, p)
+                    break
+                except OSError:
+                    continue
+
+    # ── Short-term memory persistence ─────────────────────────────────────
+
+    def _short_term_path(self) -> str:
+        """Path to the short-term memory JSONL file for this agent."""
+        return os.path.join(
+            "memory", "agents", self.cfg.agent_id, "short_term.jsonl")
+
+    def _load_short_term(self):
+        """Restore short-term conversation memory from disk."""
+        path = self._short_term_path()
+        if not os.path.exists(path):
+            return
+        try:
+            entries: list[dict] = []
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            entries.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            continue
+            # Keep only the most recent entries within window
+            max_entries = self.cfg.short_term_turns * 2
+            self._short_term = entries[-max_entries:]
+            if self._short_term:
+                logger.info("[%s] restored %d short-term entries from disk",
+                            self.cfg.agent_id, len(self._short_term))
+        except OSError as e:
+            logger.warning("[%s] failed to load short-term memory: %s",
+                           self.cfg.agent_id, e)
+
+    def _save_short_term(self):
+        """Persist short-term conversation memory to disk."""
+        path = self._short_term_path()
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                for entry in self._short_term:
+                    f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except OSError as e:
+            logger.warning("[%s] failed to save short-term memory: %s",
+                           self.cfg.agent_id, e)
 
     async def run(self, task: "Task", bus: "ContextBus") -> str:
         """
@@ -200,6 +302,16 @@ class BaseAgent:
                 logger.warning("[%s] tools prompt build failed: %s",
                                self.cfg.agent_id, e)
 
+        # 5b-2. TOOLS.md (per-agent tool specification from OpenClaw)
+        tools_md_section = ""
+        if self._tools_md:
+            tools_md_section = f"\n\n{self._tools_md}"
+
+        # 5b-3. USER.md (user identity and preferences)
+        user_section = ""
+        if self._user_md:
+            user_section = f"\n\n{self._user_md}"
+
         # 5c. Recent task history (cross-round context)
         history_section = ""
         try:
@@ -238,7 +350,9 @@ class BaseAgent:
         system_prompt = (
             f"You are {self.cfg.agent_id}.\n\n"
             f"## Role\n{self.cfg.role}"
-            f"{soul_section}\n\n"
+            f"{soul_section}"
+            f"{tools_md_section}"
+            f"{user_section}\n\n"
             f"## Skills\n{skills_text}"
             f"{tools_section}"
             f"{docs_section}"
@@ -279,6 +393,9 @@ class BaseAgent:
         # 6. Call LLM (streaming if available, with partial result updates)
         result = await self._call_llm_streaming(messages, task)
 
+        # 6b. Strip <think>...</think> blocks from model output
+        result = _strip_think(result)
+
         # 7. Tool execution loop — parse tool calls, execute, feed back results
         if tools_cfg:
             result = await self._tool_loop(messages, task, result)
@@ -290,6 +407,8 @@ class BaseAgent:
         max_entries = self.cfg.short_term_turns * 2
         if len(self._short_term) > max_entries:
             self._short_term = self._short_term[-max_entries:]
+        # Persist to disk (survives process restarts)
+        self._save_short_term()
 
         # 8a. Store to long-term memory (episodic + vector)
         self._store_to_memory(task, result)
@@ -304,21 +423,62 @@ class BaseAgent:
         return result
 
     async def run_with_prompt(self, prompt: str, bus: "ContextBus") -> str:
-        """Ad-hoc LLM call — lighter than run(), no task lifecycle/tool loop/memory store.
+        """Ad-hoc LLM call — lighter than run(), no task lifecycle/memory store.
 
         Used for targeted revisions and synthesis tasks where the full
         run() pipeline (skills, memory recall, context bus) is overkill.
+        Includes tools section so agent can invoke exec, etc.
         """
         system_prompt = f"You are {self.cfg.agent_id}.\n\n## Role\n{self.cfg.role}\n"
         if self._soul:
             system_prompt += f"\n## Soul\n{self._soul}\n"
         elif self._cognition:
             system_prompt += f"\n## Cognitive Profile\n{self._cognition}\n"
+
+        # Inject tools section so agent has tool access
+        tools_cfg = self.cfg.tools_config
+        if tools_cfg:
+            try:
+                from core.tools import build_tools_prompt
+                tools_prompt = build_tools_prompt({"tools": tools_cfg})
+                if tools_prompt:
+                    system_prompt += f"\n{tools_prompt}\n"
+            except Exception:
+                pass
+
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt},
         ]
-        return await self.llm.chat(messages, self.cfg.model)
+        result = await self.llm.chat(messages, self.cfg.model)
+
+        # Mini tool loop (max 3 rounds)
+        if tools_cfg:
+            try:
+                from core.tools import parse_tool_calls, execute_tool_calls
+                for _ in range(3):
+                    calls = parse_tool_calls(result)
+                    if not calls:
+                        break
+                    tool_results = execute_tool_calls(calls, {"tools": tools_cfg})
+                    feedback = []
+                    for tr in tool_results:
+                        status = "✓" if tr["result"].get("ok") else "✗"
+                        rj = json.dumps(tr["result"], indent=2,
+                                        ensure_ascii=False, default=str)
+                        feedback.append(
+                            f"### Tool Result: {tr['tool']} [{status}]\n"
+                            f"```json\n{rj}\n```")
+                    messages.append({"role": "assistant", "content": result})
+                    messages.append({"role": "user", "content":
+                        "## Tool Execution Results\n\n"
+                        + "\n\n".join(feedback)
+                        + "\n\nContinue with your task."})
+                    result = await self.llm.chat(messages, self.cfg.model)
+            except Exception:
+                pass
+
+        return result
 
     async def _call_llm_streaming(self, messages: list[dict], task: "Task") -> str:
         """
@@ -347,6 +507,11 @@ class BaseAgent:
             except Exception as e:
                 logger.warning("[%s] streaming failed, falling back to blocking: %s",
                                self.cfg.agent_id, e)
+                # Reset circuit breakers so blocking fallback has a fair chance
+                if hasattr(self.llm, '_circuits'):
+                    for circuit in self.llm._circuits.values():
+                        circuit.failures = 0
+                        circuit.is_open = False
 
         # Fallback: non-streaming
         return await self.llm.chat(messages, self.cfg.model)
@@ -410,6 +575,7 @@ class BaseAgent:
 
             # Call LLM again with tool results
             result = await self._call_llm_streaming(messages, task)
+            result = _strip_think(result)
 
         return result
 

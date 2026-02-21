@@ -15,12 +15,29 @@ import json
 import logging
 import multiprocessing as mp
 import os
+import re
 import signal
 import sys
 import time
 from typing import Any
 
 import yaml
+
+# ── Think-tag & tool-block strippers ──
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+_TOOL_BLOCK_RE = re.compile(
+    r"```tool\s*\n.*?\n```|<tool_code>.*?</tool_code>", re.DOTALL)
+
+def _strip_think(text: str) -> str:
+    """Strip <think>...</think> blocks from LLM output."""
+    text = _THINK_RE.sub("", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+def _strip_tool_blocks(text: str) -> str:
+    """Strip remaining tool invocation blocks from final output."""
+    text = _strip_think(text)
+    text = _TOOL_BLOCK_RE.sub("", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 # ── Graceful shutdown flag (per-process) ──
 _shutdown_requested = False
@@ -232,7 +249,11 @@ def _extract_and_create_subtasks(board: TaskBoard, planner_output: str,
         # Check for COMPLEXITY: line (follows a TASK: line)
         if stripped.upper().startswith("COMPLEXITY:") and pending_description:
             complexity = stripped[11:].strip().lower()
-            if complexity not in ("simple", "normal", "complex"):
+            # Override: Leo-tagged "simple" → "normal" (send to Alic for review)
+            # Only _infer_complexity() can mark something as truly "simple"
+            if complexity == "simple":
+                complexity = "normal"
+            if complexity not in ("normal", "complex"):
                 complexity = _infer_complexity(pending_description)
             _create_subtask(pending_description, pending_role, complexity)
             pending_description = None
@@ -265,16 +286,35 @@ def _extract_and_create_subtasks(board: TaskBoard, planner_output: str,
 
 
 def _infer_complexity(description: str) -> str:
-    """Infer task complexity from description keywords."""
+    """Infer task complexity from description keywords.
+
+    Conservative approach: most tasks go through review (Alic).
+    Only mark 'simple' for truly trivial operations like listing or printing.
+    Leo can explicitly set complexity via COMPLEXITY: tag in subtask descriptions.
+    """
     desc_lower = description.lower()
+
+    # 1) Check for explicit COMPLEXITY: tag from Leo's decomposition
+    import re
+    explicit = re.search(r'complexity:\s*(simple|normal|complex)', desc_lower)
+    if explicit:
+        return explicit.group(1)
+
+    # 2) Complex: tasks requiring analysis/judgment
     if any(kw in desc_lower for kw in [
         "review", "audit", "verify", "analyze", "evaluate", "compare",
+        "research", "investigate", "design", "architect", "plan",
     ]):
         return "complex"
+
+    # 3) Simple: only for extremely trivial read-only operations
+    #    (narrowed from previous overly-broad list)
     if any(kw in desc_lower for kw in [
-        "list", "show", "get", "fetch", "read", "display", "print",
+        "print hello", "echo ", "list directory",
     ]):
         return "simple"
+
+    # 4) Default: normal → goes through Alic review
     return "normal"
 
 
@@ -496,7 +536,7 @@ async def _agent_loop(agent, bus: ContextBus, board: TaskBoard,
                     # Keep planner result but mark as review (waiting for close-out)
                     board.submit_for_review(task.task_id, result)
                     logger.info("[%s] planner created %d subtasks for task %s, waiting for close-out",
-                                agent.cfg.agent_id, task.task_id, len(subtask_ids))
+                                agent.cfg.agent_id, len(subtask_ids), task.task_id)
                 else:
                     # No subtasks extracted — auto-complete
                     board.submit_for_review(task.task_id, result)
@@ -655,18 +695,77 @@ async def _check_planner_closeouts(agent, bus, board: TaskBoard, config: dict):
             f"5. 用中文回复用户 (respond in Chinese).\n"
         )
         try:
-            # Use planner role for synthesis (even if called from reviewer agent)
-            planner_role = None
+            # Build full system prompt for planner (with tools, skills, soul)
+            # so the synthesizing LLM has access to exec and other tools.
+            planner_def = None
             for a in config.get("agents", []):
                 if a.get("id", "").lower() in ("leo", "planner"):
-                    planner_role = a.get("role", "")
+                    planner_def = a
                     break
-            system_role = planner_role or agent.cfg.role
+            planner_role = (planner_def or {}).get("role", "") or agent.cfg.role
+            planner_model = (planner_def or {}).get("model", "") or agent.cfg.model
+
+            # Inject tools section (same as BaseAgent.run does)
+            tools_section = ""
+            planner_tools_cfg = (planner_def or {}).get("tools", {})
+            if planner_tools_cfg:
+                try:
+                    from core.tools import build_tools_prompt
+                    tools_prompt = build_tools_prompt({"tools": planner_tools_cfg})
+                    if tools_prompt:
+                        tools_section = f"\n\n{tools_prompt}"
+                except Exception as e:
+                    logger.warning("closeout tools prompt build failed: %s", e)
+
+            system_prompt = (
+                f"You are leo.\n\n"
+                f"## Role\n{planner_role}"
+                f"{tools_section}\n"
+            )
             messages = [
-                {"role": "system", "content": system_role},
+                {"role": "system", "content": system_prompt},
                 {"role": "user",   "content": close_prompt},
             ]
-            final_answer = await agent.llm.chat(messages, agent.cfg.model)
+            final_answer = await agent.llm.chat(messages, planner_model)
+            final_answer = _strip_think(final_answer)
+
+            # Mini tool-loop: if planner invokes tools during closeout,
+            # execute them and feed results back (max 3 rounds).
+            if planner_tools_cfg:
+                try:
+                    from core.tools import parse_tool_calls, execute_tool_calls
+                    for _round in range(3):
+                        calls = parse_tool_calls(final_answer)
+                        if not calls:
+                            break
+                        logger.info("closeout tool round %d: %s",
+                                    _round + 1, [c["tool"] for c in calls])
+                        tool_results = execute_tool_calls(
+                            calls, {"tools": planner_tools_cfg})
+                        feedback_parts = []
+                        for tr in tool_results:
+                            status = "✓" if tr["result"].get("ok") else "✗"
+                            rj = json.dumps(tr["result"], indent=2,
+                                            ensure_ascii=False, default=str)
+                            feedback_parts.append(
+                                f"### Tool Result: {tr['tool']} [{status}]\n"
+                                f"```json\n{rj}\n```")
+                        messages.append({"role": "assistant",
+                                         "content": final_answer})
+                        messages.append({"role": "user", "content":
+                            "## Tool Execution Results\n\n"
+                            + "\n\n".join(feedback_parts)
+                            + "\n\nBased on the tool results above, write your "
+                            "FINAL polished answer for the user in Chinese. "
+                            "Do NOT invoke more tools. Just synthesize."})
+                        final_answer = await agent.llm.chat(
+                            messages, planner_model)
+                        final_answer = _strip_think(final_answer)
+                except Exception as tool_err:
+                    logger.warning("closeout tool loop error: %s", tool_err)
+
+            # Strip any remaining tool call blocks from the final answer
+            final_answer = _strip_tool_blocks(final_answer)
 
             # Update parent task with synthesized result and complete
             with board.lock:
@@ -919,6 +1018,13 @@ class Orchestrator:
             generate_team_skill(config_path=config_path)
         except Exception as e:
             logger.warning("Failed to generate team skill: %s", e)
+
+        # Sync skill CLI binaries into exec_approvals.json
+        try:
+            from core.skill_deps import sync_exec_approvals
+            sync_exec_approvals()
+        except Exception as e:
+            logger.warning("Failed to sync exec approvals: %s", e)
 
     def submit(self, task_description: str,
                blocked_by: list[str] | None = None,

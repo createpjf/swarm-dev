@@ -112,19 +112,25 @@ async def compact_history(
         logger.warning("[compaction] failed, keeping original: %s", e)
         return messages
 
-    # Build compacted history
-    summary_msg = {
-        "role": "system",
-        "content": (
-            "## Previous Conversation Summary\n"
-            "(Earlier messages were compacted to save context space)\n\n"
-            f"{summary}\n\n"
-            "---\n"
-            "The conversation continues below with the most recent messages."
-        ),
-    }
+    # Build compacted history — append summary to the last system message
+    # (do NOT create a second system message — some APIs reject that)
+    summary_block = (
+        "\n\n## Previous Conversation Summary\n"
+        "(Earlier messages were compacted to save context space)\n\n"
+        f"{summary}\n\n"
+        "---\n"
+        "The conversation continues below with the most recent messages."
+    )
 
-    return system_msgs + [summary_msg] + recent_msgs
+    if system_msgs:
+        # Merge into existing system prompt (keep single system message)
+        system_msgs[-1] = dict(system_msgs[-1])  # don't mutate original
+        system_msgs[-1]["content"] += summary_block
+        return system_msgs + recent_msgs
+    else:
+        # No system message exists — create one
+        summary_msg = {"role": "system", "content": summary_block.strip()}
+        return [summary_msg] + recent_msgs
 
 
 def _format_messages_for_summary(messages: list[dict]) -> str:

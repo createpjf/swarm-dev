@@ -346,23 +346,35 @@ class ChannelManager:
         # Send typing indicator
         await adapter.send_typing(msg.chat_id)
 
-        # Submit task via Orchestrator
+        # Save user message to session history
+        self._sessions.add_message(
+            msg.session_id, "user", msg.text, msg.user_name)
+
+        # Load conversation history for context injection
+        session_history = self._sessions.format_history_for_prompt(
+            msg.session_id, max_turns=10)
+
+        # Submit task via Orchestrator (with session history)
         task_id = await asyncio.get_event_loop().run_in_executor(
-            None, self._submit_task, msg.text)
+            None, self._submit_task, msg.text, session_history)
 
         if not task_id:
             await adapter.send_message(msg.chat_id, "❌ 任务提交失败")
             return
 
         self._sessions.update_task(msg.session_id, task_id)
-        await adapter.send_message(
-            msg.chat_id, f"🚀 任务已提交，正在处理...")
+        # Just show typing indicator — no "task submitted" noise
+        await adapter.send_typing(msg.chat_id)
 
         # Poll for completion
         result = await self._wait_for_result(
             task_id, msg, adapter)
 
         if result:
+            # Save assistant response to session history
+            self._sessions.add_message(
+                msg.session_id, "assistant", result[:2000])
+
             # Chunk and send result
             chunks = self._chunk_message(
                 result, PLATFORM_LIMITS.get(msg.channel, 4096))
@@ -374,8 +386,15 @@ class ChannelManager:
             await adapter.send_message(
                 msg.chat_id, "⏰ 任务超时，请稍后重试或简化请求")
 
-    def _submit_task(self, description: str) -> Optional[str]:
-        """Submit a task via Orchestrator (runs in thread pool)."""
+    def _submit_task(self, description: str,
+                     session_history: str = "") -> Optional[str]:
+        """Submit a task via Orchestrator (runs in thread pool).
+
+        Args:
+            description: The user's message / task description.
+            session_history: Formatted conversation history to inject
+                             into the task description for context continuity.
+        """
         try:
             from core.orchestrator import Orchestrator
             from core.task_board import TaskBoard
@@ -391,18 +410,26 @@ class ChannelManager:
             except Exception:
                 pass
 
-            # Clear state for new task
+            # Soft clear: archive completed tasks, keep context alive
+            # (ContextBus TTL mechanism handles natural expiry)
             board.clear(force=True)
-            for fp in [".context_bus.json"]:
-                if os.path.exists(fp):
-                    os.remove(fp)
-            import glob
-            for fp in glob.glob(".mailboxes/*.jsonl"):
-                os.remove(fp)
+            # NOTE: We no longer destroy .context_bus.json or .mailboxes
+            # to preserve cross-round context for session continuity.
+
+            # Inject conversation history into task description
+            if session_history:
+                full_description = (
+                    f"{session_history}\n"
+                    f"---\n\n"
+                    f"## 当前消息 (Current Message)\n"
+                    f"{description}"
+                )
+            else:
+                full_description = description
 
             # Submit and launch
             orch = Orchestrator()
-            task_id = orch.submit(description)
+            task_id = orch.submit(full_description, required_role="planner")
 
             # Run agents in background thread
             def _run():
@@ -445,21 +472,24 @@ class ChannelManager:
                 t.get("status") in active_states for t in data.values())
 
             if not has_active:
-                # All done — collect results
-                result = board.collect_results(task_id)
-                if result:
-                    return result
-                # Maybe no results yet, keep waiting briefly
+                # All done — prefer root task result (Leo's synthesis)
+                root = data.get(task_id)
+                if root and root.get("result"):
+                    return self._clean_result(root["result"])
+                # Maybe closeout hasn't written yet, wait briefly
                 await asyncio.sleep(2)
+                data = board._read()
+                root = data.get(task_id)
+                if root and root.get("result"):
+                    return self._clean_result(root["result"])
+                # Fallback to collected executor results
                 result = board.collect_results(task_id)
-                return result or "(无结果)"
+                return self._clean_result(result) if result else "(无结果)"
 
-            # Send status update after 30s
+            # Send typing indicator after 30s (no text notification)
             elapsed = time.time() - start
             if not status_sent and elapsed > STATUS_INTERVAL:
                 await adapter.send_typing(msg.chat_id)
-                await adapter.send_message(
-                    msg.chat_id, "⏳ 仍在处理中，请稍候...")
                 status_sent = True
 
         return None  # timeout
@@ -470,6 +500,20 @@ class ChannelManager:
             if adapter.channel_name == channel_name:
                 return adapter
         return None
+
+    @staticmethod
+    def _clean_result(text: str) -> str:
+        """Strip internal metadata (agent/task comments, thinking tags) from result."""
+        import re
+        # Remove <!-- agent:xxx task:xxx --> markers
+        text = re.sub(r'<!--\s*agent:.*?-->', '', text)
+        # Remove <think>...</think> reasoning traces
+        text = re.sub(r'<think>[\s\S]*?</think>', '', text)
+        # Remove separator lines between merged results
+        text = re.sub(r'\n---\n', '\n\n', text)
+        # Collapse excessive blank lines
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        return text.strip()
 
     @staticmethod
     def _chunk_message(text: str, max_len: int) -> list[str]:

@@ -58,11 +58,17 @@ class MinimaxAdapter:
                 return choices[0]["message"]["content"]
         except httpx.HTTPStatusError as e:
             code = e.response.status_code
+            body = ""
+            try:
+                body = e.response.text[:500]
+            except Exception:
+                pass
+            logger.error("[minimax] HTTP %d — %s", code, body)
             if code == 401:
                 raise RuntimeError("Minimax API key invalid (401)") from e
             elif code == 429:
                 raise RuntimeError("Minimax rate limited (429)") from e
-            raise RuntimeError(f"Minimax API error ({code})") from e
+            raise RuntimeError(f"Minimax API error ({code}): {body[:200]}") from e
         except httpx.ConnectError as e:
             raise RuntimeError(
                 f"Cannot connect to Minimax API: {self.base_url}") from e
@@ -78,38 +84,50 @@ class MinimaxAdapter:
         """
         import httpx
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            async with client.stream(
-                "POST",
-                f"{self.base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": model,
-                    "messages": messages,
-                    "stream": True,
-                },
-            ) as resp:
-                resp.raise_for_status()
-                async for line in resp.aiter_lines():
-                    if not line:
-                        continue
-                    # SSE format: "data: {...}"
-                    if line.startswith("data: "):
-                        payload = line[6:]
-                        if payload.strip() == "[DONE]":
-                            return
-                        try:
-                            chunk = json.loads(payload)
-                            delta = chunk.get("choices", [{}])[0].get(
-                                "delta", {})
-                            content = delta.get("content")
-                            if content:
-                                yield content
-                        except json.JSONDecodeError:
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                async with client.stream(
+                    "POST",
+                    f"{self.base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": model,
+                        "messages": messages,
+                        "stream": True,
+                    },
+                ) as resp:
+                    resp.raise_for_status()
+                    async for line in resp.aiter_lines():
+                        if not line:
                             continue
+                        # SSE format: "data: {...}"
+                        if line.startswith("data: "):
+                            payload = line[6:]
+                            if payload.strip() == "[DONE]":
+                                return
+                            try:
+                                chunk = json.loads(payload)
+                                delta = chunk.get("choices", [{}])[0].get(
+                                    "delta", {})
+                                content = delta.get("content")
+                                if content:
+                                    yield content
+                            except json.JSONDecodeError:
+                                continue
+        except httpx.HTTPStatusError as e:
+            code = e.response.status_code
+            body = ""
+            try:
+                body = e.response.text[:500]
+            except Exception:
+                pass
+            logger.error("[minimax-stream] HTTP %d — %s", code, body)
+            raise RuntimeError(f"Minimax API error ({code}): {body[:200]}") from e
+        except (httpx.ConnectError, httpx.TimeoutException) as e:
+            raise RuntimeError(f"Minimax stream connection error: {e}") from e
 
     async def chat_with_usage(self, messages: list[dict],
                               model: str) -> tuple[str, dict]:
@@ -149,7 +167,13 @@ class MinimaxAdapter:
                 }
         except httpx.HTTPStatusError as e:
             code = e.response.status_code
-            raise RuntimeError(f"Minimax API error ({code})") from e
+            body = ""
+            try:
+                body = e.response.text[:500]
+            except Exception:
+                pass
+            logger.error("[minimax] HTTP %d — %s", code, body)
+            raise RuntimeError(f"Minimax API error ({code}): {body[:200]}") from e
         except (httpx.ConnectError, httpx.TimeoutException) as e:
             raise RuntimeError(f"Minimax API connection error: {e}") from e
         except (KeyError, IndexError, json.JSONDecodeError) as e:

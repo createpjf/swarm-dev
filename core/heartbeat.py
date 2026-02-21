@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 HEARTBEAT_DIR = ".heartbeats"
 BEAT_INTERVAL = 2.0      # seconds between heartbeats
-OFFLINE_THRESHOLD = 8.0   # consider offline if no beat for this long
+OFFLINE_THRESHOLD = 15.0  # consider offline if no beat for this long (generous for slow LLM calls)
 
 
 class Heartbeat:

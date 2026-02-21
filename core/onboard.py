@@ -178,6 +178,10 @@ def run_quick_setup() -> bool:
         # ── Write config ──
         _write_config_quick(provider, model, api_key)
 
+        # ── Skill CLI dependencies ──
+        console.print(f"\n  [{C_DIM}]Checking skill CLI dependencies...[/{C_DIM}]")
+        _ask_skill_deps()
+
         # ── Health check ──
         console.print(f"\n  [{C_DIM}]Running health check...[/{C_DIM}]")
         from core.doctor import run_doctor_quick
@@ -245,7 +249,7 @@ def run_onboard():
 
 def _wizard_quick():
     """QuickStart path — same as run_quick_setup but called from configure."""
-    console.print(f"\n  [{C_ACCENT}]Step 1/4 · Model & Auth[/{C_ACCENT}]")
+    console.print(f"\n  [{C_ACCENT}]Step 1/5 · Model & Auth[/{C_ACCENT}]")
 
     provider = _ask_provider()
     if provider is None:
@@ -262,17 +266,21 @@ def _wizard_quick():
     # Write config
     _write_config_quick(provider, model, api_key)
 
+    # Skill CLI dependencies
+    console.print(f"\n  [{C_ACCENT}]Step 2/5 · Skill CLI Dependencies[/{C_ACCENT}]")
+    _ask_skill_deps()
+
     # Tools quick setup
-    console.print(f"\n  [{C_ACCENT}]Step 2/4 · Tools[/{C_ACCENT}]")
+    console.print(f"\n  [{C_ACCENT}]Step 3/5 · Tools[/{C_ACCENT}]")
     _ask_tools_quick()
 
     # Health check
-    console.print(f"\n  [{C_ACCENT}]Step 3/4 · Health Check[/{C_ACCENT}]")
+    console.print(f"\n  [{C_ACCENT}]Step 4/5 · Health Check[/{C_ACCENT}]")
     from core.doctor import run_doctor_quick
     run_doctor_quick(console)
 
     # Gateway summary
-    console.print(f"  [{C_ACCENT}]Step 4/4 · Gateway Summary[/{C_ACCENT}]")
+    console.print(f"  [{C_ACCENT}]Step 5/5 · Gateway Summary[/{C_ACCENT}]")
     _show_gateway_summary(provider, model)
 
 
@@ -396,6 +404,156 @@ def _wizard_advanced():
 #  TOOLS QUICK SETUP
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _ask_skill_deps():
+    """Scan skill files for CLI dependencies, show status, offer to install missing ones."""
+    try:
+        from core.skill_deps import (
+            scan_skill_deps, get_missing_deps, get_installed_deps,
+            pick_best_installer, install_dep, build_install_command,
+            check_prerequisites,
+        )
+    except ImportError:
+        console.print(f"  [{C_DIM}]Skill dependency module not available.[/{C_DIM}]")
+        return
+
+    all_deps = scan_skill_deps()
+    if not all_deps:
+        console.print(f"  [{C_DIM}]No skills with CLI dependencies found.[/{C_DIM}]")
+        return
+
+    installed = get_installed_deps()
+    missing = get_missing_deps()
+
+    # ── Show summary ──
+    console.print(f"  [{C_OK}]{len(installed)}[/{C_OK}] skill CLIs already installed, "
+                  f"[{C_WARN}]{len(missing)}[/{C_WARN}] missing\n")
+
+    if installed:
+        tbl = Table(box=box.SIMPLE, show_header=True, header_style=C_ACCENT,
+                    padding=(0, 1))
+        tbl.add_column("", width=2)
+        tbl.add_column("Skill", style=C_AGENT)
+        tbl.add_column("Binary", style=C_DIM)
+        for dep in installed:
+            emoji = dep.get("emoji", "")
+            bins = ", ".join(dep["requires_bins"]) or ", ".join(dep.get("requires_any_bins", []))
+            tbl.add_row(emoji, dep["skill"], f"[{C_OK}]{bins}[/{C_OK}]")
+        console.print(tbl)
+
+    if not missing:
+        console.print(f"\n  [{C_OK}]All skill dependencies satisfied![/{C_OK}]")
+        return
+
+    # ── Show what's missing ──
+    console.print(f"\n  [{C_ACCENT}]Missing CLI tools:[/{C_ACCENT}]")
+    tbl_miss = Table(box=box.SIMPLE, show_header=True, header_style=C_ACCENT,
+                     padding=(0, 1))
+    tbl_miss.add_column("", width=2)
+    tbl_miss.add_column("Skill", style=C_AGENT)
+    tbl_miss.add_column("Needs", style=C_WARN)
+    tbl_miss.add_column("Install via")
+    for dep in missing:
+        emoji = dep.get("emoji", "")
+        bins = ", ".join(dep["missing_bins"]) if dep["missing_bins"] else ", ".join(dep.get("requires_any_bins", []))
+        best = pick_best_installer(dep.get("install", []))
+        via = best.get("label", best.get("kind", "?")) if best else "manual"
+        tbl_miss.add_row(emoji, dep["skill"], bins, f"[{C_DIM}]{via}[/{C_DIM}]")
+    console.print(tbl_miss)
+
+    # ── Check package manager prerequisites ──
+    prereqs = check_prerequisites()
+    needed_kinds = set()
+    for dep in missing:
+        for entry in dep.get("install", []):
+            mgr = {"brew": "brew", "brew-cask": "brew", "go": "go",
+                    "node": "npm", "uv": "uv", "apt": "apt"}.get(entry.get("kind", ""), "")
+            if mgr:
+                needed_kinds.add(mgr)
+    missing_mgrs = [m for m in needed_kinds if not prereqs.get(m, False)]
+    if missing_mgrs:
+        console.print(f"\n  [{C_WARN}]Package managers not found: {', '.join(missing_mgrs)}[/{C_WARN}]")
+        console.print(f"  [{C_DIM}]Skills requiring these will be skipped.[/{C_DIM}]")
+
+    # ── Ask to install ──
+    console.print()
+    install_mode = questionary.select(
+        "Install missing skill CLIs?",
+        choices=[
+            questionary.Choice("Install all missing",         value="all"),
+            questionary.Choice("Let me pick which to install", value="pick"),
+            questionary.Choice("Skip for now",                 value="skip"),
+        ],
+        default="all",
+        style=STYLE,
+    ).ask()
+
+    if install_mode is None or install_mode == "skip":
+        console.print(f"  [{C_DIM}]Skipped — install later with `cleo configure --section skills`[/{C_DIM}]")
+        return
+
+    # ── Select which to install ──
+    if install_mode == "pick":
+        choices = [
+            questionary.Choice(
+                f"{dep.get('emoji', '')} {dep['skill']} ({', '.join(dep['missing_bins'])})",
+                value=i,
+                checked=True,
+            )
+            for i, dep in enumerate(missing)
+            if dep.get("install")
+        ]
+        if not choices:
+            console.print(f"  [{C_DIM}]No installable skills found.[/{C_DIM}]")
+            return
+        selected_idx = questionary.checkbox(
+            "Select skills to install:",
+            choices=choices,
+            style=STYLE,
+        ).ask()
+        if selected_idx is None:
+            return
+        to_install = [missing[i] for i in selected_idx]
+    else:
+        to_install = [d for d in missing if d.get("install")]
+
+    if not to_install:
+        return
+
+    # ── Run installs ──
+    console.print(f"\n  [{C_ACCENT}]Installing {len(to_install)} skill CLIs...[/{C_ACCENT}]\n")
+    ok_count = 0
+    fail_count = 0
+    for dep in to_install:
+        best = pick_best_installer(dep.get("install", []))
+        if not best:
+            console.print(f"  [{C_WARN}]✗[/{C_WARN}] {dep['skill']} — no installer available")
+            fail_count += 1
+            continue
+
+        cmd = build_install_command(best)
+        if not cmd:
+            console.print(f"  [{C_WARN}]✗[/{C_WARN}] {dep['skill']} — cannot build command")
+            fail_count += 1
+            continue
+
+        emoji = dep.get("emoji", "")
+        console.print(f"  {emoji} {dep['skill']}: [dim]$ {cmd}[/dim]")
+        success = install_dep(best, quiet=False)
+        if success:
+            console.print(f"  [{C_OK}]✓[/{C_OK}] {dep['skill']} installed")
+            ok_count += 1
+        else:
+            console.print(f"  [{C_WARN}]✗[/{C_WARN}] {dep['skill']} — install failed")
+            fail_count += 1
+
+    console.print()
+    if fail_count == 0:
+        console.print(f"  [{C_OK}]All {ok_count} CLIs installed successfully![/{C_OK}]")
+    else:
+        console.print(f"  [{C_OK}]{ok_count} installed[/{C_OK}], "
+                      f"[{C_WARN}]{fail_count} failed[/{C_WARN}]")
+
+
 def _ask_tools_quick():
     """Quick tools setup — ask about web search (most common)."""
     try:
@@ -479,6 +637,7 @@ _SECTIONS = [
     ("model",       "Model",       "Change LLM provider, API key, or default model"),
     ("agents",      "Agents",      "Add, remove, or edit individual agents"),
     ("skills",      "Skills",      "Install, manage, and assign agent skills"),
+    ("skill_deps",  "Skill CLIs",  "Check & install CLI tools required by skills"),
     ("memory",      "Memory",      "Switch memory backend (mock / chroma / hybrid)"),
     ("resilience",  "Resilience",  "Retry count, circuit breaker, backoff timing"),
     ("compaction",  "Compaction",  "Context window compaction settings"),
@@ -1633,6 +1792,11 @@ def _skills_assign_to_agents(cfg: dict, skill_name: str = "",
                     console.print(f"  [{C_OK}]+[/{C_OK}] Added to {agent['id']}")
 
 
+def _section_skill_deps(cfg: dict):
+    """Section: Check and install CLI tools required by skills."""
+    _ask_skill_deps()
+
+
 def _section_tools(cfg: dict):
     """Section: Configure built-in tools — OpenClaw-style tool configuration.
 
@@ -1898,6 +2062,7 @@ _SECTION_HANDLERS = {
     "model":      _section_model,
     "agents":     _section_agents,
     "skills":     _section_skills,
+    "skill_deps": _section_skill_deps,
     "tools":      _section_tools,
     "memory":     _section_memory,
     "resilience": _section_resilience,

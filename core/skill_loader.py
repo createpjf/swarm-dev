@@ -92,14 +92,13 @@ class SkillLoader:
 
         # ── 1. Shared skills ──
         for name in skill_names:
-            path = os.path.join(self.skills_dir, f"{name}.md")
-            content = self._read_file(path)
+            content = self._resolve_skill(name)
             if content:
                 _meta, body = _parse_frontmatter(content)
                 display_name = _meta.get("name", name)
                 parts.append(f"### Skill: {display_name}\n{body}")
             else:
-                logger.debug("Skill file not found: %s", path)
+                logger.debug("Skill not found: %s", name)
 
         # ── 2. Team skill (auto-inject if not already in skill_names) ──
         if "_team" not in skill_names:
@@ -194,6 +193,7 @@ class SkillLoader:
         # ── Shared skills ──
         if os.path.isdir(self.skills_dir):
             for fname in sorted(os.listdir(self.skills_dir)):
+                # Flat .md files
                 if (fname.endswith(".md") and fname != "_team.md"
                         and not fname.startswith(".")):
                     path = os.path.join(self.skills_dir, fname)
@@ -208,6 +208,22 @@ class SkillLoader:
                         "description": meta.get("description", ""),
                         "tags": meta.get("tags", []),
                     })
+                # Directory-style skill packs (dir/SKILL.md)
+                elif (not fname.startswith((".", "_"))
+                      and fname not in ("agents", "agent_overrides")):
+                    dir_path = os.path.join(self.skills_dir, fname)
+                    if os.path.isdir(dir_path):
+                        skill_md = os.path.join(dir_path, "SKILL.md")
+                        content = self._read_file(skill_md)
+                        meta = {}
+                        if content:
+                            meta, _ = _parse_frontmatter(content)
+                        result["shared"].append({
+                            "name": meta.get("name", fname),
+                            "file": f"{fname}/SKILL.md",
+                            "description": meta.get("description", ""),
+                            "tags": meta.get("tags", []),
+                        })
 
         # ── Per-agent private skills ──
         agents_dir = os.path.join(self.skills_dir, "agents")
@@ -237,6 +253,60 @@ class SkillLoader:
                     result["agents"][agent_id] = skills
 
         return result
+
+    def _resolve_skill(self, name: str) -> str:
+        """Resolve a skill name to its content.
+
+        Search order:
+          1. skills/{name}.md              (flat file)
+          2. skills/{name}/SKILL.md        (directory-style skill pack)
+          3. skills/{parent}/{child}/SKILL.md  (sub-skill, name="parent:child")
+
+        For directory-style packs (case 2), also loads all sub-skill
+        SKILL.md files from immediate child directories.
+        """
+        # Case 3: sub-skill reference  e.g. "superpowers:brainstorming"
+        if ":" in name:
+            parent, child = name.split(":", 1)
+            sub_path = os.path.join(
+                self.skills_dir, parent, child, "SKILL.md")
+            return self._read_file(sub_path)
+
+        # Case 1: flat file
+        flat = os.path.join(self.skills_dir, f"{name}.md")
+        content = self._read_file(flat)
+        if content:
+            return content
+
+        # Case 2: directory pack — load SKILL.md + all sub-skills
+        dir_path = os.path.join(self.skills_dir, name)
+        if os.path.isdir(dir_path):
+            pack_parts = []
+            main_skill = os.path.join(dir_path, "SKILL.md")
+            main_content = self._read_file(main_skill)
+            if main_content:
+                pack_parts.append(main_content)
+            # Load sub-skills from child directories
+            try:
+                for child in sorted(os.listdir(dir_path)):
+                    child_path = os.path.join(dir_path, child)
+                    if not os.path.isdir(child_path):
+                        continue
+                    if child.startswith("."):
+                        continue
+                    sub_skill = os.path.join(child_path, "SKILL.md")
+                    sub_content = self._read_file(sub_skill)
+                    if sub_content:
+                        _meta, body = _parse_frontmatter(sub_content)
+                        sub_name = _meta.get("name", child)
+                        pack_parts.append(
+                            f"\n#### Sub-skill: {sub_name}\n{body}")
+            except OSError:
+                pass
+            if pack_parts:
+                return "\n".join(pack_parts)
+
+        return ""
 
     @staticmethod
     def _read_file(path: str) -> str:

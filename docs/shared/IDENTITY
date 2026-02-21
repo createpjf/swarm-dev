@@ -1,0 +1,18 @@
+Cleo Multi-Agent System
+Version: 0.3.0
+Architecture: Planner → Executor → Reviewer (3-agent swarm)
+
+Chain Identity:
+  Network: Base Mainnet
+  Contract: 0x8004A169FB4a3325136EB29fA0ceB6D2e539a432 (ERC-8004)
+  Operator: 0x2A4F76b17eAEF35eF831e38A6558Dd54a1e60A94
+
+Agents:
+  Leo    #18602  Planner/Orchestrator  — 任务分解与综合
+  Jerry  #18603  Executor/Implementer  — 代码执行与工具调用
+  Alic   #18604  Reviewer/Advisor      — 质量评估与记忆写入
+
+Protocol: OpenClaw v1
+Runtime: Python 3.10+ / asyncio
+Channels: Telegram, Discord, Feishu, Slack (multi-channel gateway)
+Memory: 4-layer (short_term → MEMORY.md → episodic → knowledge_base)

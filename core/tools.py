@@ -8,12 +8,13 @@ Architecture:
   - Agents invoke tools via structured JSON blocks in their output
   - Tool results are fed back to the agent as context
 
-Tool categories (18 tools across 7 groups):
+Tool categories (20 tools across 8 groups):
   - Web:        web_search (Brave + Perplexity), web_fetch (text + markdown)
   - Filesystem: read_file, write_file, edit_file, list_dir
   - Memory:     memory_search, memory_save, kb_search, kb_write
   - Task:       task_create, task_status
   - Automation: exec, cron, process
+  - Skill:      check_skill_deps, install_skill_cli
   - Media:      screenshot, notify
   - Messaging:  send_mail
 
@@ -121,12 +122,13 @@ class Tool:
 # ══════════════════════════════════════════════════════════════════════════════
 
 TOOL_PROFILES = {
-    "minimal": {"web_search", "web_fetch", "memory_search", "kb_search"},
+    "minimal": {"web_search", "web_fetch", "memory_search", "kb_search",
+                "check_skill_deps", "install_skill_cli"},
     "coding": {"web_search", "web_fetch", "exec", "read_file", "write_file",
                "edit_file", "list_dir", "process", "cron_list", "cron_add",
                "notify", "memory_search", "memory_save",
                "kb_search", "kb_write", "task_create", "task_status",
-               "send_mail"},
+               "send_mail", "check_skill_deps", "install_skill_cli"},
     "full": None,  # None = all tools allowed
 }
 
@@ -138,6 +140,7 @@ TOOL_GROUPS = {
     "group:fs": ["read_file", "write_file", "edit_file", "list_dir"],
     "group:memory": ["memory_search", "memory_save", "kb_search", "kb_write"],
     "group:task": ["task_create", "task_status"],
+    "group:skill": ["check_skill_deps", "install_skill_cli"],
     "group:messaging": ["send_mail"],
 }
 
@@ -765,6 +768,130 @@ def _handle_send_mail(to: str, content: str,
         return {"ok": False, "error": str(e)}
 
 
+# ── Skill CLI install/check handlers ──
+
+def _handle_check_skill_deps(**kwargs) -> dict:
+    """Check which skill CLI dependencies are missing."""
+    try:
+        from core.skill_deps import (
+            scan_skill_deps, get_missing_deps, get_installed_deps,
+            check_prerequisites,
+        )
+    except ImportError:
+        return {"ok": False, "error": "skill_deps module not available"}
+
+    skill_name = kwargs.get("skill", "")
+
+    if skill_name:
+        # Check a specific skill
+        all_deps = scan_skill_deps()
+        match = [d for d in all_deps
+                 if d["skill"] == skill_name or d["file"] == f"{skill_name}.md"]
+        if not match:
+            return {"ok": False, "error": f"Skill '{skill_name}' not found or has no CLI deps"}
+        dep = match[0]
+        return {
+            "ok": True,
+            "skill": dep["skill"],
+            "requires": dep["requires_bins"] or dep.get("requires_any_bins", []),
+            "missing": dep["missing_bins"],
+            "satisfied": not dep["missing_bins"] and dep["has_any_bin"],
+            "install_options": [
+                {"kind": e.get("kind"), "label": e.get("label")}
+                for e in dep.get("install", [])
+            ],
+        }
+
+    # Check all skills
+    prereqs = check_prerequisites()
+    installed = get_installed_deps()
+    missing = get_missing_deps()
+    return {
+        "ok": True,
+        "package_managers": prereqs,
+        "total": len(installed) + len(missing),
+        "installed_count": len(installed),
+        "missing_count": len(missing),
+        "installed": [
+            {"skill": d["skill"], "bins": d["requires_bins"]}
+            for d in installed
+        ],
+        "missing": [
+            {"skill": d["skill"],
+             "needs": d["missing_bins"] or d.get("requires_any_bins", []),
+             "install": [e.get("label") for e in d.get("install", [])]}
+            for d in missing
+        ],
+    }
+
+
+def _handle_install_skill_cli(**kwargs) -> dict:
+    """Install CLI dependencies for a skill. Agents can self-install."""
+    try:
+        from core.skill_deps import (
+            scan_skill_deps, pick_best_installer, install_dep,
+            build_install_command,
+        )
+    except ImportError:
+        return {"ok": False, "error": "skill_deps module not available"}
+
+    skill_name = kwargs.get("skill", "")
+    if not skill_name:
+        return {"ok": False, "error": "skill parameter required"}
+
+    all_deps = scan_skill_deps()
+    match = [d for d in all_deps
+             if d["skill"] == skill_name or d["file"] == f"{skill_name}.md"]
+    if not match:
+        return {"ok": False, "error": f"Skill '{skill_name}' not found or has no install entries"}
+
+    dep = match[0]
+    if not dep["missing_bins"] and dep["has_any_bin"]:
+        return {"ok": True, "message": f"All deps for '{skill_name}' already installed",
+                "bins": dep["requires_bins"]}
+
+    install_entries = dep.get("install", [])
+    if not install_entries:
+        return {"ok": False, "error": f"No install entries for '{skill_name}'"}
+
+    best = pick_best_installer(install_entries)
+    if not best:
+        return {"ok": False, "error": "No compatible package manager found"}
+
+    cmd = build_install_command(best)
+    logger.info("install_skill_cli: %s → %s", skill_name, cmd)
+
+    success = install_dep(best, quiet=False)
+    if not success:
+        return {"ok": False, "error": f"Install failed: {cmd}",
+                "command": cmd}
+
+    # Auto-approve the installed binaries in exec_approvals so agents can use them
+    installed_bins = best.get("bins", dep.get("requires_bins", []))
+    _auto_approve_skill_bins(installed_bins)
+
+    return {
+        "ok": True,
+        "skill": skill_name,
+        "command": cmd,
+        "bins": installed_bins,
+        "message": f"Installed {skill_name} via: {cmd}",
+    }
+
+
+def _auto_approve_skill_bins(bins: list[str]):
+    """Add installed skill binaries to exec_approvals.json so agents can use them."""
+    try:
+        from core.exec_tool import add_approval
+        for b in bins:
+            # Approve the binary (with any args)
+            pattern = rf"^{re.escape(b)}\b"
+            add_approval(pattern)
+            logger.info("Auto-approved exec pattern: %s", pattern)
+    except Exception as e:
+        logger.warning("Could not auto-approve bins: %s", e)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  REGISTRY
 # ══════════════════════════════════════════════════════════════════════════════
@@ -817,6 +944,24 @@ _BUILTIN_TOOLS: list[Tool] = [
          "List running system processes.",
          {},
          _handle_process_list, group="automation"),
+
+    # ── Skill dependency tools ──
+    Tool("check_skill_deps",
+         "Check which skill CLI tools are installed and which are missing. "
+         "Call with no params to check all, or pass a skill name to check one.",
+         {"skill": {"type": "string",
+                     "description": "Skill name to check (optional; omit for all)",
+                     "required": False}},
+         _handle_check_skill_deps, group="skill"),
+
+    Tool("install_skill_cli",
+         "Install the CLI tool required by a skill. Auto-detects the best package manager "
+         "(brew/go/npm/uv) and runs the install. After install, the binary is automatically "
+         "approved for exec. Use check_skill_deps first to see what's missing.",
+         {"skill": {"type": "string",
+                     "description": "Skill name whose CLI to install (e.g. 'apple-reminders', 'github')",
+                     "required": True}},
+         _handle_install_skill_cli, group="skill"),
 
     # ── Media tools ──
     Tool("screenshot",
