@@ -5,6 +5,12 @@ llm:
 memory:
   backend: hybrid
   long_term: true
+  # Embedding provider for vector search (default: chromadb built-in)
+  # Options: chromadb_default | openai | flock | local
+  embedding:
+    provider: openai
+    model: text-embedding-3-small
+    api_key_env: OPENAI_API_KEY
   episodic:
     enabled: true
     recall_budget_tokens: 1500

@@ -759,9 +759,15 @@ def _build_llm_for_agent(agent_def: dict, config: dict):
 
 def _build_memory(config: dict, agent_id: str = ""):
     """
-    Build memory adapter with per-agent isolation.
+    Build memory adapter with per-agent isolation and pluggable embeddings.
     Each agent gets its own persist directory: memory/agents/{agent_id}/chroma/
     Falls back to shared memory/chroma/ if agent_id is empty.
+
+    Embedding provider is configured via config.memory.embedding:
+        embedding:
+          provider: openai | flock | local | chromadb_default
+          model: text-embedding-3-small
+          api_key_env: OPENAI_API_KEY
     """
     backend = config.get("memory", {}).get("backend", "chroma")
     if agent_id:
@@ -769,12 +775,24 @@ def _build_memory(config: dict, agent_id: str = ""):
     else:
         persist_dir = "memory/chroma"
 
+    # Build embedding function from config (if configured)
+    embedding_fn = None
+    try:
+        from adapters.memory.embedding import get_embedding_provider
+        provider = get_embedding_provider(config)
+        embedding_fn = provider.as_chromadb_function()
+        if embedding_fn is not None:
+            logger.info("[memory] Using embedding provider: %s (dim=%d)",
+                        provider.name, provider.dimensions)
+    except Exception as e:
+        logger.debug("[memory] Embedding provider init skipped: %s", e)
+
     if backend == "hybrid":
         from adapters.memory.hybrid import HybridAdapter
-        return HybridAdapter(persist_dir=persist_dir)
+        return HybridAdapter(persist_dir=persist_dir, embedding_fn=embedding_fn)
     elif backend == "chroma":
         from adapters.memory.chroma import ChromaAdapter
-        return ChromaAdapter(persist_dir=persist_dir)
+        return ChromaAdapter(persist_dir=persist_dir, embedding_fn=embedding_fn)
     elif backend == "mock":
         from adapters.memory.mock import MockMemory
         return MockMemory()

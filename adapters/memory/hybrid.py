@@ -174,14 +174,19 @@ class HybridMemory:
     """
 
     def __init__(self, persist_dir: str = "memory/chroma",
-                 alpha: float = 0.5):
+                 alpha: float = 0.5,
+                 embedding_fn=None):
         """
         Args:
             persist_dir: ChromaDB persistence directory
             alpha: Weight for vector results (1-alpha for BM25).
                    Not used with RRF, but kept for future weighted fusion.
+            embedding_fn: Optional ChromaDB-compatible embedding function.
+                          Use EmbeddingProvider.as_chromadb_function() to create one.
+                          If None, ChromaDB uses its default (all-MiniLM-L6-v2).
         """
         self.alpha = alpha
+        self._embedding_fn = embedding_fn
 
         # Vector search backend
         try:
@@ -214,13 +219,20 @@ class HybridMemory:
             self._bm25_indices[collection].save(path)
             self._bm25_dirty.discard(collection)
 
+    def _get_chroma_collection(self, collection: str):
+        """Get or create a ChromaDB collection with the configured embedding."""
+        kwargs = {"name": collection}
+        if self._embedding_fn is not None:
+            kwargs["embedding_function"] = self._embedding_fn
+        return self._chroma.get_or_create_collection(**kwargs)
+
     def add(self, collection: str, document: str, metadata: dict):
         """Add a document to both vector and BM25 indices."""
         doc_id = str(metadata.get("id", hash(document)))
 
         # Vector index
         if self._has_chroma:
-            coll = self._chroma.get_or_create_collection(collection)
+            coll = self._get_chroma_collection(collection)
             coll.add(
                 documents=[document],
                 metadatas=[metadata],
@@ -250,7 +262,7 @@ class HybridMemory:
         # 1. Vector search
         if self._has_chroma:
             try:
-                coll = self._chroma.get_or_create_collection(collection)
+                coll = self._get_chroma_collection(collection)
                 vr = coll.query(query_texts=[query], n_results=n_results * 2)
                 ids    = vr.get("ids", [[]])[0]
                 dists  = vr.get("distances", [[]])[0]
@@ -301,7 +313,7 @@ class HybridMemory:
                 # Try to fetch from ChromaDB
                 if self._has_chroma:
                     try:
-                        coll = self._chroma.get_or_create_collection(collection)
+                        coll = self._get_chroma_collection(collection)
                         result = coll.get(ids=[doc_id])
                         if result["documents"]:
                             documents.append(result["documents"][0])
@@ -322,6 +334,14 @@ class HybridMemory:
 
 # ── Factory ──────────────────────────────────────────────────────────────────
 
-def HybridAdapter(persist_dir: str = "memory/chroma") -> HybridMemory:
-    """Factory function for hybrid memory adapter."""
-    return HybridMemory(persist_dir=persist_dir)
+def HybridAdapter(persist_dir: str = "memory/chroma",
+                   embedding_fn=None) -> HybridMemory:
+    """Factory function for hybrid memory adapter.
+
+    Args:
+        persist_dir: ChromaDB persistence directory.
+        embedding_fn: Optional ChromaDB-compatible embedding function from
+                      EmbeddingProvider.as_chromadb_function(). If None,
+                      ChromaDB uses its built-in default model.
+    """
+    return HybridMemory(persist_dir=persist_dir, embedding_fn=embedding_fn)
