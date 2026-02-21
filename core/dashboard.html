@@ -449,17 +449,22 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .stream-body hr{border:none;border-top:1px solid var(--bg4);margin:8px 0}
 .stream-cursor{display:inline-block;width:2px;height:14px;background:var(--accent);animation:cursorBlink 1s step-end infinite;vertical-align:text-bottom;margin-left:2px}
 @keyframes cursorBlink{0%,100%{opacity:1}50%{opacity:0}}
-.stream-steps{display:flex;flex-direction:column;gap:4px;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--bg3)}
-.stream-step{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--fg2);padding:3px 8px;border-radius:6px;background:var(--bg)}
-.stream-step.step-done{color:var(--fg3)}.stream-step.step-done .step-icon{opacity:.6}
-.stream-step.step-active{color:var(--fg);background:rgba(55,115,255,.06);border:1px solid rgba(55,115,255,.12)}
-.step-icon{font-size:13px;flex-shrink:0;width:18px;text-align:center}
-.step-label{font-weight:500}
-.step-spinner{width:12px;height:12px;border:2px solid var(--bg4);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;margin-left:auto}
+.stream-steps{display:flex;flex-direction:column;gap:3px;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--bg3)}
+.stream-step{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--fg2);padding:5px 10px;border-radius:8px;background:var(--bg);transition:all .25s ease;animation:stepSlideIn .3s ease both}
+.stream-step.step-done{color:var(--fg3);opacity:.7}
+.stream-step.step-done .step-icon{opacity:.5}
+.stream-step.step-active{color:var(--fg);background:rgba(55,115,255,.07);border:1px solid rgba(55,115,255,.15);box-shadow:0 0 8px rgba(55,115,255,.06)}
+.step-icon{font-size:12px;flex-shrink:0;width:16px;text-align:center}
+.step-label{font-weight:500;white-space:nowrap}
+.step-preview{color:var(--fg3);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:280px;margin-left:4px}
+.step-spinner{width:10px;height:10px;border:1.5px solid var(--bg4);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite;margin-left:auto;flex-shrink:0}
 @keyframes spin{to{transform:rotate(360deg)}}
+@keyframes stepSlideIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
 .stream-meta{font-size:10px;color:var(--fg3);margin-top:6px;display:flex;align-items:center;gap:8px;padding-top:6px;border-top:1px solid var(--bg3)}
-.stream-meta .char-count{opacity:.7;font-family:var(--mono)}
-.stream-meta .stream-agent-status{color:var(--cyan);font-weight:600}
+.stream-meta .char-count{opacity:.6;font-family:var(--mono);font-size:9px}
+.stream-meta .stream-agent-status{color:var(--cyan);font-weight:600;display:flex;align-items:center;gap:4px}
+.stream-meta .stream-agent-status::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--cyan);animation:statusPulse 1.5s ease-in-out infinite}
+@keyframes statusPulse{0%,100%{opacity:1}50%{opacity:.3}}
 .chat-bubble.assistant-bubble .asst-body{word-break:break-word;color:var(--fg)}
 .chat-bubble.assistant-bubble .asst-body p{margin:6px 0}
 .chat-bubble.assistant-bubble .asst-body h1,.chat-bubble.assistant-bubble .asst-body h2,.chat-bubble.assistant-bubble .asst-body h3,.chat-bubble.assistant-bubble .asst-body h4,.chat-bubble.assistant-bubble .asst-body h5,.chat-bubble.assistant-bubble .asst-body h6{color:var(--fg);margin:16px 0 8px;font-weight:700}
@@ -1538,6 +1543,12 @@ function stripLlmTags(text) {
   text = text.replace(/<tool_call>[\s\S]*?(<\/tool_call>|$)/g, '');
   text = text.replace(/<function_calls>[\s\S]*?(<\/function_calls>|$)/g, '');
   text = text.replace(/<tool_result>[\s\S]*?(<\/tool_result>|$)/g, '');
+  // Strip Minimax-specific tool call XML (complete or streaming)
+  text = text.replace(/<minimax:tool_call>[\s\S]*?(<\/minimax:tool_call>|$)/g, '');
+  // Strip generic XML tool patterns: <invoke>, <parameter>, <tool_use>
+  text = text.replace(/<invoke[\s\S]*?(<\/invoke>|$)/g, '');
+  text = text.replace(/<parameter[\s\S]*?(<\/parameter>|$)/g, '');
+  text = text.replace(/<tool_use[\s\S]*?(<\/tool_use>|$)/g, '');
   // Strip raw JSON tool objects that leak through ({"tool": "...", "params": ...})
   text = text.replace(/^\s*\{"tool"\s*:\s*"[^"]*"[\s\S]*$/gm, '');
   // Strip orchestration artifacts (TASK:, COMPLEXITY:, Phase headers)
@@ -1546,6 +1557,8 @@ function stripLlmTags(text) {
   text = text.replace(/^##\s*Phase\s+\d+.*$/gm, '');
   text = text.replace(/^\*\*TASK:\*\*\s*.+$/gm, '');
   text = text.replace(/^\*\*COMPLEXITY:\*\*\s*.+$/gm, '');
+  // Strip --- separator lines (orchestration artifacts)
+  text = text.replace(/^---\s*$/gm, '');
   // Clean up excessive blank lines left after stripping
   text = text.replace(/\n{3,}/g, '\n\n');
   return text.trim();
@@ -1556,11 +1569,22 @@ function _buildResultStepsHtml(rawText) {
   const steps = [];
   const thinkBlocks = rawText.match(/<think>[\s\S]*?<\/think>/g);
   if (thinkBlocks) steps.push({icon:'💭', label:'Thought', count:thinkBlocks.length});
+  // Standard <tool_code> JSON format
   const toolBlocks = rawText.match(/<tool_code>[\s\S]*?<\/tool_code>/g);
   if (toolBlocks) {
     for (const tc of toolBlocks) {
       let label = 'Used Tool';
       try { const obj = JSON.parse(tc.replace(/<\/?tool_code>/g,'')); if(obj.tool) label='Used '+titleCase(obj.tool.replace(/[_-]/g,' ')); } catch(e){}
+      steps.push({icon:'✓', label});
+    }
+  }
+  // Minimax <minimax:tool_call> XML format
+  const mmBlocks = rawText.match(/<minimax:tool_call>[\s\S]*?<\/minimax:tool_call>/g);
+  if (mmBlocks) {
+    for (const mc of mmBlocks) {
+      let label = 'Used Tool';
+      const nameMatch = mc.match(/<invoke\s+name="([^"]+)"/);
+      if (nameMatch) label = 'Used ' + titleCase(nameMatch[1].replace(/[_-]/g, ' '));
       steps.push({icon:'✓', label});
     }
   }
@@ -1581,7 +1605,7 @@ function formatResultBody(text) {
   const stepsHtml = _buildResultStepsHtml(rawText);
   if (!text) {
     // Entire output was tool calls / thinking — show steps + friendly status
-    if (rawText.includes('<tool_code>') || rawText.includes('{"tool"'))
+    if (rawText.includes('<tool_code>') || rawText.includes('{"tool"') || rawText.includes('<minimax:tool_call>'))
       return stepsHtml + '<span style="color:var(--fg2)">✓ Done — results sent to planner for synthesis.</span>';
     return '<span style="color:var(--fg2)">✓ Completed</span>';
   }
@@ -2047,9 +2071,13 @@ function renderLiveStatus() {
     const meta = agentMeta(aid);
     const el = document.createElement('div');
     el.className = 'dispatch-entry dispatch-live-row';
+    // Check if there's streaming text for a richer status
+    const tid = info.task_id;
+    const streamLen = tid && _streamingFullText[tid] ? stripLlmTags(_streamingFullText[tid]).length : 0;
+    const statusText = streamLen > 0 ? 'Generating · ' + streamLen + ' chars' : 'Generating…';
     el.innerHTML = '<span class="dispatch-icon"><span class="dispatch-live-dot" style="background:' + meta.color + '"></span></span>'
       + '<span class="dispatch-agent ' + meta.cls + '-d">' + escHtml(capitalize(aid)) + '</span>'
-      + '<span class="dispatch-text"><span class="dispatch-live">Generating…</span></span>'
+      + '<span class="dispatch-text"><span class="dispatch-live">' + statusText + '</span></span>'
       + '<span class="dispatch-time" style="color:' + meta.color + '">' + info.elapsed + 's</span>';
     container.appendChild(el);
   }
@@ -2087,49 +2115,74 @@ function updateStreamingBubble(taskId, agent, partial) {
       + '<div class="asst-header"><span class="asst-label" style="color:' + meta.color + '">' + escHtml(capitalize(agent)) + '</span></div>'
       + '<div class="stream-body"></div>'
       + '<div class="stream-meta">'
-      + '<span class="stream-agent-status">● Generating</span>'
+      + '<span class="stream-agent-status">Generating</span>'
       + '<span class="char-count"></span>'
       + '</div></div>';
     container.appendChild(wrapper);
   }
 
-  // Throttle render to ~15fps for smooth typewriter effect
+  // Throttle render — 60ms interval (~16fps) for smooth streaming
   if (_streamRenderRAF[taskId]) return;
-  _streamRenderRAF[taskId] = requestAnimationFrame(() => {
+  _streamRenderRAF[taskId] = setTimeout(() => {
     delete _streamRenderRAF[taskId];
     _renderStreamContent(taskId);
-  });
+  }, 60);
 }
 
 function _parseStreamSteps(partial) {
   // Extract tool/think steps from raw LLM output for Claude-style display
   const steps = [];
-  // Extract completed <think>...</think> blocks
+
+  // ── Completed <think>...</think> ──
   const thinkComplete = partial.match(/<think>([\s\S]*?)<\/think>/g);
   if (thinkComplete) {
     for (const t of thinkComplete) {
       const content = t.replace(/<\/?think>/g, '').trim();
-      const preview = content.length > 60 ? content.slice(0, 60) + '…' : content;
+      const preview = content.length > 80 ? content.slice(0, 80) + '…' : content;
       steps.push({type: 'think', status: 'done', label: 'Thought', preview});
     }
   }
-  // Extract completed <tool_code>...</tool_code> blocks
+
+  // ── Completed <tool_code>...</tool_code> (JSON format) ──
   const toolComplete = partial.match(/<tool_code>([\s\S]*?)<\/tool_code>/g);
   if (toolComplete) {
     for (const tc of toolComplete) {
       const inner = tc.replace(/<\/?tool_code>/g, '').trim();
-      let label = 'Executed Tool';
+      let label = 'Used Tool';
       try { const obj = JSON.parse(inner); if (obj.tool) label = 'Used ' + titleCase(obj.tool.replace(/[_-]/g, ' ')); } catch(e) {}
       steps.push({type: 'tool', status: 'done', label});
     }
   }
-  // Detect currently open (incomplete) tags
+
+  // ── Completed <minimax:tool_call>...<invoke name="X">...</minimax:tool_call> ──
+  const mmComplete = partial.match(/<minimax:tool_call>([\s\S]*?)<\/minimax:tool_call>/g);
+  if (mmComplete) {
+    for (const mc of mmComplete) {
+      let label = 'Used Tool';
+      const nameMatch = mc.match(/<invoke\s+name="([^"]+)"/);
+      if (nameMatch) label = 'Used ' + titleCase(nameMatch[1].replace(/[_-]/g, ' '));
+      steps.push({type: 'tool', status: 'done', label});
+    }
+  }
+
+  // ── Detect currently open (incomplete / streaming) tags ──
   const hasOpenThink = /<think>(?![\s\S]*<\/think>)[\s\S]*$/.test(partial);
   const hasOpenTool = /<tool_code>(?![\s\S]*<\/tool_code>)[\s\S]*$/.test(partial);
   const hasOpenToolCall = /<tool_call>(?![\s\S]*<\/tool_call>)[\s\S]*$/.test(partial);
+  const hasOpenMinimax = /<minimax:tool_call>(?![\s\S]*<\/minimax:tool_call>)[\s\S]*$/.test(partial);
   const hasRawJson = /^\s*\{"tool"\s*:/m.test(partial.split('</tool_code>').pop());
-  if (hasOpenThink) steps.push({type: 'think', status: 'active', label: 'Thinking'});
-  if (hasOpenTool || hasOpenToolCall || hasRawJson) steps.push({type: 'tool', status: 'active', label: 'Executing'});
+
+  if (hasOpenThink) steps.push({type: 'think', status: 'active', label: 'Thinking…'});
+  if (hasOpenTool || hasOpenToolCall || hasRawJson) {
+    steps.push({type: 'tool', status: 'active', label: 'Executing…'});
+  }
+  if (hasOpenMinimax) {
+    // Try to extract tool name from in-progress Minimax block
+    const tail = partial.split(/<minimax:tool_call>/).pop();
+    const nameMatch = tail.match(/<invoke\s+name="([^"]+)"/);
+    const toolName = nameMatch ? titleCase(nameMatch[1].replace(/[_-]/g, ' ')) : 'Tool';
+    steps.push({type: 'tool', status: 'active', label: 'Calling ' + toolName + '…'});
+  }
   return steps;
 }
 
@@ -2138,6 +2191,7 @@ function _renderStreamContent(taskId) {
   if (!bubble) return;
   const body = bubble.querySelector('.stream-body');
   const charCount = bubble.querySelector('.char-count');
+  const statusEl = bubble.querySelector('.stream-agent-status');
   const partial = _streamingFullText[taskId] || '';
   if (body) {
     const cleaned = stripLlmTags(partial);
@@ -2147,16 +2201,30 @@ function _renderStreamContent(taskId) {
       stepsHtml = '<div class="stream-steps">';
       for (const s of steps) {
         const icon = s.status === 'done'
-          ? (s.type === 'think' ? '💭' : '✓')
+          ? (s.type === 'think' ? '💭' : '<span style="color:var(--green)">✓</span>')
           : (s.type === 'think' ? '💭' : '⚡');
         const cls = s.status === 'done' ? 'step-done' : 'step-active';
+        const previewHtml = (s.preview && s.status === 'done')
+          ? '<span class="step-preview">' + escHtml(s.preview) + '</span>' : '';
         stepsHtml += '<div class="stream-step ' + cls + '">'
           + '<span class="step-icon">' + icon + '</span>'
           + '<span class="step-label">' + escHtml(s.label) + '</span>'
+          + previewHtml
           + (s.status === 'active' ? '<span class="step-spinner"></span>' : '')
           + '</div>';
       }
       stepsHtml += '</div>';
+    }
+    // Update status text based on what's happening
+    if (statusEl) {
+      const activeStep = steps.find(s => s.status === 'active');
+      if (activeStep) {
+        statusEl.textContent = activeStep.label;
+      } else if (cleaned) {
+        statusEl.textContent = 'Writing';
+      } else {
+        statusEl.textContent = 'Generating';
+      }
     }
     if (cleaned) {
       body.innerHTML = stepsHtml + renderMarkdown(cleaned) + '<span class="stream-cursor"></span>';
@@ -2165,12 +2233,13 @@ function _renderStreamContent(taskId) {
     } else if (partial.length > 0) {
       body.innerHTML = '<span style="color:var(--fg3)">Working…</span><span class="stream-cursor"></span>';
     } else {
-      body.innerHTML = '<span style="color:var(--fg3)">Thinking…</span><span class="stream-cursor"></span>';
+      body.innerHTML = '<span style="color:var(--fg3)">Waiting for response…</span><span class="stream-cursor"></span>';
     }
   }
   if (charCount) {
     const cleaned = stripLlmTags(partial);
-    charCount.textContent = (cleaned.length || partial.length).toLocaleString() + ' chars';
+    const len = cleaned.length || partial.length;
+    charCount.textContent = len > 0 ? len.toLocaleString() + ' chars' : '';
   }
   const container = document.getElementById('chatMessages');
   if (container) {
@@ -2189,7 +2258,7 @@ function removeStreamingBubble(taskId) {
 // ── Streaming cleanup on completion ──
 function _cleanupStreamRAF(taskId) {
   if (_streamRenderRAF[taskId]) {
-    cancelAnimationFrame(_streamRenderRAF[taskId]);
+    clearTimeout(_streamRenderRAF[taskId]);
     delete _streamRenderRAF[taskId];
   }
 }
