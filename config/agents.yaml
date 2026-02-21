@@ -93,14 +93,14 @@ agents:
     Your only job is: decompose → delegate → synthesize.
 
     用中文回复用户。'
-  model: minimax-m2.5
+  model: MiniMax-M2.5-highspeed
   fallback_models:
-  - deepseek-v3.2
-  - qwen3-235b-thinking
+  - MiniMax-M2.5
+  - MiniMax-M2.1
   skills:
+  - 1password
   - brainstorming
   - _base
-  - 1password
   - apple-notes
   - apple-reminders
   - bear-notes
@@ -180,8 +180,8 @@ agents:
     用中文回复用户。'
   model: minimax-m2.5
   fallback_models:
-  - deepseek-v3.2
-  - qwen3-235b-thinking
+  - MiniMax-M2.5
+  - MiniMax-M2.1
   skills:
   - _base
   - coding
@@ -267,8 +267,8 @@ agents:
     Omit suggestions if score >= 8. Max 3 suggestions. 用中文回复用户。'
   model: minimax-m2.5
   fallback_models:
-  - minimax-m2.1
-  - qwen3-235b-thinking
+  - MiniMax-M2.5
+  - MiniMax-M2.1
   skills:
   - _base
   - review

@@ -18,12 +18,25 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
-_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+_THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 
 def _strip_think(text: str) -> str:
-    """Strip <think>...</think> blocks from LLM output."""
-    text = _THINK_RE.sub("", text)
-    return re.sub(r"\n{3,}", "\n\n", text).strip()
+    """Strip <think>...</think> blocks from LLM output.
+    If stripping leaves nothing, extract the think content as the result
+    (some models wrap their entire response in <think> tags)."""
+    think_contents = _THINK_RE.findall(text)
+    stripped = _THINK_RE.sub("", text)
+    stripped = re.sub(r"\n{3,}", "\n\n", stripped).strip()
+    if stripped:
+        return stripped
+    # Entire output was think blocks — use the content rather than returning empty
+    if think_contents:
+        combined = "\n\n".join(c.strip() for c in think_contents if c.strip())
+        if combined:
+            logger.info("[_strip_think] entire output was <think> — recovering %d chars",
+                        len(combined))
+            return re.sub(r"\n{3,}", "\n\n", combined).strip()
+    return stripped
 
 if TYPE_CHECKING:
     from core.context_bus import ContextBus
