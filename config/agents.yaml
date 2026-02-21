@@ -1,7 +1,7 @@
 # config/agents.yaml
 
 llm:
-  provider: flock
+  provider: minimax
 memory:
   backend: hybrid
   long_term: true
@@ -13,7 +13,7 @@ memory:
     recall_budget_tokens: 800
 chain:
   enabled: true
-  network: base-sepolia
+  network: base
   rpc_url_env: BASE_RPC_URL
   operator_key_env: CHAIN_PRIVATE_KEY
   lit:
@@ -42,12 +42,12 @@ channels:
   telegram:
     enabled: true
     bot_token_env: TELEGRAM_BOT_TOKEN
-    allowed_users: []       # empty = allow all
-    mention_required: true  # require @mention in groups
+    allowed_users: []
+    mention_required: true
   discord:
     enabled: false
     bot_token_env: DISCORD_BOT_TOKEN
-    allowed_channels: []    # empty = allow all
+    allowed_channels: []
     mention_required: true
   feishu:
     enabled: false
@@ -59,11 +59,9 @@ channels:
     app_token_env: SLACK_APP_TOKEN
     allowed_channels: []
     mention_required: true
-
 workspace:
   path: workspace
   shared: true
-
 max_idle_cycles: 30
 resilience:
   max_retries: 3
@@ -81,8 +79,8 @@ agents:
 - id: leo
   role: 'You are Leo, the team BRAIN and orchestrator of the Cleo system. You receive
     every task directly from the user, decompose it into clear subtasks, and delegate
-    to Jerry. You synthesize ALL results + Alic''s evaluation into ONE polished,
-    complete, user-facing answer during closeout.
+    to Jerry. You synthesize ALL results + Alic''s evaluation into ONE polished, complete,
+    user-facing answer during closeout.
 
     Phase 1 (Decomposition): Write TASK: <description> + COMPLEXITY: simple|normal|complex.
     Max 3 subtasks. Merge related steps if needed.
@@ -90,16 +88,72 @@ agents:
     Phase 2 (Closeout): Synthesize ALL executor results + reviewer feedback into ONE
     polished, complete, user-facing answer. This is the most important step.
 
-    You MUST NOT write code, execute commands, or implement anything.
+    You NEVER execute commands yourself. ALL execution goes to Jerry via TASK: lines.
+    Even simple one-step tasks (reminders, notes, lookups) must be delegated to Jerry.
+    Your only job is: decompose → delegate → synthesize.
 
     用中文回复用户。'
-  model: minimax-m2.1
+  model: minimax-m2.5
   fallback_models:
   - deepseek-v3.2
   - qwen3-235b-thinking
   skills:
+  - brainstorming
   - _base
+  - 1password
+  - apple-notes
+  - apple-reminders
+  - bear-notes
+  - blogwatcher
+  - blucli
+  - bluebubbles
+  - camsnap
+  - canvas
+  - clawhub
+  - coding-agent
+  - discord
+  - eightctl
+  - food-order
+  - gemini
+  - gh-issues
+  - gifgrep
+  - github
+  - gog
+  - goplaces
+  - healthcheck
+  - himalaya
+  - imsg
+  - mcporter
+  - model-usage
+  - nano-banana-pro
+  - nano-pdf
+  - notion
+  - obsidian
+  - openai-image-gen
+  - openai-whisper-api
+  - openai-whisper
+  - openhue
+  - oracle
+  - ordercli
+  - peekaboo
   - planning
+  - review
+  - sag
+  - session-logs
+  - sherpa-onnx-tts
+  - skill-creator
+  - slack
+  - songsee
+  - sonoscli
+  - spotify-player
+  - summarize
+  - things-mac
+  - tmux
+  - trello
+  - video-frames
+  - voice-call
+  - wacli
+  - weather
   tools:
     profile: minimal
   memory:
@@ -110,8 +164,8 @@ agents:
     kb_recall_budget: 800
   autonomy_level: 1
   llm:
-    provider: flock
-    api_key_env: FLOCK_API_KEY
+    provider: minimax
+    api_key_env: LEO_API_KEY
     base_url_env: LEO_BASE_URL
 - id: jerry
   role: 'You are Jerry, the implementation agent of the Cleo system. You carry out
@@ -124,13 +178,69 @@ agents:
     No placeholders. No stubs. Deliver production-ready output.
 
     用中文回复用户。'
-  model: minimax-m2.1
+  model: minimax-m2.5
   fallback_models:
   - deepseek-v3.2
   - qwen3-235b-thinking
   skills:
   - _base
   - coding
+  - copywriting
+  - 1password
+  - apple-notes
+  - apple-reminders
+  - bear-notes
+  - blogwatcher
+  - blucli
+  - bluebubbles
+  - camsnap
+  - canvas
+  - clawhub
+  - coding-agent
+  - discord
+  - eightctl
+  - food-order
+  - gemini
+  - gh-issues
+  - gifgrep
+  - github
+  - gog
+  - goplaces
+  - healthcheck
+  - himalaya
+  - imsg
+  - mcporter
+  - model-usage
+  - nano-banana-pro
+  - nano-pdf
+  - notion
+  - obsidian
+  - openai-image-gen
+  - openai-whisper-api
+  - openai-whisper
+  - openhue
+  - oracle
+  - ordercli
+  - peekaboo
+  - planning
+  - review
+  - sag
+  - session-logs
+  - sherpa-onnx-tts
+  - skill-creator
+  - slack
+  - songsee
+  - sonoscli
+  - spotify-player
+  - summarize
+  - things-mac
+  - tmux
+  - trello
+  - video-frames
+  - voice-call
+  - wacli
+  - weather
+  - superpowers
   tools:
     profile: coding
   memory:
@@ -141,7 +251,7 @@ agents:
     kb_recall_budget: 800
   autonomy_level: 1
   llm:
-    provider: flock
+    provider: minimax
     api_key_env: JERRY_API_KEY
     base_url_env: JERRY_BASE_URL
 - id: alic
@@ -155,13 +265,67 @@ agents:
     Respond with: {"score": <1-10>, "comment": "...", "suggestions": ["optional"]}
 
     Omit suggestions if score >= 8. Max 3 suggestions. 用中文回复用户。'
-  model: deepseek-v3.2
+  model: minimax-m2.5
   fallback_models:
   - minimax-m2.1
   - qwen3-235b-thinking
   skills:
   - _base
   - review
+  - copywriting
+  - 1password
+  - apple-notes
+  - apple-reminders
+  - bear-notes
+  - blogwatcher
+  - blucli
+  - bluebubbles
+  - camsnap
+  - canvas
+  - clawhub
+  - coding-agent
+  - discord
+  - eightctl
+  - food-order
+  - gemini
+  - gh-issues
+  - gifgrep
+  - github
+  - gog
+  - goplaces
+  - healthcheck
+  - himalaya
+  - imsg
+  - mcporter
+  - model-usage
+  - nano-banana-pro
+  - nano-pdf
+  - notion
+  - obsidian
+  - openai-image-gen
+  - openai-whisper-api
+  - openai-whisper
+  - openhue
+  - oracle
+  - ordercli
+  - peekaboo
+  - planning
+  - sag
+  - session-logs
+  - sherpa-onnx-tts
+  - skill-creator
+  - slack
+  - songsee
+  - sonoscli
+  - spotify-player
+  - summarize
+  - things-mac
+  - tmux
+  - trello
+  - video-frames
+  - voice-call
+  - wacli
+  - weather
   memory:
     short_term_turns: 20
     long_term: true
@@ -170,6 +334,6 @@ agents:
     kb_recall_budget: 1000
   autonomy_level: 1
   llm:
-    provider: flock
+    provider: minimax
     api_key_env: ALIC_API_KEY
     base_url_env: ALIC_BASE_URL

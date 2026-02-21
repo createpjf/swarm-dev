@@ -105,6 +105,11 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .task-table tr:last-child td{border-bottom:none}
 .task-table tbody tr{cursor:pointer;transition:.1s}
 .task-table tbody tr:hover{background:var(--bg3)}
+.data-table{width:100%;border-collapse:collapse;table-layout:fixed}
+.data-table th{text-align:left;font-size:11px;font-weight:600;color:var(--fg3);text-transform:uppercase;padding:8px 12px;border-bottom:1px solid var(--bg3)}
+.data-table td{padding:8px 12px;border-bottom:1px solid var(--bg3);font-size:13px;vertical-align:middle}
+.data-table tr:last-child td{border-bottom:none}
+.data-table tbody tr:hover{background:var(--bg3);transition:.1s}
 .status-icon{font-size:14px;width:20px;display:inline-block;text-align:center}
 .status-working{color:var(--cyan)}
 .status-done{color:var(--green)}
@@ -147,7 +152,8 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .agent-provider{color:var(--fg3);font-size:11px}
 .agent-card-skills{display:flex;flex-wrap:wrap;gap:4px}
 .skill-tag{display:inline-block;background:var(--bg3);color:var(--fg2);padding:2px 8px;border-radius:4px;font-size:11px}
-.agent-card-chain{font-size:11px;color:var(--fg2)}
+.agent-card-chain{font-size:11px;color:var(--fg2);display:flex;flex-direction:column;gap:3px}
+.agent-card-chain-row{display:flex;align-items:center;gap:6px}
 .agent-card-chain a{font-family:var(--mono);color:var(--accent2);text-decoration:none;font-size:11px}
 .sparkline-wrap{height:28px;width:100%;margin-top:2px}
 .sparkline-wrap svg{width:100%;height:100%}
@@ -282,26 +288,27 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 /* ── Overview: Split Layout (top orchestration + bottom chat) ── */
 #panel-overview.active{display:flex!important;flex-direction:column;height:calc(100vh - 44px);gap:0}
 /* ── Overview: Header Bar (statuses left, agents right) ────── */
-.ov-header{display:flex;align-items:center;gap:12px;flex-shrink:0;padding:8px 4px;background:var(--bg2);border:1px solid var(--bg3);border-radius:var(--radius);margin-bottom:8px}
-.ov-statuses{flex:1;display:flex;gap:6px;min-width:0;align-items:center;overflow:hidden}
-.ov-status-item{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--fg2);padding:4px 10px;background:var(--bg3);border:1px solid var(--bg4);border-radius:6px;overflow:hidden;height:32px;box-sizing:border-box}
-.ov-status-item .status-icon{font-size:10px;flex-shrink:0}
-.ov-status-item .status-agent{font-weight:600;flex-shrink:0}
+.ov-header{display:flex;align-items:center;gap:8px;flex-shrink:0;padding:5px 8px;background:var(--bg2);border:1px solid var(--bg3);border-radius:var(--radius);margin-bottom:8px;min-height:36px}
+.ov-statuses{flex:1;display:flex;gap:4px;min-width:0;align-items:center;overflow:hidden}
+.ov-status-item{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--fg2);padding:4px 10px;background:var(--bg3);border-radius:6px;overflow:hidden;max-width:260px;height:26px;box-sizing:border-box}
+.ov-status-item .status-icon{font-size:11px;flex-shrink:0;width:14px;height:14px;display:flex;align-items:center;justify-content:center}
+.ov-status-item .status-icon img{width:14px;height:14px;border-radius:50%;object-fit:cover}
+.ov-status-item .status-agent{font-weight:600;flex-shrink:0;font-size:11px;text-transform:capitalize}
 .ov-status-item .status-agent.leo-d{color:var(--accent)}
 .ov-status-item .status-agent.jerry-d{color:var(--cyan)}
 .ov-status-item .status-agent.alic-d{color:var(--magenta)}
-.ov-status-item .status-text{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ov-status-item .status-time{font-family:var(--mono);font-size:9px;color:var(--fg3);flex-shrink:0}
+.ov-status-item .status-text{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}
 .ov-status-empty{font-size:11px;color:var(--fg3);padding:0 8px}
-.ov-header-sep{width:1px;height:24px;background:var(--bg4);flex-shrink:0}
-.ov-agents{display:flex;gap:6px;flex-shrink:0;align-items:center}
-.ov-agent-chip{display:flex;align-items:center;gap:6px;padding:4px 12px;background:var(--bg3);border:1px solid var(--bg4);border-radius:6px;height:32px;box-sizing:border-box;transition:.3s}
-.ov-agent-chip.active{border-color:var(--accent);box-shadow:0 0 8px rgba(55,115,255,.12)}
-.ov-agent-chip.active.jerry{border-color:var(--cyan);box-shadow:0 0 8px rgba(3,191,212,.12)}
-.ov-agent-chip.active.alic{border-color:var(--magenta);box-shadow:0 0 8px rgba(156,89,243,.12)}
-.ov-agent-chip .chip-icon{font-size:12px;line-height:1}
-.ov-agent-chip .chip-name{font-size:10px;font-weight:700;color:var(--fg)}
-.ov-agent-chip .chip-dot{width:6px;height:6px;border-radius:50%;background:var(--fg3);flex-shrink:0}
+.ov-header-sep{width:1px;height:20px;background:var(--bg4);flex-shrink:0}
+.ov-agents{display:flex;gap:4px;flex-shrink:0;align-items:center}
+.ov-agent-chip{display:flex;align-items:center;gap:5px;padding:3px 10px;background:var(--bg3);border:1px solid transparent;border-radius:6px;height:26px;box-sizing:border-box;transition:.3s}
+.ov-agent-chip.active{border-color:var(--accent);background:rgba(55,115,255,.06)}
+.ov-agent-chip.active.jerry{border-color:var(--cyan);background:rgba(3,191,212,.06)}
+.ov-agent-chip.active.alic{border-color:var(--magenta);background:rgba(156,89,243,.06)}
+.ov-agent-chip .chip-avatar{width:14px;height:14px;border-radius:50%;object-fit:cover;flex-shrink:0}
+.ov-agent-chip .chip-name{font-size:11px;font-weight:600;color:var(--fg2);text-transform:capitalize}
+.ov-agent-chip.active .chip-name{color:var(--fg)}
+.ov-agent-chip .chip-dot{width:5px;height:5px;border-radius:50%;background:var(--fg3);flex-shrink:0}
 .ov-agent-chip.active .chip-dot{background:var(--accent);animation:livePulse 1.2s infinite}
 .ov-agent-chip.active.jerry .chip-dot{background:var(--cyan)}
 .ov-agent-chip.active.alic .chip-dot{background:var(--magenta)}
@@ -398,54 +405,87 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .chat-welcome-sub{font-size:13px;max-width:320px;text-align:center;line-height:1.6}
 
 .chat-msg{display:flex;gap:10px;max-width:88%;animation:chatIn .2s ease}
-.chat-msg.user{align-self:flex-end;flex-direction:row-reverse}
+.chat-msg.user{align-self:flex-end;flex-direction:row-reverse;max-width:75%}
 .chat-msg.system{align-self:center;max-width:90%}
 .chat-msg.agent{align-self:flex-start}
-.chat-msg.assistant{align-self:flex-start;max-width:95%}
+.chat-msg.assistant{align-self:flex-start;max-width:100%}
 @keyframes chatIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
 
-.chat-avatar{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;background:var(--bg4)}
-.chat-avatar.leo{background:rgba(55,115,255,.15);border:1px solid rgba(55,115,255,.3)}
-.chat-avatar.jerry{background:rgba(3,191,212,.15);border:1px solid rgba(3,191,212,.3)}
-.chat-avatar.alic{background:rgba(156,89,243,.15);border:1px solid rgba(156,89,243,.3)}
-.chat-avatar.user-av{background:rgba(55,115,255,.15);border:1px solid rgba(55,115,255,.3)}
+.chat-avatar{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;background:var(--bg4);margin-top:2px}
+.chat-avatar.leo{background:rgba(55,115,255,.12);border:1px solid rgba(55,115,255,.25)}
+.chat-avatar.jerry{background:rgba(3,191,212,.12);border:1px solid rgba(3,191,212,.25)}
+.chat-avatar.alic{background:rgba(156,89,243,.12);border:1px solid rgba(156,89,243,.25)}
+.chat-avatar.user-av{background:rgba(55,115,255,.12);border:1px solid rgba(55,115,255,.25)}
 
 .chat-bubble{padding:8px 12px;border-radius:10px;font-size:13px;line-height:1.55;word-break:break-word}
-.chat-bubble.user-bubble{background:var(--accent);color:#fff;border-bottom-right-radius:3px}
+.chat-bubble.user-bubble{background:var(--bg3);color:var(--fg);border-bottom-right-radius:3px;border:1px solid var(--bg4)}
 .chat-bubble.agent-bubble{background:var(--bg2);border:1px solid var(--bg3);border-bottom-left-radius:3px}
 .chat-bubble.agent-bubble.leo-bubble{border-left:3px solid var(--accent)}
 .chat-bubble.agent-bubble.jerry-bubble{border-left:3px solid var(--cyan)}
 .chat-bubble.agent-bubble.alic-bubble{border-left:3px solid var(--magenta)}
 .chat-bubble.system-bubble{background:var(--bg3);color:var(--fg2);font-size:12px;padding:5px 12px;border-radius:14px}
-.chat-bubble.assistant-bubble{background:var(--bg2);border:1px solid var(--bg3);border-radius:10px;border-bottom-left-radius:3px;padding:12px 16px;font-size:13px;line-height:1.7}
-.chat-bubble.assistant-bubble .asst-header{display:flex;align-items:center;gap:6px;margin-bottom:8px;font-size:11px;color:var(--fg3)}
-.chat-bubble.assistant-bubble .asst-header .asst-label{font-weight:700;color:var(--accent2)}
-.stream-body{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;font-family:var(--mono);font-size:12px;color:var(--fg2);min-height:18px}
-.stream-meta{font-size:11px;color:var(--fg3);margin-top:4px;display:flex;align-items:center;gap:8px}
-.stream-meta .char-count{opacity:.7}
-.stream-meta .expand-btn{cursor:pointer;color:var(--accent);text-decoration:underline;font-size:11px}
-.stream-meta .expand-btn:hover{color:var(--accent2)}
-.chat-bubble.assistant-bubble .asst-body{word-break:break-word}
-.chat-bubble.assistant-bubble .asst-body p{margin:2px 0}
-.chat-bubble.assistant-bubble .asst-body h1,.chat-bubble.assistant-bubble .asst-body h2,.chat-bubble.assistant-bubble .asst-body h3{color:var(--fg);margin:10px 0 4px;font-size:14px;font-weight:700}
-.chat-bubble.assistant-bubble .asst-body h1{font-size:16px}
-.chat-bubble.assistant-bubble .asst-body ul,.chat-bubble.assistant-bubble .asst-body ol{margin:4px 0 4px 20px;padding:0}
-.chat-bubble.assistant-bubble .asst-body li{margin:2px 0;line-height:1.5}
+.chat-bubble.assistant-bubble{background:transparent;border:none;border-radius:0;padding:0 0 0 2px;font-size:14px;line-height:1.75}
+.chat-bubble.assistant-bubble .asst-header{display:flex;align-items:center;gap:6px;margin-bottom:6px;font-size:12px;color:var(--fg3)}
+.chat-bubble.assistant-bubble .asst-header .asst-label{font-weight:700;color:var(--fg);font-size:13px}
+.stream-body{max-width:100%;font-size:13px;color:var(--fg);line-height:1.7;word-break:break-word;overflow-y:auto;max-height:60vh;min-height:20px}
+.stream-body p{margin:2px 0}
+.stream-body h1,.stream-body h2,.stream-body h3{color:var(--fg);margin:10px 0 4px;font-size:14px;font-weight:700}
+.stream-body h1{font-size:16px}
+.stream-body ul,.stream-body ol{margin:4px 0 4px 20px;padding:0}
+.stream-body li{margin:2px 0;line-height:1.5}
+.stream-body strong{color:var(--fg);font-weight:700}
+.stream-body code{background:var(--bg);padding:1px 5px;border-radius:3px;font-family:var(--mono);font-size:12px}
+.stream-body pre{background:var(--bg);padding:10px 12px;border-radius:6px;font-family:var(--mono);font-size:11px;line-height:1.5;overflow-x:auto;white-space:pre-wrap;max-height:300px;overflow-y:auto;margin:8px 0}
+.stream-body blockquote{border-left:3px solid var(--accent);padding:4px 12px;margin:6px 0;color:var(--fg2);background:rgba(55,115,255,.04);border-radius:0 4px 4px 0}
+.stream-body table{width:100%;border-collapse:collapse;margin:8px 0;font-size:12px}
+.stream-body th{background:var(--bg3);color:var(--fg);font-weight:700;padding:6px 10px;border:1px solid var(--bg4)}
+.stream-body td{padding:5px 10px;border:1px solid var(--bg4);color:var(--fg2)}
+.stream-body a{color:var(--accent2)}
+.stream-body hr{border:none;border-top:1px solid var(--bg4);margin:8px 0}
+.stream-cursor{display:inline-block;width:2px;height:14px;background:var(--accent);animation:cursorBlink 1s step-end infinite;vertical-align:text-bottom;margin-left:2px}
+@keyframes cursorBlink{0%,100%{opacity:1}50%{opacity:0}}
+.stream-steps{display:flex;flex-direction:column;gap:4px;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--bg3)}
+.stream-step{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--fg2);padding:3px 8px;border-radius:6px;background:var(--bg)}
+.stream-step.step-done{color:var(--fg3)}.stream-step.step-done .step-icon{opacity:.6}
+.stream-step.step-active{color:var(--fg);background:rgba(55,115,255,.06);border:1px solid rgba(55,115,255,.12)}
+.step-icon{font-size:13px;flex-shrink:0;width:18px;text-align:center}
+.step-label{font-weight:500}
+.step-spinner{width:12px;height:12px;border:2px solid var(--bg4);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;margin-left:auto}
+@keyframes spin{to{transform:rotate(360deg)}}
+.stream-meta{font-size:10px;color:var(--fg3);margin-top:6px;display:flex;align-items:center;gap:8px;padding-top:6px;border-top:1px solid var(--bg3)}
+.stream-meta .char-count{opacity:.7;font-family:var(--mono)}
+.stream-meta .stream-agent-status{color:var(--cyan);font-weight:600}
+.chat-bubble.assistant-bubble .asst-body{word-break:break-word;color:var(--fg)}
+.chat-bubble.assistant-bubble .asst-body p{margin:6px 0}
+.chat-bubble.assistant-bubble .asst-body h1,.chat-bubble.assistant-bubble .asst-body h2,.chat-bubble.assistant-bubble .asst-body h3,.chat-bubble.assistant-bubble .asst-body h4,.chat-bubble.assistant-bubble .asst-body h5,.chat-bubble.assistant-bubble .asst-body h6{color:var(--fg);margin:16px 0 8px;font-weight:700}
+.chat-bubble.assistant-bubble .asst-body h1{font-size:18px;letter-spacing:-.3px}
+.chat-bubble.assistant-bubble .asst-body h2{font-size:16px}
+.chat-bubble.assistant-bubble .asst-body h3{font-size:15px}
+.chat-bubble.assistant-bubble .asst-body h4{font-size:14px;color:var(--fg2)}
+.chat-bubble.assistant-bubble .asst-body h5,.chat-bubble.assistant-bubble .asst-body h6{font-size:12px;color:var(--fg2);text-transform:uppercase;letter-spacing:.3px}
+.chat-bubble.assistant-bubble .asst-body ul,.chat-bubble.assistant-bubble .asst-body ol{margin:6px 0 6px 22px;padding:0}
+.chat-bubble.assistant-bubble .asst-body li{margin:3px 0;line-height:1.65}
 .chat-bubble.assistant-bubble .asst-body strong{color:var(--fg);font-weight:700}
 .chat-bubble.assistant-bubble .asst-body em{color:var(--fg2);font-style:italic}
-.chat-bubble.assistant-bubble .asst-body code{background:var(--bg);padding:1px 5px;border-radius:3px;font-family:var(--mono);font-size:12px}
-.chat-bubble.assistant-bubble .asst-body hr{border:none;border-top:1px solid var(--bg4);margin:8px 0}
+.chat-bubble.assistant-bubble .asst-body code{background:rgba(255,255,255,.06);padding:2px 6px;border-radius:4px;font-family:var(--mono);font-size:12.5px;color:var(--cyan)}
+.chat-bubble.assistant-bubble .asst-body hr{border:none;border-top:1px solid var(--bg4);margin:12px 0}
 .chat-bubble.assistant-bubble .asst-body del{color:var(--fg3);text-decoration:line-through}
-.chat-bubble.assistant-bubble .asst-body blockquote{border-left:3px solid var(--accent);padding:4px 12px;margin:6px 0;color:var(--fg2);background:rgba(55,115,255,.04);border-radius:0 4px 4px 0}
-.chat-bubble.assistant-bubble .asst-body table{width:100%;border-collapse:collapse;margin:8px 0;font-size:12px}
-.chat-bubble.assistant-bubble .asst-body th{background:var(--bg3);color:var(--fg);font-weight:700;padding:6px 10px;border:1px solid var(--bg4);font-size:11px;text-transform:uppercase;letter-spacing:.3px}
-.chat-bubble.assistant-bubble .asst-body td{padding:5px 10px;border:1px solid var(--bg4);color:var(--fg2)}
+.chat-bubble.assistant-bubble .asst-body blockquote{border-left:3px solid var(--accent);padding:6px 14px;margin:8px 0;color:var(--fg2);background:rgba(55,115,255,.04);border-radius:0 6px 6px 0}
+.chat-bubble.assistant-bubble .asst-body table{width:100%;border-collapse:collapse;margin:10px 0;font-size:13px}
+.chat-bubble.assistant-bubble .asst-body th{background:var(--bg3);color:var(--fg);font-weight:700;padding:8px 12px;border:1px solid var(--bg4);font-size:12px;text-transform:uppercase;letter-spacing:.3px}
+.chat-bubble.assistant-bubble .asst-body td{padding:6px 12px;border:1px solid var(--bg4);color:var(--fg2)}
 .chat-bubble.assistant-bubble .asst-body tr:hover td{background:rgba(255,255,255,.02)}
-.chat-bubble.assistant-bubble .asst-body .md-img{max-width:100%;border-radius:6px;margin:6px 0;border:1px solid var(--bg4)}
-.chat-bubble.assistant-bubble .asst-body a{color:var(--accent2);text-decoration:none;border-bottom:1px dotted var(--accent2)}
-.chat-bubble.assistant-bubble .asst-body a:hover{border-bottom-style:solid}
-.chat-bubble.assistant-bubble pre{background:var(--bg);padding:10px 12px;border-radius:6px;font-family:var(--mono);font-size:11px;line-height:1.5;overflow-x:auto;white-space:pre-wrap;max-height:300px;overflow-y:auto;margin:8px 0}
-.chat-bubble.assistant-bubble .asst-tokens{display:flex;gap:8px;margin-top:8px;padding-top:8px;border-top:1px solid var(--bg3);font-family:var(--mono);font-size:9px;color:var(--fg3)}
+.chat-bubble.assistant-bubble .asst-body .md-img{max-width:100%;border-radius:8px;margin:8px 0;border:1px solid var(--bg4)}
+.chat-bubble.assistant-bubble .asst-body a{color:var(--accent2);text-decoration:none;border-bottom:1px dotted rgba(90,143,255,.3)}
+.chat-bubble.assistant-bubble .asst-body a:hover{border-bottom-color:var(--accent2)}
+.chat-bubble.assistant-bubble pre,.stream-body pre{position:relative;background:var(--bg);padding:10px 12px;border-radius:8px;font-family:var(--mono);font-size:11.5px;line-height:1.6;overflow-x:auto;white-space:pre-wrap;max-height:400px;overflow-y:auto;margin:8px 0;border:1px solid var(--bg3)}
+.code-block-header{display:flex;align-items:center;justify-content:space-between;padding:6px 12px;background:var(--bg3);border-radius:8px 8px 0 0;border:1px solid var(--bg4);border-bottom:none;margin:8px 0 0}
+.code-block-header+pre{margin-top:0;border-radius:0 0 8px 8px;border-top:none}
+.code-lang{font-family:var(--mono);font-size:10px;color:var(--fg3);text-transform:lowercase;letter-spacing:.3px}
+.code-copy-btn{background:transparent;border:1px solid var(--bg4);color:var(--fg3);font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;font-family:var(--font);transition:.15s}
+.code-copy-btn:hover{background:var(--bg4);color:var(--fg)}
+.code-copy-btn.copied{color:var(--green);border-color:var(--green)}
+.chat-bubble.assistant-bubble .asst-tokens{display:flex;gap:10px;margin-top:12px;padding-top:8px;border-top:1px solid var(--bg3);font-family:var(--mono);font-size:10px;color:var(--fg3)}
 
 .chat-bubble pre{background:var(--bg);padding:8px 10px;border-radius:6px;font-family:var(--mono);font-size:11px;line-height:1.5;overflow-x:auto;white-space:pre-wrap;max-height:200px;overflow-y:auto;margin:6px 0 2px}
 .chat-bubble .chat-agent-name{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px}
@@ -481,23 +521,24 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .chat-live-inner.alic-live .live-dot{background:var(--magenta)}
 @keyframes livePulse{0%,100%{opacity:1}50%{opacity:.3}}
 
-/* ── Overview: Chat Input ────────────────────────────────────── */
-.chat-input-area{padding:10px 0 4px;border-top:1px solid var(--bg3);flex-shrink:0}
+/* ── Overview: Chat Input (Claude Code style) ────────────────── */
+.chat-input-area{padding:10px 0 4px;flex-shrink:0}
 .chat-attachments{display:flex;gap:6px;flex-wrap:wrap;padding-bottom:6px}
 .chat-attach-thumb{position:relative;width:56px;height:56px;border-radius:8px;overflow:hidden;border:1px solid var(--bg4);background:var(--bg3)}
 .chat-attach-thumb img{width:100%;height:100%;object-fit:cover}
 .chat-attach-thumb .chat-attach-name{position:absolute;bottom:0;left:0;right:0;font-size:8px;background:rgba(0,0,0,.7);color:var(--fg);padding:1px 3px;text-overflow:ellipsis;overflow:hidden;white-space:nowrap}
 .chat-attach-remove{position:absolute;top:-4px;right:-4px;width:16px;height:16px;border-radius:50%;background:var(--red);color:#fff;font-size:10px;display:flex;align-items:center;justify-content:center;cursor:pointer;border:1.5px solid var(--bg);z-index:1}
-.chat-input-row{display:flex;gap:8px;align-items:flex-end}
-.chat-input-actions{display:flex;gap:2px;flex-shrink:0}
-.chat-action-btn{width:34px;height:34px;border-radius:8px;border:1px solid var(--bg4);background:var(--bg3);color:var(--fg2);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:15px;transition:.15s;flex-shrink:0}
-.chat-action-btn:hover{border-color:var(--accent);color:var(--fg)}
-.chat-action-btn.active{background:rgba(55,115,255,.15);border-color:var(--accent);color:var(--accent2)}
-.chat-textarea{flex:1;background:var(--bg3);border:1px solid var(--bg4);color:var(--fg);padding:9px 12px;border-radius:10px;font-size:13px;font-family:var(--font);outline:none;resize:none;line-height:1.5;max-height:120px;overflow-y:auto;min-height:38px}
-.chat-textarea:focus{border-color:var(--accent)}
+.chat-input-box{display:flex;flex-direction:column;background:var(--bg2);border:1.5px solid var(--bg4);border-radius:16px;transition:border-color .15s,box-shadow .15s;overflow:hidden}
+.chat-input-box:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px rgba(55,115,255,.08)}
+.chat-textarea{flex:1;background:transparent;border:none;color:var(--fg);padding:12px 16px 4px;font-size:14px;font-family:var(--font);outline:none;resize:none;line-height:1.5;max-height:160px;overflow-y:auto;min-height:24px}
 .chat-textarea::placeholder{color:var(--fg3)}
-.chat-send{padding:9px 18px;border-radius:10px;height:38px;display:flex;align-items:center;gap:5px}
-.chat-send:disabled{opacity:.3}
+.chat-input-bottom{display:flex;align-items:center;justify-content:space-between;padding:4px 6px 6px}
+.chat-input-actions{display:flex;gap:1px;flex-shrink:0}
+.chat-action-btn{width:32px;height:32px;border-radius:8px;border:none;background:transparent;color:var(--fg3);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:14px;transition:.12s;flex-shrink:0}
+.chat-action-btn:hover{color:var(--fg);background:var(--bg3)}
+.chat-action-btn.active{color:var(--accent2);background:rgba(55,115,255,.1)}
+.chat-send{padding:6px 16px;border-radius:10px;height:32px;display:flex;align-items:center;gap:4px;font-size:13px;font-weight:600}
+.chat-send:disabled{opacity:.2;cursor:not-allowed}
 
 /* ── Chat: Search indicator ──────────────────────────────────── */
 .chat-search-indicator{display:flex;align-items:center;gap:6px;padding:4px 10px;margin-bottom:4px;font-size:11px;color:var(--cyan);background:rgba(3,191,212,.06);border:1px solid rgba(3,191,212,.15);border-radius:8px}
@@ -509,6 +550,12 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .chat-bubble .chat-images img{max-width:200px;max-height:150px;border-radius:6px;cursor:pointer;border:1px solid var(--bg4)}
 .chat-bubble .chat-images img:hover{border-color:var(--accent)}
 .chat-bubble .chat-file-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:6px;background:var(--bg3);font-size:11px;color:var(--fg2);margin-top:4px}
+.chat-file-card{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg3);border:1px solid var(--bg4);border-radius:8px;text-decoration:none;color:var(--fg);transition:.15s;min-width:180px;max-width:280px}
+.chat-file-card:hover{border-color:var(--accent);background:rgba(55,115,255,.05)}
+.chat-file-card .file-icon{font-size:20px;flex-shrink:0}
+.chat-file-card .file-info{display:flex;flex-direction:column;min-width:0}
+.chat-file-card .file-name{font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chat-file-card .file-path{font-size:9px;color:var(--fg3);font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* ── Chat: Search result cards ───────────────────────────────── */
 .chat-search-results{margin-top:6px}
@@ -561,6 +608,9 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
     <div class="nav-item" data-panel="skills" onclick="switchPanel('skills')">
       <span class="icon">📝</span><span>Skills</span>
     </div>
+    <div class="nav-item" data-panel="cleo-files" onclick="switchPanel('cleo-files')">
+      <span class="icon">📋</span><span>Files</span>
+    </div>
     <div class="nav-item" data-panel="tools" onclick="switchPanel('tools')">
       <span class="icon">🔧</span><span>Tools</span>
     </div>
@@ -612,13 +662,13 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
   <!-- ═══ HEADER BAR: Latest statuses (left) | Agent chips (right) ═══ -->
   <div class="ov-header">
     <div class="ov-statuses" id="ovStatuses">
-      <span class="ov-status-empty">Ready -- submit a task to start</span>
+      <span class="ov-status-empty">Ready — Submit a task to start</span>
     </div>
     <div class="ov-header-sep"></div>
     <div class="ov-agents" id="ovAgents">
-      <div class="ov-agent-chip" id="chipPlanner"><span class="chip-icon">📋</span><span class="chip-name">Leo</span><span class="chip-dot"></span></div>
-      <div class="ov-agent-chip" id="chipExecutor"><span class="chip-icon">⚙️</span><span class="chip-name">Jerry</span><span class="chip-dot"></span></div>
-      <div class="ov-agent-chip" id="chipReviewer"><span class="chip-icon">🧠</span><span class="chip-name">Alic</span><span class="chip-dot"></span></div>
+      <div class="ov-agent-chip" id="chipPlanner"><img class="chip-avatar" src="/avatars/leo.png" alt="Leo"><span class="chip-name">Leo</span><span class="chip-dot"></span></div>
+      <div class="ov-agent-chip" id="chipExecutor"><img class="chip-avatar" src="/avatars/jerry.png" alt="Jerry"><span class="chip-name">Jerry</span><span class="chip-dot"></span></div>
+      <div class="ov-agent-chip" id="chipReviewer"><img class="chip-avatar" src="/avatars/alic.png" alt="Alic"><span class="chip-name">Alic</span><span class="chip-dot"></span></div>
     </div>
   </div>
 
@@ -640,20 +690,22 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
       <div class="chat-welcome">
         <div class="chat-welcome-icon">⬡</div>
         <div class="chat-welcome-text">What can I help you with?</div>
-        <div class="chat-welcome-sub">Your task will be planned, executed, and quality-checked by the Cleo agent team</div>
+        <div class="chat-welcome-sub">Your task will be planned, executed, and reviewed by the Cleo agent team</div>
       </div>
     </div>
     <div class="chat-input-area">
       <div class="chat-attachments" id="chatAttachments" style="display:none"></div>
-      <div class="chat-input-row">
-        <div class="chat-input-actions">
-          <button class="chat-action-btn" title="Attach file" onclick="document.getElementById('chatFileInput').click()">📎</button>
-          <button class="chat-action-btn" id="searchToggle" title="Web search (Brave)" onclick="toggleSearchMode()">🔍</button>
-          <input type="file" id="chatFileInput" multiple accept="image/*,.pdf,.txt,.md,.json,.csv,.py,.js,.ts" style="display:none" onchange="handleFileSelect(this)">
-        </div>
+      <div class="chat-input-box">
         <textarea class="chat-textarea" id="chatInput" rows="1"
                   placeholder="Message Cleo…"></textarea>
-        <button class="btn chat-send" id="chatSend" onclick="chatSubmit()">Send ↑</button>
+        <div class="chat-input-bottom">
+          <div class="chat-input-actions">
+            <button class="chat-action-btn" title="Attach file" onclick="document.getElementById('chatFileInput').click()">📎</button>
+            <button class="chat-action-btn" id="searchToggle" title="Web search (Brave)" onclick="toggleSearchMode()">🔍</button>
+            <input type="file" id="chatFileInput" multiple accept="image/*,.pdf,.txt,.md,.json,.csv,.py,.js,.ts" style="display:none" onchange="handleFileSelect(this)">
+          </div>
+          <button class="btn chat-send" id="chatSend" onclick="chatSubmit()">Send ↑</button>
+        </div>
       </div>
     </div>
   </div>
@@ -703,11 +755,34 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
   </div>
 </div>
 
+<!-- ── Panel: Cleo Files ── -->
+<div class="panel" id="panel-cleo-files">
+  <div class="page-header">
+    <div class="page-title">Files</div>
+    <div class="page-actions">
+      <span style="font-size:12px;color:var(--fg3)">Agent config, memory, and identity files</span>
+    </div>
+  </div>
+  <div class="skills-layout">
+    <div class="skills-list">
+      <div class="skills-list-header">
+        <input class="input" type="text" placeholder="Search files…" id="cfSearch" oninput="filterCfFiles()">
+      </div>
+      <div class="skills-list-body" id="cfListBody">
+        <div class="empty">Loading…</div>
+      </div>
+    </div>
+    <div class="skills-editor" id="cfEditor">
+      <div class="skills-empty">Select a file from the list to view or edit</div>
+    </div>
+  </div>
+</div>
+
 <!-- ── Panel: Tools ── -->
 <div class="panel" id="panel-tools">
   <div class="page-header">
     <div class="page-title">Built-in Tools</div>
-    <div style="font-size:12px;color:var(--muted)">Agent tool registry — web search, shell exec, cron, media, filesystem</div>
+    <div style="font-size:12px;color:var(--fg3)">Agent tool registry — Web Search, Shell Exec, Cron, Media, Filesystem</div>
   </div>
   <div class="stats" id="toolsStats">
     <div class="stat"><div class="stat-value green" id="tAvail">0</div><div class="stat-label">Available</div></div>
@@ -749,7 +824,7 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
     <div class="stat"><div class="stat-value green" id="chRunning">0</div><div class="stat-label">Running</div></div>
     <div class="stat"><div class="stat-value" id="chEnabled">0</div><div class="stat-label">Enabled</div></div>
   </div>
-  <div class="agent-grid" id="channelGrid"><div class="empty">Loading channels...</div></div>
+  <div class="agent-grid" id="channelGrid"><div class="empty">Loading…</div></div>
 </div>
 
 <!-- ── Panel: Config ── -->
@@ -825,28 +900,28 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
       <input type="checkbox" id="logAutoRefresh" onchange="toggleLogAutoRefresh()"> Auto-refresh
     </label>
   </div>
-  <div class="log-content" id="logContent">Select an agent to view logs.</div>
+  <div class="log-content" id="logContent">Select an agent to view logs</div>
 </div>
 
 <!-- ── Panel: Chain ── -->
 <div class="panel" id="panel-chain">
   <div class="page-header">
     <div class="page-title">On-Chain Identity</div>
-    <div class="page-actions"><button class="btn" onclick="loadChain()">Refresh</button></div>
+    <div class="page-actions"><button class="btn btn-sm" onclick="loadChain()">Refresh</button></div>
   </div>
 
-  <div class="stat-grid" id="chainStats" style="margin-bottom:18px">
-    <div class="stat-card"><div class="stat-value" id="chainNetwork">—</div><div class="stat-label">Network</div></div>
-    <div class="stat-card"><div class="stat-value" id="chainLitNet">—</div><div class="stat-label">Lit Network</div></div>
-    <div class="stat-card"><div class="stat-value" id="chainAgents">—</div><div class="stat-label">Registered</div></div>
-    <div class="stat-card"><div class="stat-value" id="chainX402">—</div><div class="stat-label">x402</div></div>
+  <div class="stats" id="chainStats" style="margin-bottom:18px">
+    <div class="stat"><div class="stat-value cyan" id="chainNetwork">—</div><div class="stat-label">Network</div></div>
+    <div class="stat"><div class="stat-value" id="chainLitNet">—</div><div class="stat-label">Lit Network</div></div>
+    <div class="stat"><div class="stat-value green" id="chainAgents">—</div><div class="stat-label">Registered</div></div>
+    <div class="stat"><div class="stat-value" id="chainX402">—</div><div class="stat-label">X402</div></div>
   </div>
 
   <div class="card">
     <div class="card-title">Agent Identities</div>
     <table class="data-table">
       <thead><tr>
-        <th>Agent</th><th>Status</th><th>PKP Address</th><th>Chain ID</th><th>USDC</th><th>Actions</th>
+        <th>Agent</th><th>Status</th><th>PKP Address</th><th>Chain ID</th><th>Balance</th><th></th>
       </tr></thead>
       <tbody id="chainAgentsBody"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
     </table>
@@ -854,7 +929,7 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 
   <div class="card" style="margin-top:16px">
     <div class="card-title">Recent Transactions</div>
-    <div id="chainTxList" style="font-family:var(--mono);font-size:12px;color:var(--fg2)">Loading…</div>
+    <div id="chainTxList" style="font-size:12px;color:var(--fg2)">Loading…</div>
   </div>
 </div>
 
@@ -899,7 +974,7 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 <!-- ═══════════════ Cron Jobs Panel ═══════════════ -->
 <div class="panel" id="panel-cron">
   <div class="page-header">
-    <div class="page-title">⏰ Cron Jobs</div>
+    <div class="page-title">Cron Jobs</div>
     <div class="page-actions"><button class="btn" onclick="showNewCronModal()">+ New Job</button> <button class="btn" onclick="loadCron()">Refresh</button></div>
   </div>
 
@@ -946,7 +1021,7 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 
 <script>
 /* ══════════════════════════════════════════════════════════════════
-   Cleo Dashboard — Vanilla JS — OpenClaw-inspired Sidebar
+   Cleo Dashboard — Vanilla JS
    ══════════════════════════════════════════════════════════════════ */
 
 const API = '';  // same origin
@@ -981,6 +1056,9 @@ let editingAgent = null;
 let currentSkill = null;
 let skillsDirty = false;
 let skillsData = null;
+let cfData = null;           // Cleo Files list cache
+let currentCfFile = null;    // Currently editing: {scope, name, content}
+let cfDirty = false;         // Unsaved changes flag
 let logLevel = '';
 let logAutoRefreshTimer = null;
 let expandedTaskId = null;
@@ -1066,6 +1144,8 @@ function fmtTime(s) {
 function fmtNum(n) { return n != null ? n.toLocaleString() : '0'; }
 function truncate(s, n) { return s && s.length > n ? s.slice(0,n-1)+'…' : (s||''); }
 function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function titleCase(s) { return (s||'').replace(/\b\w/g, c => c.toUpperCase()); }
+function capitalize(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : ''; }
 
 function showToast(msg, type) {
   const el = document.createElement('div');
@@ -1141,6 +1221,7 @@ function switchPanel(name) {
   // Load data for panel
   if (name === 'agents') loadAgents();
   if (name === 'skills') loadSkills();
+  if (name === 'cleo-files') loadCfFiles();
   if (name === 'tools') loadTools();
   if (name === 'usage') loadUsage();
   if (name === 'config') loadConfig();
@@ -1297,9 +1378,11 @@ function renderDispatchHtml(d) {
   }
   const elapsed = ((Date.now() - d.ts) / 1000)|0;
   const timeStr = elapsed < 5 ? 'now' : elapsed < 60 ? elapsed + 's' : Math.floor(elapsed/60) + 'm';
+  const dMeta = agentMeta(d.agent || '');
+  const dAvIcon = dMeta.avatar ? '<img src="'+dMeta.avatar+'" style="width:14px;height:14px;border-radius:50%;object-fit:cover;vertical-align:middle">' : d.icon;
   return '<div class="dispatch-entry" data-d-id="' + d.id + '">'
-    + '<span class="dispatch-icon">' + d.icon + '</span>'
-    + '<span class="dispatch-agent ' + d.agentCls + '-d">' + escHtml(d.agent || 'system') + '</span>'
+    + '<span class="dispatch-icon">' + dAvIcon + '</span>'
+    + '<span class="dispatch-agent ' + d.agentCls + '-d">' + escHtml(capitalize(d.agent || 'system')) + '</span>'
     + '<span class="dispatch-text">' + text + '</span>'
     + tokHtml
     + '<span class="dispatch-time">' + timeStr + '</span>'
@@ -1332,18 +1415,21 @@ function updateHeaderStatuses() {
   if (!el) return;
   const latest = dispatchEntries.slice(-3);
   if (!latest.length) {
-    el.innerHTML = '<span class="ov-status-empty">Ready -- submit a task to start</span>';
+    el.innerHTML = '<span class="ov-status-empty">Ready — Submit a task to start</span>';
     return;
   }
   let html = '';
   for (const d of latest.reverse()) {
     const agentCls = d.agent ? d.agent.toLowerCase().replace(/[^a-z]/g,'') : '';
     const colorCls = agentCls.includes('leo') ? 'leo-d' : agentCls.includes('jerry') ? 'jerry-d' : agentCls.includes('alic') ? 'alic-d' : '';
-    const icon = agentCls.includes('leo') ? '📋' : agentCls.includes('jerry') ? '⚙️' : agentCls.includes('alic') ? '🧠' : '▸';
+    const sMeta = agentMeta(d.agent || '');
+    const sIcon = sMeta.avatar ? '<img src="'+sMeta.avatar+'">' : '▸';
+    const agentName = capitalize(d.agent || 'system');
+    const statusText = titleCase(truncate(d.text || '', 30));
     html += '<div class="ov-status-item">'
-      + '<span class="status-icon">' + icon + '</span>'
-      + '<span class="status-agent ' + colorCls + '">' + escHtml(d.agent||'system') + '</span>'
-      + '<span class="status-text">' + escHtml(truncate(d.text||'',60)) + '</span>'
+      + '<span class="status-icon">' + sIcon + '</span>'
+      + '<span class="status-agent ' + colorCls + '">' + escHtml(agentName) + '</span>'
+      + '<span class="status-text">' + escHtml(statusText) + '</span>'
       + '</div>';
   }
   el.innerHTML = html;
@@ -1419,15 +1505,13 @@ function renderChatMsgHtml(m) {
         + '</div>';
     }
     const aM = agentMeta(m.agent || '');
-    const agentLabel = m.agent || 'Cleo';
+    const agentLabel = capitalize(m.agent) || 'Cleo';
     const avatarContent = avatarHtml(aM, 28);
     const avatarBg = m.agent ? aM.color : 'linear-gradient(135deg,var(--accent),var(--cyan))';
     return '<div class="chat-msg assistant" data-msg-id="' + m.id + '">'
       + '<div class="chat-avatar ' + aM.cls + '">' + avatarContent + '</div>'
       + '<div class="chat-bubble assistant-bubble">'
-      + '<div class="asst-header"><span class="asst-label" style="color:' + aM.color + '">' + escHtml(agentLabel) + '</span>'
-      + (m.taskId ? '<span>' + m.taskId.slice(0,8) + '…</span>' : '')
-      + '</div>'
+      + '<div class="asst-header"><span class="asst-label" style="color:' + aM.color + '">' + escHtml(agentLabel) + '</span></div>'
       + '<div class="asst-body">' + bodyHtml + '</div>'
       + scoreHtml + searchHtml + tokenHtml
       + '</div></div>';
@@ -1437,34 +1521,114 @@ function renderChatMsgHtml(m) {
 
 // Format result text into nice readable HTML — lightweight markdown renderer
 function stripLlmTags(text) {
-  // Strip <think>...</think> blocks (LLM reasoning traces)
+  // Strip <think>...</think> blocks (complete)
   text = text.replace(/<think>[\s\S]*?<\/think>/g, '');
-  // Strip <tool_code>...</tool_code> blocks (tool invocations — shown separately)
+  // Strip <think> without closing tag (streaming — still thinking)
+  text = text.replace(/<think>[\s\S]*$/g, '');
+  // Strip <tool_code>...</tool_code> blocks (complete)
   text = text.replace(/<tool_code>[\s\S]*?<\/tool_code>/g, '');
+  // Strip <tool_code> without closing tag (streaming — tool being written)
+  text = text.replace(/<tool_code>[\s\S]*$/g, '');
+  // Strip other common LLM tags (open or closed)
+  text = text.replace(/<tool_call>[\s\S]*?(<\/tool_call>|$)/g, '');
+  text = text.replace(/<function_calls>[\s\S]*?(<\/function_calls>|$)/g, '');
+  text = text.replace(/<tool_result>[\s\S]*?(<\/tool_result>|$)/g, '');
+  // Strip raw JSON tool objects that leak through ({"tool": "...", "params": ...})
+  text = text.replace(/^\s*\{"tool"\s*:\s*"[^"]*"[\s\S]*$/gm, '');
+  // Strip orchestration artifacts (TASK:, COMPLEXITY:, Phase headers)
+  text = text.replace(/^TASK:\s*.+$/gm, '');
+  text = text.replace(/^COMPLEXITY:\s*.+$/gm, '');
+  text = text.replace(/^##\s*Phase\s+\d+.*$/gm, '');
+  text = text.replace(/^\*\*TASK:\*\*\s*.+$/gm, '');
+  text = text.replace(/^\*\*COMPLEXITY:\*\*\s*.+$/gm, '');
   // Clean up excessive blank lines left after stripping
   text = text.replace(/\n{3,}/g, '\n\n');
   return text.trim();
 }
 
+function _buildResultStepsHtml(rawText) {
+  // Build Claude-style process steps for completed results
+  const steps = [];
+  const thinkBlocks = rawText.match(/<think>[\s\S]*?<\/think>/g);
+  if (thinkBlocks) steps.push({icon:'💭', label:'Thought', count:thinkBlocks.length});
+  const toolBlocks = rawText.match(/<tool_code>[\s\S]*?<\/tool_code>/g);
+  if (toolBlocks) {
+    for (const tc of toolBlocks) {
+      let label = 'Used Tool';
+      try { const obj = JSON.parse(tc.replace(/<\/?tool_code>/g,'')); if(obj.tool) label='Used '+titleCase(obj.tool.replace(/[_-]/g,' ')); } catch(e){}
+      steps.push({icon:'✓', label});
+    }
+  }
+  if (!steps.length) return '';
+  let html = '<div class="stream-steps" style="margin-bottom:10px">';
+  for (const s of steps) {
+    html += '<div class="stream-step step-done"><span class="step-icon">'+s.icon+'</span><span class="step-label">'+escHtml(s.label)+'</span></div>';
+  }
+  html += '</div>';
+  return html;
+}
+
 function formatResultBody(text) {
   if (!text) return '';
+  const rawText = text;
   // Strip LLM artifacts before rendering
   text = stripLlmTags(text);
-  if (!text) return '<span style="color:var(--fg3)">Processing...</span>';
+  const stepsHtml = _buildResultStepsHtml(rawText);
+  if (!text) {
+    // Entire output was tool calls / thinking — show steps + friendly status
+    if (rawText.includes('<tool_code>') || rawText.includes('{"tool"'))
+      return stepsHtml + '<span style="color:var(--fg2)">✓ Done — results sent to planner for synthesis.</span>';
+    return '<span style="color:var(--fg2)">✓ Completed</span>';
+  }
   // Try JSON pretty-print
   try {
     const obj = JSON.parse(text);
     return '<pre>' + escHtml(JSON.stringify(obj, null, 2)) + '</pre>';
   } catch(e) {}
-  return renderMarkdown(text);
+  // Render markdown then enhance with file/image detection
+  let html = renderMarkdown(text);
+  // Detect file paths in the rendered output and make them actionable
+  html = enhanceFilePaths(html, text);
+  return stepsHtml + html;
+}
+
+function enhanceFilePaths(html, rawText) {
+  // Detect file paths mentioned in the raw text (before HTML rendering)
+  const filePattern = /(?:^|\s)(\/[\w\-\.\/]+\.(pdf|png|jpg|jpeg|gif|csv|xlsx|json|txt|md|py|js|html|svg))(?:\s|$|[,;])/gi;
+  const matches = [...new Set((rawText.match(filePattern) || []).map(m => m.trim().replace(/[,;]$/, '')))];
+  if (!matches.length) return html;
+
+  // Add file cards at the end
+  let fileCards = '<div class="chat-file-cards" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px">';
+  for (const fpath of matches) {
+    const fname = fpath.split('/').pop();
+    const ext = fname.split('.').pop().toLowerCase();
+    const isImage = ['png','jpg','jpeg','gif','svg','webp'].includes(ext);
+    const isPdf = ext === 'pdf';
+    const isData = ['csv','xlsx','json'].includes(ext);
+    const icon = isImage ? '🖼️' : isPdf ? '📄' : isData ? '📊' : '📎';
+    const downloadUrl = '/v1/file?path=' + encodeURIComponent(fpath);
+    fileCards += '<a class="chat-file-card" href="' + downloadUrl + '" target="_blank" rel="noopener" title="' + escHtml(fpath) + '">'
+      + '<span class="file-icon">' + icon + '</span>'
+      + '<span class="file-info"><span class="file-name">' + escHtml(fname) + '</span>'
+      + '<span class="file-path">' + escHtml(fpath) + '</span></span>'
+      + '</a>';
+  }
+  fileCards += '</div>';
+  return html + fileCards;
 }
 
 function renderMarkdown(src) {
   // 1) Extract fenced code blocks (protect from processing)
   const codeBlocks = [];
+  let _cbId = 0;
   let s = src.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
     const i = codeBlocks.length;
-    codeBlocks.push('<pre><code' + (lang ? ' class="lang-'+escHtml(lang)+'"' : '') + '>' + escHtml(code.trimEnd()) + '</code></pre>');
+    const cbid = 'cb_' + (++_cbId) + '_' + Date.now();
+    const langLabel = lang || 'code';
+    const header = '<div class="code-block-header"><span class="code-lang">' + escHtml(langLabel) + '</span>'
+      + '<button class="code-copy-btn" onclick="copyCodeBlock(this,\'' + cbid + '\')" title="Copy">Copy</button></div>';
+    codeBlocks.push(header + '<pre id="' + cbid + '"><code' + (lang ? ' class="lang-'+escHtml(lang)+'"' : '') + '>' + escHtml(code.trimEnd()) + '</code></pre>');
     return '\x00CB' + i + '\x00';
   });
 
@@ -1519,6 +1683,16 @@ function renderMarkdown(src) {
     const hMatch = line.match(/^(#{1,6})\s+(.+)$/);
     if (hMatch) { closeList(); const lvl = hMatch[1].length; html += '<h' + lvl + '>' + inlineFmt(hMatch[2]) + '</h' + lvl + '>'; i++; continue; }
 
+    // Task list (checkbox)
+    const taskMatch = line.match(/^[\s]*[-*]\s+\[([ xX])\]\s+(.+)$/);
+    if (taskMatch) {
+      if (!inList || listType !== 'ul') { closeList(); html += '<ul style="list-style:none;padding-left:4px">'; inList = true; listType = 'ul'; }
+      const checked = taskMatch[1] !== ' ';
+      const icon = checked ? '<span style="color:var(--green);margin-right:6px">☑</span>' : '<span style="color:var(--fg3);margin-right:6px">☐</span>';
+      html += '<li style="display:flex;align-items:flex-start;gap:0">' + icon + '<span' + (checked?' style="color:var(--fg3);text-decoration:line-through"':'') + '>' + inlineFmt(taskMatch[2]) + '</span></li>';
+      i++; continue;
+    }
+
     // Unordered list
     const ulMatch = line.match(/^[\s]*[-*]\s+(.+)$/);
     if (ulMatch) {
@@ -1539,9 +1713,17 @@ function renderMarkdown(src) {
     // Horizontal rule
     if (/^[-*_]{3,}\s*$/.test(line.trim())) { html += '<hr>'; i++; continue; }
 
-    // Blockquote
+    // Blockquote (multi-line)
     const bqMatch = line.match(/^>\s?(.*)$/);
-    if (bqMatch) { html += '<blockquote>' + inlineFmt(bqMatch[1]) + '</blockquote>'; i++; continue; }
+    if (bqMatch) {
+      let bqContent = inlineFmt(bqMatch[1]);
+      while (i + 1 < lines.length && /^>\s?/.test(lines[i + 1])) {
+        i++;
+        bqContent += '<br>' + inlineFmt(lines[i].replace(/^>\s?/, ''));
+      }
+      html += '<blockquote>' + bqContent + '</blockquote>';
+      i++; continue;
+    }
 
     // Empty line
     if (line.trim() === '') { i++; continue; }
@@ -1575,6 +1757,20 @@ function inlineFmt(s) {
   return s;
 }
 
+function copyCodeBlock(btn, preId) {
+  const pre = document.getElementById(preId);
+  if (!pre) return;
+  const text = pre.textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+  }).catch(() => {
+    btn.textContent = 'Failed';
+    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+  });
+}
+
 // ── Incremental render for chat messages (bottom panel) ──
 function renderChat() {
   const container = document.getElementById('chatMessages');
@@ -1582,7 +1778,7 @@ function renderChat() {
     chatLastRenderedIdx = 0;
     container.innerHTML = '<div class="chat-welcome"><div class="chat-welcome-icon">⬡</div>'
       + '<div class="chat-welcome-text">What can I help you with?</div>'
-      + '<div class="chat-welcome-sub">Your task will be planned, executed, and quality-checked by the Cleo agent team</div></div>';
+      + '<div class="chat-welcome-sub">Your task will be planned, executed, and reviewed by the Cleo agent team</div></div>';
     return;
   }
   // First render: replace welcome
@@ -1751,7 +1947,7 @@ async function chatSubmit() {
   const result = await apiPost('/v1/task', {description: taskDesc});
   if (result && result.task_id) {
     // Task creation goes to TOP dispatch
-    addDispatch('📤', 'system', 'Task submitted: ' + result.task_id.slice(0,8) + '…', {taskId: result.task_id});
+    addDispatch('📤', 'system', 'Task Submitted: ' + result.task_id.slice(0,8) + '…', {taskId: result.task_id});
     chatTaskMap[result.task_id] = new Set(['created']);
   } else {
     addChatMsg('system', '✗ Failed to submit task');
@@ -1847,8 +2043,8 @@ function renderLiveStatus() {
     const el = document.createElement('div');
     el.className = 'dispatch-entry dispatch-live-row';
     el.innerHTML = '<span class="dispatch-icon"><span class="dispatch-live-dot" style="background:' + meta.color + '"></span></span>'
-      + '<span class="dispatch-agent ' + meta.cls + '-d">' + escHtml(aid) + '</span>'
-      + '<span class="dispatch-text"><span class="dispatch-live">generating…</span></span>'
+      + '<span class="dispatch-agent ' + meta.cls + '-d">' + escHtml(capitalize(aid)) + '</span>'
+      + '<span class="dispatch-text"><span class="dispatch-live">Generating…</span></span>'
       + '<span class="dispatch-time" style="color:' + meta.color + '">' + info.elapsed + 's</span>';
     container.appendChild(el);
   }
@@ -1859,14 +2055,15 @@ function renderLiveStatus() {
 //  STREAMING — live partial results in ChatBox
 // ══════════════════════════════════════════════════════════════════
 
-// Store full streaming content for expand modal
+// Store full streaming content
 const _streamingFullText = {};
+let _streamRenderRAF = {};
 
 function updateStreamingBubble(taskId, agent, partial) {
   const container = document.getElementById('chatMessages');
   if (!container) return;
 
-  // Store full text for expand
+  // Store full text
   _streamingFullText[taskId] = partial;
 
   let bubble = document.getElementById('stream-' + taskId);
@@ -1874,79 +2071,122 @@ function updateStreamingBubble(taskId, agent, partial) {
     // Remove welcome message if present
     const welcome = container.querySelector('.chat-welcome');
     if (welcome) welcome.remove();
-    // Create streaming bubble
+    // Create streaming bubble with full markdown rendering area
     const meta = agentMeta(agent);
     const wrapper = document.createElement('div');
     wrapper.className = 'chat-msg assistant';
     wrapper.id = 'stream-' + taskId;
+    wrapper.setAttribute('data-task-id', taskId);
     wrapper.innerHTML = '<div class="chat-avatar ' + meta.cls + '">' + avatarHtml(meta, 28) + '</div>'
       + '<div class="chat-bubble assistant-bubble ' + meta.cls + '-bubble">'
-      + '<div class="asst-header"><span class="asst-label">' + escHtml(agent) + '</span>'
-      + '<span class="stream-indicator" style="color:var(--accent)">streaming…</span></div>'
+      + '<div class="asst-header"><span class="asst-label" style="color:' + meta.color + '">' + escHtml(capitalize(agent)) + '</span></div>'
       + '<div class="stream-body"></div>'
       + '<div class="stream-meta">'
+      + '<span class="stream-agent-status">● Generating</span>'
       + '<span class="char-count"></span>'
-      + '<span class="expand-btn" onclick="showStreamingDetail(\'' + taskId + '\')">展开查看</span>'
       + '</div></div>';
     container.appendChild(wrapper);
   }
-  bubble = document.getElementById('stream-' + taskId);
-  if (bubble) {
-    const body = bubble.querySelector('.stream-body');
-    const charCount = bubble.querySelector('.char-count');
-    if (body) {
-      // Strip <think> and <tool_code> blocks, show last visible line
-      const cleaned = stripLlmTags(partial);
-      const lastLine = cleaned.split('\n').filter(Boolean).pop() || 'thinking…';
-      body.textContent = lastLine.slice(0, 80) + (cleaned.length > 80 ? '…' : '');
+
+  // Throttle render to ~15fps for smooth typewriter effect
+  if (_streamRenderRAF[taskId]) return;
+  _streamRenderRAF[taskId] = requestAnimationFrame(() => {
+    delete _streamRenderRAF[taskId];
+    _renderStreamContent(taskId);
+  });
+}
+
+function _parseStreamSteps(partial) {
+  // Extract tool/think steps from raw LLM output for Claude-style display
+  const steps = [];
+  // Extract completed <think>...</think> blocks
+  const thinkComplete = partial.match(/<think>([\s\S]*?)<\/think>/g);
+  if (thinkComplete) {
+    for (const t of thinkComplete) {
+      const content = t.replace(/<\/?think>/g, '').trim();
+      const preview = content.length > 60 ? content.slice(0, 60) + '…' : content;
+      steps.push({type: 'think', status: 'done', label: 'Thought', preview});
     }
-    if (charCount) {
-      charCount.textContent = partial.length + ' chars';
+  }
+  // Extract completed <tool_code>...</tool_code> blocks
+  const toolComplete = partial.match(/<tool_code>([\s\S]*?)<\/tool_code>/g);
+  if (toolComplete) {
+    for (const tc of toolComplete) {
+      const inner = tc.replace(/<\/?tool_code>/g, '').trim();
+      let label = 'Executed Tool';
+      try { const obj = JSON.parse(inner); if (obj.tool) label = 'Used ' + titleCase(obj.tool.replace(/[_-]/g, ' ')); } catch(e) {}
+      steps.push({type: 'tool', status: 'done', label});
     }
-    container.scrollTop = container.scrollHeight;
+  }
+  // Detect currently open (incomplete) tags
+  const hasOpenThink = /<think>(?![\s\S]*<\/think>)[\s\S]*$/.test(partial);
+  const hasOpenTool = /<tool_code>(?![\s\S]*<\/tool_code>)[\s\S]*$/.test(partial);
+  const hasOpenToolCall = /<tool_call>(?![\s\S]*<\/tool_call>)[\s\S]*$/.test(partial);
+  const hasRawJson = /^\s*\{"tool"\s*:/m.test(partial.split('</tool_code>').pop());
+  if (hasOpenThink) steps.push({type: 'think', status: 'active', label: 'Thinking'});
+  if (hasOpenTool || hasOpenToolCall || hasRawJson) steps.push({type: 'tool', status: 'active', label: 'Executing'});
+  return steps;
+}
+
+function _renderStreamContent(taskId) {
+  const bubble = document.getElementById('stream-' + taskId);
+  if (!bubble) return;
+  const body = bubble.querySelector('.stream-body');
+  const charCount = bubble.querySelector('.char-count');
+  const partial = _streamingFullText[taskId] || '';
+  if (body) {
+    const cleaned = stripLlmTags(partial);
+    const steps = _parseStreamSteps(partial);
+    let stepsHtml = '';
+    if (steps.length) {
+      stepsHtml = '<div class="stream-steps">';
+      for (const s of steps) {
+        const icon = s.status === 'done'
+          ? (s.type === 'think' ? '💭' : '✓')
+          : (s.type === 'think' ? '💭' : '⚡');
+        const cls = s.status === 'done' ? 'step-done' : 'step-active';
+        stepsHtml += '<div class="stream-step ' + cls + '">'
+          + '<span class="step-icon">' + icon + '</span>'
+          + '<span class="step-label">' + escHtml(s.label) + '</span>'
+          + (s.status === 'active' ? '<span class="step-spinner"></span>' : '')
+          + '</div>';
+      }
+      stepsHtml += '</div>';
+    }
+    if (cleaned) {
+      body.innerHTML = stepsHtml + renderMarkdown(cleaned) + '<span class="stream-cursor"></span>';
+    } else if (steps.length) {
+      body.innerHTML = stepsHtml + '<span class="stream-cursor"></span>';
+    } else if (partial.length > 0) {
+      body.innerHTML = '<span style="color:var(--fg3)">Working…</span><span class="stream-cursor"></span>';
+    } else {
+      body.innerHTML = '<span style="color:var(--fg3)">Thinking…</span><span class="stream-cursor"></span>';
+    }
+  }
+  if (charCount) {
+    const cleaned = stripLlmTags(partial);
+    charCount.textContent = (cleaned.length || partial.length).toLocaleString() + ' chars';
+  }
+  const container = document.getElementById('chatMessages');
+  if (container) {
+    const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
+    if (atBottom) container.scrollTop = container.scrollHeight;
   }
 }
 
 function removeStreamingBubble(taskId) {
+  _cleanupStreamRAF(taskId);
   const el = document.getElementById('stream-' + taskId);
   if (el) el.remove();
   delete _streamingFullText[taskId];
 }
 
-// ── Streaming Detail Modal ──
-let _streamDetailInterval = null;
-
-function showStreamingDetail(taskId) {
-  // Close any existing
-  closeStreamingDetail();
-  const full = _streamingFullText[taskId] || '(no content yet)';
-  const overlay = document.createElement('div');
-  overlay.className = 'agent-modal-overlay';
-  overlay.id = 'streamDetailOverlay';
-  overlay.onclick = function(e) { if (e.target === overlay) closeStreamingDetail(); };
-  overlay.innerHTML = '<div class="agent-modal" style="width:700px;max-height:80vh" onclick="event.stopPropagation()">'
-    + '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--bg4)">'
-    + '<h3 style="margin:0;font-size:15px;color:var(--fg)">📡 Streaming Detail — ' + escHtml(taskId).slice(0, 8) + '…</h3>'
-    + '<button onclick="closeStreamingDetail()" style="background:none;border:none;color:var(--fg3);cursor:pointer;font-size:18px">&times;</button>'
-    + '</div>'
-    + '<div id="streamDetailBody" class="asst-body" style="padding:16px 20px;overflow-y:auto;max-height:calc(80vh - 60px)"></div>'
-    + '</div>';
-  document.body.appendChild(overlay);
-  const body = document.getElementById('streamDetailBody');
-  if (body) body.innerHTML = renderMarkdown(stripLlmTags(full));
-  // Auto-refresh every 2s
-  _streamDetailInterval = setInterval(function() {
-    const latest = _streamingFullText[taskId];
-    if (!latest) { closeStreamingDetail(); return; }
-    const bd = document.getElementById('streamDetailBody');
-    if (bd) bd.innerHTML = renderMarkdown(stripLlmTags(latest));
-  }, 2000);
-}
-
-function closeStreamingDetail() {
-  if (_streamDetailInterval) { clearInterval(_streamDetailInterval); _streamDetailInterval = null; }
-  const ov = document.getElementById('streamDetailOverlay');
-  if (ov) ov.remove();
+// ── Streaming cleanup on completion ──
+function _cleanupStreamRAF(taskId) {
+  if (_streamRenderRAF[taskId]) {
+    cancelAnimationFrame(_streamRenderRAF[taskId]);
+    delete _streamRenderRAF[taskId];
+  }
 }
 
 function updateCostBadge(taskId, costUsd) {
@@ -2020,7 +2260,7 @@ function renderSubtaskTree(tasks) {
       html += '<div class="st-node">'
         + '<span class="st-dot ' + st + '"></span>'
         + '<span class="st-desc" title="' + escHtml(child.description || '') + '">' + escHtml(desc) + '</span>'
-        + (agent ? '<span class="st-agent">' + escHtml(agent) + '</span>' : '')
+        + (agent ? '<span class="st-agent">' + escHtml(capitalize(agent)) + '</span>' : '')
         + '</div>';
     }
     html += '</div>';
@@ -2069,7 +2309,7 @@ function diffAndRoute(prev, current) {
     // ── Agent claimed task → TOP dispatch ──
     if (newStatus === 'claimed' && oldStatus !== 'claimed' && !seen.has('claimed')) {
       seen.add('claimed');
-      addDispatch('⚡', agent, 'Working on task…', {taskId});
+      addDispatch('⚡', agent, 'Working on Task…', {taskId});
       const aidLower = (agent || '').toLowerCase();
       if (aidLower === 'jerry') firePacket(1, 'leo');
     }
@@ -2081,12 +2321,12 @@ function diffAndRoute(prev, current) {
       const isSimple = (task.complexity === 'simple');
       if (task.result) {
         seen.add('result_shown');
-        addDispatch('📝', agent, isSimple ? 'Done (auto-completed)' : 'Done → advisor review', {
+        addDispatch('📝', agent, isSimple ? 'Done (Auto-Completed)' : 'Done → Advisor Review', {
           taskId, result: task.result,
           promptTokens: agentTokens.execIn, completionTokens: agentTokens.execOut,
         });
       } else {
-        addDispatch('📤', agent, '🧠 Sent to advisor', {taskId});
+        addDispatch('📤', agent, '🧠 Sent to Advisor', {taskId});
       }
       if (!isSimple) firePacket(2, 'alic');
     }
@@ -2096,8 +2336,8 @@ function diffAndRoute(prev, current) {
       seen.add('critique');
       const critique = task.critique || {};
       const sugCount = (critique.suggestions || []).length;
-      const preview = sugCount ? sugCount + ' suggestion' + (sugCount > 1 ? 's' : '') : '';
-      addDispatch('⚠', critique.reviewer || 'advisor', 'Needs revision: ' + preview, {taskId});
+      const preview = sugCount ? sugCount + ' Suggestion' + (sugCount > 1 ? 's' : '') : '';
+      addDispatch('⚠', critique.reviewer || 'advisor', 'Needs Revision: ' + preview, {taskId});
     }
 
     // ── Completed → critique/review result → TOP, final result → BOTTOM ──
@@ -2110,12 +2350,12 @@ function diffAndRoute(prev, current) {
       if (critique) {
         const advisorId = critique.reviewer || 'advisor';
         if (critique.passed) {
-          addDispatch('✓', advisorId, 'Approved', {
+          addDispatch('✓', advisorId, 'Approved ✓', {
             taskId,
             promptTokens: agentTokens.reviewIn, completionTokens: agentTokens.reviewOut,
           });
         } else {
-          addDispatch('🧠', advisorId, 'Revised & completed', {taskId});
+          addDispatch('🧠', advisorId, 'Revised & Completed', {taskId});
         }
       } else {
         // Legacy: numeric scores
@@ -2131,9 +2371,9 @@ function diffAndRoute(prev, current) {
 
       // Simple task marker
       if (task.complexity === 'simple') {
-        addDispatch('⚡', agent, 'Simple task auto-completed', {taskId});
+        addDispatch('⚡', agent, 'Simple Task Auto-Completed', {taskId});
       } else {
-        addDispatch('✓', agent, 'Task completed', {taskId});
+        addDispatch('✓', agent, 'Task Completed', {taskId});
       }
 
       // ── FINAL RESULT → BOTTOM chatbox as assistant message ──
@@ -2165,7 +2405,7 @@ function diffAndRoute(prev, current) {
     if (newStatus === 'completed' && oldStatus === 'pending' && !seen.has('review') && task.result && !seen.has('leo_direct')) {
       seen.add('leo_direct');
       const agentTokens = findTokensForAgent(agent, task.claimed_at, task.completed_at);
-      addDispatch('📋', agent, 'Plan generated', {
+      addDispatch('📋', agent, 'Plan Generated', {
         taskId, result: task.result,
         promptTokens: agentTokens.execIn, completionTokens: agentTokens.execOut,
       });
@@ -2359,7 +2599,16 @@ async function loadAgents() {
   const agents = agentData?.agents || [];
   const scores = scoreData?.scores || {};
   const allSkills = skillsResp?.shared || [];
-  const chainAgents = chainData?.agents || {};
+  const sharedSkillNames = new Set(allSkills.map(s => s.name || s.file?.replace('.md','')));
+  const agentPrivateSkills = skillsResp?.agents || {};
+  const rawChainAgents = chainData?.agents || {};
+  // Map legacy chain IDs (planner/executor/reviewer) to current agent IDs
+  const CHAIN_ID_MAP = {planner:'leo', executor:'jerry', reviewer:'alic'};
+  const chainAgents = {};
+  for (const [cid, cdata] of Object.entries(rawChainAgents)) {
+    const mapped = CHAIN_ID_MAP[cid] || cid;
+    chainAgents[mapped] = cdata;
+  }
   const scoreHistory = historyData?.agents || {};
 
   if (!agents.length) { grid.innerHTML = '<div class="empty">No agents configured</div>'; return; }
@@ -2373,12 +2622,14 @@ async function loadAgents() {
     const isOnline = hb && hb.online;
 
     // ── Card surface: compact, consistent ──
+    const aM = agentMeta(a.id);
     html += '<div class="agent-card" onclick="editAgent(\'' + escHtml(a.id) + '\')">';
-    // Row 1: Name + status
+    // Row 1: Avatar + Name + status
     html += '<div class="agent-card-header">';
+    html += avatarHtml(aM, 24);
     html += '<span class="hb-dot ' + (isOnline ? 'online' : 'offline') + '" data-agent-id="' + escHtml(a.id) + '"></span>';
-    html += '<span class="agent-name">' + escHtml(a.id) + '</span>';
-    if (isOnline && hb.status === 'working') html += '<span class="agent-working">working</span>';
+    html += '<span class="agent-name">' + escHtml(capitalize(a.id)) + '</span>';
+    if (isOnline && hb.status === 'working') html += '<span class="agent-working">Working</span>';
     html += '<span style="flex:1"></span>';
     // API Key indicator (compact)
     const isKeySet = a.api_key_set;
@@ -2390,25 +2641,33 @@ async function loadAgents() {
     html += '<div class="agent-card-model">' + escHtml(a.model||'—')
       + ' <span class="agent-provider">' + escHtml(a.provider||'') + '</span></div>';
 
-    // Row 3: Skills tags
-    const skillsList = a.skills || [];
-    if (skillsList.length) {
+    // Row 3: Skills tags (private only — shared skills hidden)
+    const privateSkills = (a.skills || []).filter(s => !sharedSkillNames.has(s));
+    if (privateSkills.length) {
       html += '<div class="agent-card-skills">';
-      for (const s of skillsList) html += '<span class="skill-tag">' + escHtml(s) + '</span>';
+      for (const s of privateSkills) html += '<span class="skill-tag">' + escHtml(s) + '</span>';
       html += '</div>';
     }
 
-    // Row 4: Chain identity (compact, only if registered)
+    // Row 4: Chain identity + wallet + balance
     const chain = chainAgents[a.id];
-    if (chain && chain.registered) {
+    if (chain && (chain.registered || chain.pkp_address)) {
       const addr = chain.pkp_address || '';
       const shortAddr = addr ? addr.slice(0, 6) + '…' + addr.slice(-4) : '';
       const chainId = chain.erc8004_agent_id != null ? '#' + chain.erc8004_agent_id : '';
       const scanUrl = 'https://sepolia.basescan.org/address/' + addr;
-      html += '<div class="agent-card-chain">'
-        + '<span>⛓ On-chain ' + chainId + '</span> '
-        + '<a href="' + scanUrl + '" target="_blank" rel="noopener" onclick="event.stopPropagation()">' + escHtml(shortAddr) + '</a>'
-        + '</div>';
+      const balance = chain.usdc_balance != null ? parseFloat(chain.usdc_balance).toFixed(2) : null;
+      html += '<div class="agent-card-chain">';
+      html += '<div class="agent-card-chain-row">';
+      if (chain.registered) html += '<span>⛓ On-chain ' + chainId + '</span>';
+      if (addr) html += '<a href="' + scanUrl + '" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="' + escHtml(addr) + '">' + escHtml(shortAddr) + '</a>';
+      html += '</div>';
+      if (balance !== null) {
+        html += '<div class="agent-card-chain-row">';
+        html += '<span style="color:var(--fg3)">Balance</span> <span style="color:var(--green);font-family:var(--mono);font-weight:600">' + balance + ' USDC</span>';
+        html += '</div>';
+      }
+      html += '</div>';
     }
 
     // Row 5: Score bar (if has scores)
@@ -2443,9 +2702,11 @@ async function loadAgents() {
       let mhtml = '<div class="agent-modal-overlay" onclick="closeAgentEditor()">';
       mhtml += '<div class="agent-modal" onclick="event.stopPropagation()">';
 
-      // Header
+      // Header with avatar
+      const modalMeta = agentMeta(a.id);
       mhtml += '<div class="agent-modal-header">';
       mhtml += '<span class="agent-modal-title">'
+        + avatarHtml(modalMeta, 32) + ' '
         + '<span class="hb-dot ' + (isOnline ? 'online' : 'offline') + '"></span> '
         + escHtml(a.id) + '</span>';
       mhtml += '<button class="agent-modal-close" onclick="closeAgentEditor()">✕</button></div>';
@@ -2469,11 +2730,26 @@ async function loadAgents() {
       mhtml += '<div class="overview-section"><div class="overview-label">Configuration</div>';
       mhtml += '<div class="overview-value" style="font-size:12px">';
       mhtml += '<strong>Model:</strong> ' + escHtml(a.model||'—') + ' <span style="color:var(--fg3)">(' + escHtml(a.provider||'') + ')</span><br>';
-      mhtml += '<strong>Skills:</strong> ' + (a.skills||[]).map(s => '<span class="skill-tag">' + escHtml(s) + '</span>').join(' ');
+      const modalPrivateSkills = (a.skills||[]).filter(s => !sharedSkillNames.has(s));
+      mhtml += '<strong>Skills:</strong> ' + (modalPrivateSkills.length ? modalPrivateSkills : ['(shared only)']).map(s => '<span class="skill-tag">' + escHtml(s) + '</span>').join(' ');
       if (a.fallback_models && a.fallback_models.length) {
         mhtml += '<br><strong>Fallbacks:</strong> <span style="color:var(--fg3)">' + escHtml(a.fallback_models.join(', ')) + '</span>';
       }
       mhtml += '</div></div>';
+
+      // Wallet / Chain identity
+      const chainInfo = chainAgents[a.id];
+      if (chainInfo && (chainInfo.registered || chainInfo.pkp_address)) {
+        const wa = chainInfo.pkp_address || '';
+        const waBal = chainInfo.usdc_balance != null ? parseFloat(chainInfo.usdc_balance).toFixed(2) : '—';
+        const waScan = 'https://sepolia.basescan.org/address/' + wa;
+        const waChainId = chainInfo.erc8004_agent_id != null ? ' #' + chainInfo.erc8004_agent_id : '';
+        mhtml += '<div class="overview-section"><div class="overview-label">Wallet' + (chainInfo.registered ? ' ⛓' + waChainId : '') + '</div>';
+        mhtml += '<div class="overview-value" style="font-size:12px;font-family:var(--mono)">';
+        if (wa) mhtml += '<a href="' + waScan + '" target="_blank" rel="noopener" style="color:var(--accent2)">' + escHtml(wa) + '</a><br>';
+        mhtml += '<span style="color:var(--green);font-size:14px;font-weight:600">' + waBal + ' USDC</span>';
+        mhtml += '</div></div>';
+      }
 
       // Current Task
       const ct = a.current_task;
@@ -2520,7 +2796,14 @@ async function loadAgents() {
 
       // Basic settings
       mhtml += '<div class="field-row">';
-      mhtml += '<div class="field"><label>Model</label><input class="input" id="editModel" value="' + escHtml(a.model||'') + '"></div>';
+      mhtml += '<div class="field"><label>Model</label>'
+        + '<div style="display:flex;gap:4px;align-items:center">'
+        + '<input class="input" id="editModel" value="' + escHtml(a.model||'') + '" style="flex:1" list="modelSuggestions">'
+        + '<button class="btn" onclick="fetchModels()" style="padding:4px 10px;font-size:11px;white-space:nowrap" title="Fetch models from provider">Fetch</button>'
+        + '</div>'
+        + '<datalist id="modelSuggestions"></datalist>'
+        + '<div id="modelFetchStatus" style="font-size:10px;color:var(--fg3);margin-top:2px"></div>'
+        + '</div>';
       mhtml += '<div class="field"><label>Provider</label><select class="input" id="editProvider" onchange="syncProviderBaseUrl(\'editProvider\',\'editBaseUrl\')">';
       for (const p of ['flock','openai','minimax','ollama','anthropic','deepseek','custom']) {
         mhtml += '<option' + (p===(a.provider||'') ? ' selected' : '') + '>' + p + '</option>';
@@ -2613,6 +2896,46 @@ function syncProviderBaseUrl(selectId, urlInputId) {
   const defaultUrl = PROVIDER_BASE_URLS[provider] || '';
   urlInput.value = defaultUrl;
   urlInput.placeholder = defaultUrl || 'https://api.example.com/v1';
+}
+
+async function fetchModels() {
+  const provider = document.getElementById('editProvider').value;
+  const baseUrl = document.getElementById('editBaseUrl').value.trim();
+  const apiKey = document.getElementById('editApiKey').value.trim();
+  const status = document.getElementById('modelFetchStatus');
+  const datalist = document.getElementById('modelSuggestions');
+  const modelInput = document.getElementById('editModel');
+
+  status.textContent = 'Fetching models…';
+  status.style.color = 'var(--fg3)';
+  datalist.innerHTML = '';
+
+  let url = '/v1/models?provider=' + encodeURIComponent(provider);
+  if (baseUrl) url += '&base_url=' + encodeURIComponent(baseUrl);
+  if (apiKey) url += '&api_key=' + encodeURIComponent(apiKey);
+
+  try {
+    const res = await api(url);
+    if (res && res.models && res.models.length) {
+      for (const m of res.models) {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        datalist.appendChild(opt);
+      }
+      status.textContent = res.models.length + ' models found — click input to select';
+      status.style.color = 'var(--green)';
+      modelInput.focus();
+    } else if (res && res.error) {
+      status.textContent = res.error;
+      status.style.color = 'var(--red)';
+    } else {
+      status.textContent = 'No models returned';
+      status.style.color = 'var(--yellow)';
+    }
+  } catch (e) {
+    status.textContent = 'Fetch failed: ' + e.message;
+    status.style.color = 'var(--red)';
+  }
 }
 
 async function saveAgent(id) {
@@ -2996,6 +3319,97 @@ async function regenerateTeamSkill() {
   }
 }
 
+// ── Cleo Files ──────────────────────────────────────────────────────
+
+async function loadCfFiles() {
+  cfData = await api('/v1/cleo-files');
+  if (!cfData) return;
+  renderCfList();
+}
+
+function renderCfList() {
+  const body = document.getElementById('cfListBody');
+  const filter = (document.getElementById('cfSearch').value || '').toLowerCase();
+  let html = '';
+
+  // Global files
+  const global = (cfData.global || []).filter(f =>
+    !filter || f.name.toLowerCase().includes(filter));
+  if (global.length) {
+    html += '<div class="skill-group-title">Global</div>';
+    for (const f of global) {
+      const active = currentCfFile?.scope === 'global' && currentCfFile?.name === f.name;
+      html += '<div class="skill-item' + (active ? ' active' : '') + '" onclick="selectCfFile(\'global\',\'' + escHtml(f.name) + '\')">';
+      html += '<span>' + escHtml(f.name) + '</span>';
+      html += '<span class="skill-scope">' + formatBytes(f.size) + '</span></div>';
+    }
+  }
+
+  // Per-agent files
+  const agents = cfData.agents || {};
+  for (const aid of Object.keys(agents).sort()) {
+    const files = agents[aid].filter(f =>
+      !filter || f.name.toLowerCase().includes(filter));
+    if (!files.length) continue;
+    html += '<div class="skill-group-title">' + escHtml(aid) + '</div>';
+    for (const f of files) {
+      const scope = 'agent-' + aid;
+      const active = currentCfFile?.scope === scope && currentCfFile?.name === f.name;
+      html += '<div class="skill-item' + (active ? ' active' : '') + '" onclick="selectCfFile(\'' + escHtml(scope) + '\',\'' + escHtml(f.name) + '\')">';
+      html += '<span>' + escHtml(f.name) + '</span>';
+      html += '<span class="skill-scope">' + formatBytes(f.size) + '</span></div>';
+    }
+  }
+
+  if (!html) html = '<div class="empty">No files found</div>';
+  body.innerHTML = html;
+}
+
+function filterCfFiles() { renderCfList(); }
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  return (bytes / 1024).toFixed(1) + ' KB';
+}
+
+async function selectCfFile(scope, name) {
+  if (cfDirty && !confirm('You have unsaved changes. Discard?')) return;
+  cfDirty = false;
+
+  const data = await api('/v1/cleo-files/' + scope + '/' + name);
+  if (!data) { toast('Failed to load file', 'error'); return; }
+
+  currentCfFile = {scope, name, content: data.content};
+
+  const editor = document.getElementById('cfEditor');
+  let h = '<div class="skills-toolbar">';
+  h += '<span class="skill-filename">' + escHtml(data.path || name) + '</span>';
+  h += '<span style="font-size:11px;color:var(--fg3);margin-left:4px">(' + formatBytes(data.size) + ')</span>';
+  h += '<span style="flex:1"></span>';
+  h += '<button class="btn btn-green btn-sm" onclick="saveCfFile()">Save</button>';
+  h += '</div>';
+  h += '<textarea class="mono" id="cfContent" oninput="cfDirty=true">' + escHtml(data.content || '') + '</textarea>';
+  editor.innerHTML = h;
+
+  renderCfList(); // update active highlight
+}
+
+async function saveCfFile() {
+  if (!currentCfFile) return;
+  const content = document.getElementById('cfContent').value;
+  const res = await apiPut('/v1/cleo-files/' + currentCfFile.scope + '/' + currentCfFile.name, {content});
+  if (res && res.ok) {
+    toast('Saved ' + currentCfFile.name);
+    cfDirty = false;
+    currentCfFile.content = content;
+    loadCfFiles(); // refresh sizes
+  } else {
+    toast(res?.error || 'Save failed', 'error');
+  }
+}
+
+// ── Skills Create Dialog ────────────────────────────────────────────
+
 function showCreateDialog() {
   // Populate agent scope options
   const sel = document.getElementById('newSkillScope');
@@ -3148,13 +3562,24 @@ async function loadUsage() {
   document.getElementById('uCost').textContent = '$' + (agg.total_cost_usd||0).toFixed(4);
   document.getElementById('uRetries').textContent = fmtNum(agg.total_retries);
 
-  // By agent
-  const byAgent = data.by_agent || {};
+  // By agent — merge old role IDs into current agent names
+  const rawAgent = data.by_agent || {};
+  const USAGE_ID_MAP = {planner:'leo', executor:'jerry', reviewer:'alic'};
+  const byAgent = {};
+  for (const [id, s] of Object.entries(rawAgent)) {
+    const mapped = USAGE_ID_MAP[id] || id;
+    if (!byAgent[mapped]) byAgent[mapped] = {calls:0, tokens:0, cost:0};
+    byAgent[mapped].calls  += s.calls  || 0;
+    byAgent[mapped].tokens += s.tokens || 0;
+    byAgent[mapped].cost   += s.cost   || 0;
+  }
   const agentEl = document.getElementById('usageByAgent');
   if (Object.keys(byAgent).length) {
     let h = '<table class="usage-table"><thead><tr><th>Agent</th><th>Calls</th><th>Tokens</th><th>Cost</th></tr></thead><tbody>';
     for (const [id, s] of Object.entries(byAgent).sort((a,b)=>b[1].tokens-a[1].tokens)) {
-      h += '<tr><td style="font-weight:600">'+escHtml(id)+'</td><td class="mono">'+fmtNum(s.calls)+'</td><td class="mono">'+fmtNum(s.tokens)+'</td><td class="mono">$'+s.cost.toFixed(4)+'</td></tr>';
+      const am = agentMeta(id);
+      const ava = am.avatar ? '<img src="'+am.avatar+'" style="width:16px;height:16px;border-radius:50%;object-fit:cover;vertical-align:middle;margin-right:4px">' : '';
+      h += '<tr><td style="font-weight:600">'+ava+escHtml(capitalize(id))+'</td><td class="mono">'+fmtNum(s.calls)+'</td><td class="mono">'+fmtNum(s.tokens)+'</td><td class="mono">$'+s.cost.toFixed(4)+'</td></tr>';
     }
     h += '</tbody></table>';
     agentEl.innerHTML = h;
@@ -3307,7 +3732,7 @@ function showChannelConfig(name) {
     const label = field.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
     h += '<div class="field">';
     h += '<label>' + escHtml(label) + '</label>';
-    h += '<input class="input" type="password" id="ch_' + field + '" placeholder="Enter ' + label + '..." autocomplete="off">';
+    h += '<input class="input" type="password" id="ch_' + field + '" placeholder="Enter ' + label + '…" autocomplete="off">';
     h += '<div style="font-size:10px;color:var(--fg3);margin-top:2px">Leave empty to keep current value</div>';
     h += '</div>';
   }
@@ -3549,11 +3974,12 @@ async function initLogs() {
 
   sel.innerHTML = '<option value="">Select agent…</option>';
   for (const a of (data.agents||[])) {
-    sel.innerHTML += '<option value="' + escHtml(a.id) + '"' + (a.id===prev?' selected':'') + '>' + escHtml(a.id) + '</option>';
+    sel.innerHTML += '<option value="' + escHtml(a.id) + '"' + (a.id===prev?' selected':'') + '>' + escHtml(capitalize(a.id)) + '</option>';
   }
-  // Add "all" option for general logs
-  sel.innerHTML += '<option value="gateway"' + ('gateway'===prev?' selected':'') + '>gateway</option>';
-  sel.innerHTML += '<option value="orchestrator"' + ('orchestrator'===prev?' selected':'') + '>orchestrator</option>';
+  // Add system log options
+  sel.innerHTML += '<option value="exec"' + ('exec'===prev?' selected':'') + '>Exec</option>';
+  sel.innerHTML += '<option value="gateway"' + ('gateway'===prev?' selected':'') + '>Gateway</option>';
+  sel.innerHTML += '<option value="orchestrator"' + ('orchestrator'===prev?' selected':'') + '>Orchestrator</option>';
 
   if (sel.value) loadLogs();
 }
@@ -3623,41 +4049,66 @@ async function loadChain() {
   const data = await api('/v1/chain/status');
   if (!data) {
     document.getElementById('chainNetwork').textContent = 'Disabled';
+    document.getElementById('chainNetwork').className = 'stat-value';
     document.getElementById('chainLitNet').textContent = '—';
     document.getElementById('chainAgents').textContent = '—';
+    document.getElementById('chainAgents').className = 'stat-value';
     document.getElementById('chainX402').textContent = '—';
     document.getElementById('chainAgentsBody').innerHTML = '<tr><td colspan="6" class="empty">Chain not enabled</td></tr>';
     document.getElementById('chainTxList').textContent = 'Chain not enabled';
     return;
   }
 
+  // Agent name mapping (legacy chain IDs → current agent names)
+  const CHAIN_NAME_MAP = {planner:'Leo', executor:'Jerry', reviewer:'Alic', leo:'Leo', jerry:'Jerry', alic:'Alic'};
+
   // Stats cards
   document.getElementById('chainNetwork').textContent = data.network || '—';
   document.getElementById('chainLitNet').textContent = data.lit_network || '—';
   const agents = data.agents || {};
   const registered = Object.values(agents).filter(a => a.registered).length;
-  document.getElementById('chainAgents').textContent = registered + '/' + Object.keys(agents).length;
-  document.getElementById('chainX402').textContent = data.x402_enabled ? 'Enabled' : 'Disabled';
+  const total = Object.keys(agents).length;
+  document.getElementById('chainAgents').textContent = registered + '/' + total;
+  document.getElementById('chainAgents').className = 'stat-value ' + (registered === total && total > 0 ? 'green' : registered > 0 ? 'cyan' : '');
+  const x402El = document.getElementById('chainX402');
+  x402El.textContent = data.x402_enabled ? 'Enabled' : 'Disabled';
+  x402El.className = 'stat-value ' + (data.x402_enabled ? 'green' : '');
 
   // Agent table
+  const scanBase = 'https://sepolia.basescan.org/address/';
   const tbody = document.getElementById('chainAgentsBody');
-  if (Object.keys(agents).length === 0) {
+  if (total === 0) {
     tbody.innerHTML = '<tr><td colspan="6" class="empty">No agents initialized on-chain</td></tr>';
   } else {
     let html = '';
     for (const [aid, info] of Object.entries(agents)) {
-      const status = info.registered
-        ? '<span style="color:var(--green)">Registered</span>'
-        : '<span style="color:var(--fg3)">Not registered</span>';
+      const displayName = CHAIN_NAME_MAP[aid] || aid;
+      const statusDot = info.registered
+        ? '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);margin-right:6px"></span>'
+        : '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--fg3);margin-right:6px"></span>';
+      const statusText = info.registered ? 'Registered' : 'Not registered';
       const pkp = info.pkp_address
-        ? '<span style="font-family:var(--mono);font-size:11px">' + escHtml(info.pkp_address.slice(0,6)) + '...' + escHtml(info.pkp_address.slice(-4)) + '</span>'
-        : '—';
-      const chainId = info.erc8004_agent_id != null ? '#' + info.erc8004_agent_id : '—';
-      const bal = info.usdc_balance || '0.00';
-      const initBtn = info.registered
-        ? '<span style="color:var(--fg3);font-size:11px">initialized</span>'
-        : '<button class="btn btn-sm" onclick="chainInit(\'' + escHtml(aid) + '\')">Init</button>';
-      html += '<tr><td><strong>' + escHtml(aid) + '</strong></td><td>' + status + '</td><td>' + pkp + '</td><td>' + chainId + '</td><td>$' + escHtml(bal) + '</td><td>' + initBtn + '</td></tr>';
+        ? '<a href="' + scanBase + escHtml(info.pkp_address) + '" target="_blank" rel="noopener" '
+          + 'style="font-family:var(--mono);font-size:11px;color:var(--accent2);text-decoration:none" '
+          + 'title="' + escHtml(info.pkp_address) + '">'
+          + escHtml(info.pkp_address.slice(0,6)) + '…' + escHtml(info.pkp_address.slice(-4)) + '</a>'
+        : '<span style="color:var(--fg3)">—</span>';
+      const chainId = info.erc8004_agent_id != null
+        ? '<span style="font-family:var(--mono);color:var(--cyan)">#' + info.erc8004_agent_id + '</span>'
+        : '<span style="color:var(--fg3)">—</span>';
+      const bal = parseFloat(info.usdc_balance || 0).toFixed(2);
+      const balColor = parseFloat(bal) > 0 ? 'var(--green)' : 'var(--fg3)';
+      const action = info.registered
+        ? '<span style="color:var(--fg3);font-size:11px">✓ ready</span>'
+        : '<button class="btn btn-sm" onclick="chainInit(\'' + escHtml(aid) + '\')">Initialize</button>';
+      html += '<tr>'
+        + '<td><strong style="color:var(--fg)">' + escHtml(displayName) + '</strong>'
+        + ' <span style="color:var(--fg3);font-size:11px">(' + escHtml(capitalize(aid)) + ')</span></td>'
+        + '<td>' + statusDot + statusText + '</td>'
+        + '<td>' + pkp + '</td>'
+        + '<td style="text-align:center">' + chainId + '</td>'
+        + '<td style="font-family:var(--mono);color:' + balColor + '">' + bal + ' <span style="font-size:10px;color:var(--fg3)">USDC</span></td>'
+        + '<td style="text-align:right">' + action + '</td></tr>';
     }
     tbody.innerHTML = html;
   }
@@ -3666,18 +4117,32 @@ async function loadChain() {
   const txList = document.getElementById('chainTxList');
   const txs = data.recent_transactions || [];
   if (txs.length === 0) {
-    txList.textContent = 'No transactions yet';
+    txList.innerHTML = '<div style="text-align:center;color:var(--fg3);padding:20px">No transactions yet</div>';
   } else {
-    let html = '';
-    for (const tx of txs.slice(-10).reverse()) {
-      const ts = tx.timestamp ? new Date(tx.timestamp * 1000).toLocaleString() : '—';
-      const hash = tx.tx_hash ? tx.tx_hash.slice(0, 10) + '...' : '—';
-      html += '<div style="padding:3px 0;border-bottom:1px solid var(--bg3)">'
-            + '<span style="color:var(--accent2)">' + escHtml(tx.action || '?') + '</span>'
-            + ' <span style="color:var(--fg3)">' + escHtml(tx.agent_id || '') + '</span>'
-            + ' <span>' + hash + '</span>'
-            + ' <span style="color:var(--fg3);float:right">' + ts + '</span></div>';
+    let html = '<div style="display:grid;grid-template-columns:auto 1fr auto auto;gap:0;font-size:12px">';
+    // Header
+    html += '<div style="padding:6px 8px;color:var(--fg3);font-size:11px;font-weight:600;border-bottom:1px solid var(--bg3)">Action</div>'
+          + '<div style="padding:6px 8px;color:var(--fg3);font-size:11px;font-weight:600;border-bottom:1px solid var(--bg3)">Agent</div>'
+          + '<div style="padding:6px 8px;color:var(--fg3);font-size:11px;font-weight:600;border-bottom:1px solid var(--bg3)">Tx Hash</div>'
+          + '<div style="padding:6px 8px;color:var(--fg3);font-size:11px;font-weight:600;border-bottom:1px solid var(--bg3);text-align:right">Time</div>';
+    for (const tx of txs.slice(-12).reverse()) {
+      const ts = tx.timestamp ? new Date(tx.timestamp * 1000).toLocaleString(undefined, {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '—';
+      const rawHash = tx.tx_hash || '';
+      const isError = rawHash.startsWith('0x_error') || rawHash.startsWith('0x_err');
+      const hashDisplay = rawHash ? rawHash.slice(0, 10) + '…' : '—';
+      const hashEl = !isError && rawHash.length === 66
+        ? '<a href="https://sepolia.basescan.org/tx/' + escHtml(rawHash) + '" target="_blank" rel="noopener" '
+          + 'style="font-family:var(--mono);color:var(--accent2);text-decoration:none">' + hashDisplay + '</a>'
+        : '<span style="font-family:var(--mono);color:' + (isError ? 'var(--red)' : 'var(--fg3)') + '">' + hashDisplay + '</span>';
+      const agentName = CHAIN_NAME_MAP[tx.agent_id] || tx.agent_id || '';
+      const rowBorder = 'border-bottom:1px solid var(--bg3)';
+      html += '<div style="padding:6px 8px;' + rowBorder + '">'
+            + '<span style="color:var(--accent2)">' + escHtml(tx.action || '?') + '</span></div>'
+            + '<div style="padding:6px 8px;' + rowBorder + ';color:var(--fg)">' + escHtml(agentName) + '</div>'
+            + '<div style="padding:6px 8px;' + rowBorder + '">' + hashEl + '</div>'
+            + '<div style="padding:6px 8px;' + rowBorder + ';text-align:right;color:var(--fg3)">' + ts + '</div>';
     }
+    html += '</div>';
     txList.innerHTML = html;
   }
 }
@@ -3731,7 +4196,7 @@ async function loadMemory() {
     let html = '';
     for (const [aid, info] of Object.entries(agents)) {
       html += '<tr>';
-      html += '<td><strong>' + escHtml(aid) + '</strong></td>';
+      html += '<td><strong>' + escHtml(capitalize(aid)) + '</strong></td>';
       html += '<td>' + (info.episodes || 0) + '</td>';
       html += '<td>' + (info.cases || 0) + '</td>';
       html += '<td>' + (info.patterns || 0) + '</td>';

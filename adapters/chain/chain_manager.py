@@ -89,6 +89,7 @@ class ChainManager:
                 operator_key=os.environ.get(
                     chain_cfg.get("operator_key_env", "CHAIN_PRIVATE_KEY"), ""
                 ),
+                network=self.network,
             )
         return self._erc8004
 
@@ -171,10 +172,8 @@ class ChainManager:
                 tx_hash, timeout=30
             )
             if receipt.get("status") == 1:
-                # Parse agentId from AgentRegistered event
-                chain_agent_id = receipt.get("logs", [{}])[0].get("topics", [None, None])[1]
-                if chain_agent_id:
-                    chain_agent_id = int(chain_agent_id.hex(), 16)
+                # Parse agentId from Registered (official) or AgentRegistered (custom) event
+                chain_agent_id = self.erc8004.parse_registered_event(receipt)
         except Exception as e:
             logger.warning("[chain] Could not get agentId from receipt: %s", e)
 
@@ -184,6 +183,8 @@ class ChainManager:
             "registered": True,
             "erc8004_agent_id": chain_agent_id,
             "register_tx": tx_hash,
+            "network": self.network,
+            "erc8004_contract": self.erc8004.identity_addr,
         })
 
         self.state.add_transaction({
@@ -246,7 +247,7 @@ class ChainManager:
 
         if divergence > 15 and chain_rep.get("synced"):
             logger.warning(
-                "[chain] Reputation divergence for %s: local=%.1f chain=%d (delta=%.1f)",
+                "[chain] Reputation divergence for %s: local=%.1f chain=%.1f (delta=%.1f)",
                 agent_id, local_score, chain_score, divergence)
 
         return result
@@ -260,11 +261,15 @@ class ChainManager:
 
         for agent_id, agent_data in state.get("agents", {}).items():
             pkp_addr = agent_data.get("pkp_eth_address", "")
+            wallet = agent_data.get("wallet", pkp_addr)
             agents_status[agent_id] = {
                 "registered": agent_data.get("registered", False),
                 "pkp_address": pkp_addr,
+                "wallet": wallet,
                 "erc8004_agent_id": agent_data.get("erc8004_agent_id"),
+                "network": agent_data.get("network", self.network),
                 "usdc_balance": agent_data.get("usdc_balance_cache", "0.00"),
+                "register_tx": agent_data.get("register_tx", ""),
             }
 
         return {

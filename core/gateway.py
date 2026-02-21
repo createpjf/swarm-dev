@@ -177,6 +177,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._handle_doctor()
         elif path == "/v1/tools":
             self._handle_tools()
+        elif path == "/v1/models":
+            self._handle_models()
         elif path.startswith("/v1/task/"):
             task_id = path[len("/v1/task/"):]
             self._handle_get_task(task_id)
@@ -194,6 +196,16 @@ class _Handler(BaseHTTPRequestHandler):
         elif path.startswith("/v1/skills/"):
             name = path[len("/v1/skills/"):]
             self._handle_get_skill(name)
+        # ── Cleo Files routes ──
+        elif path == "/v1/cleo-files":
+            self._handle_list_cleo_files()
+        elif path.startswith("/v1/cleo-files/"):
+            rest = path[len("/v1/cleo-files/"):]
+            parts = rest.split("/", 1)
+            if len(parts) == 2:
+                self._handle_get_cleo_file(parts[0], parts[1])
+            else:
+                self._json_response(400, {"error": "Expected /v1/cleo-files/:scope/:filename"})
         # ── Chain routes ──
         elif path == "/v1/chain/status":
             self._handle_chain_status()
@@ -246,6 +258,11 @@ class _Handler(BaseHTTPRequestHandler):
             agent_id = path[len("/v1/logs/"):]
             query = urllib.parse.parse_qs(parsed.query)
             self._handle_get_logs(agent_id, query)
+        # ── File download (agent output files) ──
+        elif path == "/v1/file":
+            query = urllib.parse.parse_qs(parsed.query)
+            file_path = query.get("path", [""])[0]
+            self._handle_serve_file(file_path)
         else:
             self._json_response(404, {"error": "Not found"})
 
@@ -339,6 +356,13 @@ class _Handler(BaseHTTPRequestHandler):
         elif path.startswith("/v1/skills/"):
             name = path[len("/v1/skills/"):]
             self._handle_update_skill(name)
+        elif path.startswith("/v1/cleo-files/"):
+            rest = path[len("/v1/cleo-files/"):]
+            parts = rest.split("/", 1)
+            if len(parts) == 2:
+                self._handle_update_cleo_file(parts[0], parts[1])
+            else:
+                self._json_response(400, {"error": "Expected /v1/cleo-files/:scope/:filename"})
         elif path.startswith("/v1/channels/"):
             channel_name = path[len("/v1/channels/"):]
             self._handle_update_channel(channel_name)
@@ -612,16 +636,12 @@ class _Handler(BaseHTTPRequestHandler):
             logger.warning("Failed to archive task history: %s", e)
 
         board.clear(force=True)
-        # Clean old state
-        for fp in [".context_bus.json"]:
-            if os.path.exists(fp):
-                os.remove(fp)
-        import glob
-        for fp in glob.glob(".mailboxes/*.jsonl"):
-            os.remove(fp)
+        # NOTE: We no longer destroy .context_bus.json or .mailboxes
+        # to preserve cross-round context for session continuity.
+        # ContextBus TTL mechanism handles natural expiry of stale entries.
 
         orch = Orchestrator()
-        task_id = orch.submit(description)
+        task_id = orch.submit(description, required_role="planner")
 
         # Run agents in background thread
         def _run():
@@ -682,6 +702,50 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.write(data)
         except Exception:
             self._json_response(500, {"error": "failed to serve avatar"})
+
+    def _handle_serve_file(self, file_path: str):
+        """Serve a file produced by agents (PDF, images, data files, etc.)."""
+        if not file_path:
+            self._json_response(400, {"error": "Missing 'path' parameter"})
+            return
+        # Security: only allow /tmp/ and workspace/ paths
+        real = os.path.realpath(file_path)
+        allowed_prefixes = ["/tmp/", os.path.realpath("workspace") + "/"]
+        if not any(real.startswith(p) for p in allowed_prefixes):
+            self._json_response(403, {"error": "Access denied: only /tmp and workspace files"})
+            return
+        if not os.path.isfile(real):
+            self._json_response(404, {"error": f"File not found: {file_path}"})
+            return
+        # Determine content type
+        ext = os.path.splitext(real)[1].lower()
+        content_types = {
+            ".pdf": "application/pdf",
+            ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+            ".gif": "image/gif", ".svg": "image/svg+xml", ".webp": "image/webp",
+            ".csv": "text/csv", ".json": "application/json",
+            ".txt": "text/plain", ".md": "text/plain",
+            ".html": "text/html",
+            ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        }
+        ctype = content_types.get(ext, "application/octet-stream")
+        try:
+            with open(real, "rb") as f:
+                data = f.read()
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            fname = os.path.basename(real)
+            # Inline display for images and PDFs, download for others
+            if ext in (".pdf", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".html"):
+                self.send_header("Content-Disposition", f"inline; filename=\"{fname}\"")
+            else:
+                self.send_header("Content-Disposition", f"attachment; filename=\"{fname}\"")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(data)
+        except Exception as e:
+            self._json_response(500, {"error": f"Failed to serve file: {e}"})
 
     # ── Usage stats ──
     def _handle_usage(self):
@@ -798,6 +862,100 @@ class _Handler(BaseHTTPRequestHandler):
             })
         except Exception as e:
             self._json_response(500, {"error": f"Failed to list tools: {e}"})
+
+    def _handle_models(self):
+        """Fetch available models from a provider's /v1/models endpoint.
+        Query params: provider, base_url, api_key (optional overrides).
+        """
+        import urllib.parse as up
+        qs = up.parse_qs(up.urlparse(self.path).query)
+        provider = (qs.get("provider", [""])[0] or "").strip()
+        base_url = (qs.get("base_url", [""])[0] or "").strip()
+        api_key  = (qs.get("api_key", [""])[0] or "").strip()
+
+        # Resolve base URL from provider name
+        provider_urls = {
+            "flock":    "https://api.flock.io/v1",
+            "openai":   "https://api.openai.com/v1",
+            "minimax":  "https://api.minimax.io/v1",
+            "ollama":   "http://localhost:11434/v1",
+            "deepseek": "https://api.deepseek.com/v1",
+        }
+        if not base_url and provider:
+            base_url = provider_urls.get(provider, "")
+        if not base_url:
+            self._json_response(400, {"error": "Missing provider or base_url"})
+            return
+
+        # Resolve API key from env
+        if not api_key:
+            key_env_map = {
+                "flock": "FLOCK_API_KEY",
+                "openai": "OPENAI_API_KEY",
+                "minimax": "MINIMAX_API_KEY",
+                "deepseek": "DEEPSEEK_API_KEY",
+            }
+            env_name = key_env_map.get(provider, "FLOCK_API_KEY")
+            api_key = os.environ.get(env_name, "")
+
+        # Known model lists for providers without /v1/models endpoint
+        _KNOWN_MODELS = {
+            "minimax": [
+                "MiniMax-M2.5", "MiniMax-M2.1", "MiniMax-M2",
+                "MiniMax-M2.5-highspeed", "MiniMax-M2.1-highspeed",
+            ],
+            "deepseek": [
+                "deepseek-chat", "deepseek-reasoner",
+                "deepseek-v3.2", "deepseek-v3", "deepseek-r1",
+            ],
+            "anthropic": [
+                "claude-sonnet-4-5-20250929", "claude-haiku-4-5-20251001",
+                "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022",
+            ],
+        }
+
+        # Try API first, fall back to known list
+        models = []
+        api_error = None
+        from_api = False
+        if api_key:
+            try:
+                import httpx
+                url = f"{base_url.rstrip('/')}/models"
+                with httpx.Client(timeout=10.0) as client:
+                    resp = client.get(url, headers={
+                        "Authorization": f"Bearer {api_key}",
+                    })
+                    resp.raise_for_status()
+                    data = resp.json()
+                for m in data.get("data", []):
+                    models.append({
+                        "id": m.get("id", ""),
+                        "owned_by": m.get("owned_by", ""),
+                    })
+                if models:
+                    from_api = True
+            except Exception as e:
+                api_error = str(e)
+
+        # Fallback to known models
+        if not models and provider in _KNOWN_MODELS:
+            models = [{"id": m, "owned_by": provider}
+                      for m in _KNOWN_MODELS[provider]]
+
+        if models:
+            models.sort(key=lambda x: x["id"])
+            self._json_response(200, {
+                "models": models, "provider": provider,
+                "source": "api" if from_api else "known_list",
+            })
+        elif api_error:
+            self._json_response(502, {
+                "error": f"Failed to fetch models: {api_error}"})
+        else:
+            self._json_response(200, {
+                "models": [], "provider": provider,
+                "error": "No API key set and no known model list for this provider"})
 
     # ══════════════════════════════════════════════════════════════════════════
     #  NEW HANDLERS — Agent Management
@@ -1229,6 +1387,155 @@ class _Handler(BaseHTTPRequestHandler):
                 })
         except Exception as e:
             self._json_response(500, {"error": str(e)})
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  Cleo Files (AGENTS.md, USER.md, TOOLS.md, HEARTBEAT.md, MEMORY.md etc.)
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _handle_list_cleo_files(self):
+        """List all Cleo config/template files grouped by scope."""
+        import yaml
+        result = {"global": [], "agents": {}}
+
+        # Global files in docs/shared/
+        shared_dir = os.path.join("docs", "shared")
+        if os.path.isdir(shared_dir):
+            for f in sorted(os.listdir(shared_dir)):
+                fp = os.path.join(shared_dir, f)
+                if os.path.isfile(fp):
+                    result["global"].append({
+                        "name": f,
+                        "scope": "global",
+                        "path": fp,
+                        "size": os.path.getsize(fp),
+                    })
+
+        # Per-agent files: scan skills/agents/{id}/ and memory/agents/{id}/
+        config_path = os.path.join("config", "agents.yaml")
+        agent_ids = []
+        try:
+            with open(config_path, "r") as fh:
+                cfg = yaml.safe_load(fh) or {}
+            agent_ids = [a["id"] for a in cfg.get("agents", []) if "id" in a]
+        except Exception:
+            # Fallback: scan directories
+            skills_agents = os.path.join("skills", "agents")
+            if os.path.isdir(skills_agents):
+                agent_ids = [d for d in os.listdir(skills_agents)
+                             if os.path.isdir(os.path.join(skills_agents, d))]
+
+        for aid in sorted(set(agent_ids)):
+            files = []
+            seen = set()
+            # Skills agent dir (soul.md, TOOLS.md, HEARTBEAT.md)
+            sa_dir = os.path.join("skills", "agents", aid)
+            if os.path.isdir(sa_dir):
+                for f in sorted(os.listdir(sa_dir)):
+                    fp = os.path.join(sa_dir, f)
+                    if os.path.isfile(fp):
+                        files.append({
+                            "name": f,
+                            "scope": f"agent-{aid}",
+                            "path": fp,
+                            "size": os.path.getsize(fp),
+                            "agent_id": aid,
+                        })
+                        seen.add(f)
+            # Memory agent dir (MEMORY.md, short_term.jsonl)
+            ma_dir = os.path.join("memory", "agents", aid)
+            if os.path.isdir(ma_dir):
+                for f in sorted(os.listdir(ma_dir)):
+                    fp = os.path.join(ma_dir, f)
+                    if os.path.isfile(fp) and f not in seen:
+                        files.append({
+                            "name": f,
+                            "scope": f"agent-{aid}",
+                            "path": fp,
+                            "size": os.path.getsize(fp),
+                            "agent_id": aid,
+                        })
+            result["agents"][aid] = files
+
+        self._json_response(200, result)
+
+    def _handle_get_cleo_file(self, scope: str, filename: str):
+        """Read a Cleo config file by scope and filename."""
+        # Basic validation (allow dots for file extensions)
+        if ".." in filename or "/" in filename or "\\" in filename:
+            self._json_response(400, {"error": f"Invalid filename: {filename}"})
+            return
+
+        path = self._resolve_cleo_path(scope, filename)
+        if not path:
+            self._json_response(404, {"error": f"File not found: {scope}/{filename}"})
+            return
+
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+            self._json_response(200, {
+                "name": filename,
+                "scope": scope,
+                "content": content,
+                "size": len(content),
+                "path": path,
+            })
+        except OSError as e:
+            self._json_response(500, {"error": str(e)})
+
+    def _handle_update_cleo_file(self, scope: str, filename: str):
+        """Update a Cleo config file."""
+        if ".." in filename or "/" in filename or "\\" in filename:
+            self._json_response(400, {"error": f"Invalid filename: {filename}"})
+            return
+
+        body = self._read_body()
+        content = body.get("content", "")
+        if content is None:
+            self._json_response(400, {"error": "Missing 'content'"})
+            return
+
+        path = self._resolve_cleo_path(scope, filename)
+        if not path:
+            # Try to create in the default location
+            if scope == "global":
+                path = os.path.join("docs", "shared", filename)
+            elif scope.startswith("agent-"):
+                aid = scope[len("agent-"):]
+                path = os.path.join("skills", "agents", aid, filename)
+            else:
+                self._json_response(400, {"error": f"Unknown scope: {scope}"})
+                return
+
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+            self._json_response(200, {
+                "ok": True,
+                "path": path,
+                "size": len(content),
+            })
+        except OSError as e:
+            self._json_response(500, {"error": str(e)})
+
+    def _resolve_cleo_path(self, scope: str, filename: str) -> str | None:
+        """Resolve scope + filename to an actual file path."""
+        if scope == "global":
+            p = os.path.join("docs", "shared", filename)
+            return p if os.path.exists(p) else None
+        elif scope.startswith("agent-"):
+            aid = scope[len("agent-"):]
+            # Check skills dir first, then memory dir
+            for base in [
+                os.path.join("skills", "agents", aid),
+                os.path.join("memory", "agents", aid),
+            ]:
+                p = os.path.join(base, filename)
+                if os.path.exists(p):
+                    return p
+            return None
+        return None
 
     # ══════════════════════════════════════════════════════════════════════════
     #  NEW HANDLERS — Gateway Config
@@ -2312,7 +2619,8 @@ def check_gateway(port: int = 0) -> tuple[bool, str]:
     """Check if the gateway is reachable. Returns (ok, message)."""
     import httpx
 
-    port = port or int(os.environ.get("SWARM_GATEWAY_PORT", str(DEFAULT_PORT)))
+    port = port or int(os.environ.get("CLEO_GATEWAY_PORT",
+                       os.environ.get("SWARM_GATEWAY_PORT", str(DEFAULT_PORT))))
     url = f"http://127.0.0.1:{port}/health"
 
     try:

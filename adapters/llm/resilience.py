@@ -46,9 +46,19 @@ def classify_error(exc: Exception) -> str:
             return ErrorClass.NO_RETRY  # model not found
         if status == 429:
             return ErrorClass.RETRY
+        if status == 400:
+            # 400 can be transient (payload edge case, token count spike)
+            # Retry once before failing over — log body for diagnosis
+            logger.warning("[resilience] HTTP 400 — will retry: %s", exc_str[:200])
+            return ErrorClass.RETRY
         if 500 <= status < 600:
             return ErrorClass.RETRY
-        return ErrorClass.FATAL  # other 4xx
+        return ErrorClass.FATAL  # other 4xx (402, 405-428, etc.)
+
+    # RuntimeError wrapping HTTP status (from our adapters)
+    if "api error (400)" in exc_str:
+        logger.warning("[resilience] Wrapped 400 error — will retry: %s", exc_str[:200])
+        return ErrorClass.RETRY
 
     # Timeout / connection errors
     if any(kw in exc_str for kw in [
@@ -195,15 +205,26 @@ class ResilientLLM:
             while retries <= self.max_retries:
                 try:
                     start_ts = time.time()
-                    result = await self.adapter.chat(messages, current_model)
+
+                    # Prefer chat_with_usage() to capture token counts
+                    usage_info = {}
+                    if hasattr(self.adapter, 'chat_with_usage'):
+                        result, usage_info = await self.adapter.chat_with_usage(
+                            messages, current_model)
+                    else:
+                        result = await self.adapter.chat(messages, current_model)
+
                     latency = (time.time() - start_ts) * 1000
 
                     # Success!
                     circuit.record_success()
 
-                    # Track usage
+                    # Track usage (with real token counts from API)
                     record = UsageRecord(
                         model=current_model,
+                        prompt_tokens=usage_info.get("prompt_tokens", 0),
+                        completion_tokens=usage_info.get("completion_tokens", 0),
+                        total_tokens=usage_info.get("total_tokens", 0),
                         latency_ms=latency,
                         success=True,
                         retries=total_retries,
@@ -273,29 +294,56 @@ class ResilientLLM:
         Streaming chat with same resilience logic.
         Yields content chunks as they arrive.
         Falls back to non-streaming if adapter doesn't support it.
+        Tracks estimated token usage after streaming completes.
         """
         models_to_try = [model] + [m for m in self.fallback_models if m != model]
 
         last_exc = None
+        total_retries = 0
         for model_idx, current_model in enumerate(models_to_try):
             circuit = self._get_circuit(current_model)
             if not circuit.is_available():
                 continue
 
+            is_failover = (model_idx > 0)
             retries = 0
             while retries <= self.max_retries:
                 try:
+                    start_ts = time.time()
+                    output_chars = 0
+
                     if hasattr(self.adapter, 'chat_stream'):
                         async for chunk in self.adapter.chat_stream(
                             messages, current_model
                         ):
+                            output_chars += len(chunk)
                             yield chunk
                     else:
                         # Fallback: non-streaming, yield whole result
                         result = await self.adapter.chat(messages, current_model)
+                        output_chars = len(result)
                         yield result
 
+                    latency = (time.time() - start_ts) * 1000
                     circuit.record_success()
+
+                    # Estimate tokens from char counts (~4 chars/token)
+                    prompt_chars = sum(
+                        len(m.get("content", "")) for m in messages)
+                    est_prompt = max(1, prompt_chars // 4)
+                    est_completion = max(1, output_chars // 4)
+
+                    record = UsageRecord(
+                        model=current_model,
+                        prompt_tokens=est_prompt,
+                        completion_tokens=est_completion,
+                        total_tokens=est_prompt + est_completion,
+                        latency_ms=latency,
+                        success=True,
+                        retries=total_retries,
+                        failover_used=is_failover,
+                    )
+                    self.usage_log.append(record)
                     return
 
                 except Exception as exc:
@@ -309,6 +357,7 @@ class ResilientLLM:
                     if error_class == ErrorClass.RETRY:
                         circuit.record_failure()
                         retries += 1
+                        total_retries += 1
                         if retries > self.max_retries:
                             break
                         delay = min(

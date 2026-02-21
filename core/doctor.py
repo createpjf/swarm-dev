@@ -157,6 +157,7 @@ def check_llm_reachable() -> tuple[bool, str, str]:
         "flock": ("https://api.flock.io/v1", "FLOCK_API_KEY"),
         "openai": ("https://api.openai.com/v1", "OPENAI_API_KEY"),
         "ollama": ("http://localhost:11434", None),
+        "minimax": ("https://api.minimax.io/v1", "MINIMAX_API_KEY"),
     }
 
     base_url, key_env = url_map.get(provider, ("", None))
@@ -164,7 +165,7 @@ def check_llm_reachable() -> tuple[bool, str, str]:
         return False, "LLM", f"Unknown provider: {provider}"
 
     # Check custom base URL from env
-    url_env_map = {"flock": "FLOCK_BASE_URL", "openai": "OPENAI_BASE_URL", "ollama": "OLLAMA_URL"}
+    url_env_map = {"flock": "FLOCK_BASE_URL", "openai": "OPENAI_BASE_URL", "ollama": "OLLAMA_URL", "minimax": "MINIMAX_BASE_URL"}
     custom_url = os.environ.get(url_env_map.get(provider, ""), "")
     if custom_url:
         base_url = custom_url
@@ -183,11 +184,18 @@ def check_llm_reachable() -> tuple[bool, str, str]:
 
         if provider == "ollama":
             resp = httpx.get(f"{base_url}/api/tags", timeout=5.0)
+        elif provider == "minimax":
+            # Minimax doesn't expose /models — verify key via lightweight POST
+            resp = httpx.post(f"{base_url}/chat/completions", headers=headers,
+                              json={"model": "minimax-m2.5", "messages": [{"role": "user", "content": "ping"}],
+                                    "max_tokens": 1}, timeout=10.0)
         else:
             resp = httpx.get(f"{base_url}/models", headers=headers, timeout=10.0)
 
         if resp.status_code == 200:
-            if provider == "ollama":
+            if provider == "minimax":
+                return True, "LLM", f"{base_url} — Minimax API reachable"
+            elif provider == "ollama":
                 models = resp.json().get("models", [])
             else:
                 models = resp.json().get("data", [])
@@ -317,8 +325,13 @@ def check_chain() -> tuple[bool, str, str]:
     if not enabled:
         return True, "Chain", "Disabled"
 
-    parts = []
+    network = chain_cfg.get("network", "base-sepolia")
+    parts = [f"net={network}"]
     warnings = []
+
+    # Official ERC-8004 contract addresses for validation
+    OFFICIAL_IDENTITY = "0x8004A169FB4a3325136EB29fA0ceB6D2e539a432"
+    OFFICIAL_REPUTATION = "0x8004BAa17C55a88189AE136b182e5fdA19dE9b63"
 
     # Check web3
     try:
@@ -331,16 +344,16 @@ def check_chain() -> tuple[bool, str, str]:
     rpc_env = chain_cfg.get("rpc_url_env", "RPC_URL")
     rpc = os.environ.get(rpc_env, "") or os.environ.get("BASE_RPC_URL", "")
     if rpc:
-        parts.append(f"RPC ok")
+        parts.append("RPC ok")
     else:
-        warnings.append(f"RPC_URL not set")
+        warnings.append("RPC_URL not set")
 
     # Check operator key
     key_env = chain_cfg.get("operator_key_env", "CHAIN_PRIVATE_KEY")
     if os.environ.get(key_env):
         parts.append("Key ok")
     else:
-        warnings.append("No operator key")
+        warnings.append("No operator key (read-only mode)")
 
     # Check Lit SDK
     try:
@@ -350,14 +363,24 @@ def check_chain() -> tuple[bool, str, str]:
     except ImportError:
         warnings.append("lit-python-sdk not installed")
 
-    # Check ERC-8004 registries
+    # Check ERC-8004 registries + validate addresses for mainnet
     erc_cfg = chain_cfg.get("erc8004", {})
     id_reg = os.environ.get(erc_cfg.get("identity_registry_env", ""), "")
     rep_reg = os.environ.get(erc_cfg.get("reputation_registry_env", ""), "")
     if id_reg:
-        parts.append("Identity ok")
+        if network == "base" and id_reg.lower() != OFFICIAL_IDENTITY.lower():
+            warnings.append(f"Identity addr mismatch for mainnet (got {id_reg[:10]}...)")
+        else:
+            parts.append("Identity ok")
+    else:
+        warnings.append("ERC8004_IDENTITY_REGISTRY not set")
     if rep_reg:
-        parts.append("Reputation ok")
+        if network == "base" and rep_reg.lower() != OFFICIAL_REPUTATION.lower():
+            warnings.append(f"Reputation addr mismatch for mainnet (got {rep_reg[:10]}...)")
+        else:
+            parts.append("Reputation ok")
+    else:
+        warnings.append("ERC8004_REPUTATION_REGISTRY not set")
 
     # Check chain_state for registered agents
     try:

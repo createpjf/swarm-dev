@@ -20,8 +20,8 @@ from enum import Enum
 from typing import Optional
 
 # Timeout thresholds (seconds)
-CLAIMED_TIMEOUT = 300   # 5 min — agent crashed if no progress
-REVIEW_TIMEOUT  = 180   # 3 min — reviewer crashed
+CLAIMED_TIMEOUT = 600   # 10 min — agent crashed if no progress
+REVIEW_TIMEOUT  = 300   # 5 min — reviewer crashed
 
 # Phase 8: loud warning on missing filelock
 try:
