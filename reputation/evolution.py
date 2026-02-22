@@ -112,8 +112,11 @@ class EvolutionEngine:
         history  = self.board.history(agent_id, last=50)
         errors   = [t for t in history
                      if any("failed" in f for f in (t.evolution_flags or []))]
+        # Match actual flags written by TaskBoard: "failed:{reason}",
+        # "timeout_recovered:{state}". The old "review_failed" was never written.
         reworks  = [t for t in history
-                     if "review_failed" in (t.evolution_flags or [])]
+                     if any(f.startswith("failed:") or f.startswith("timeout_recovered:")
+                            for f in (t.evolution_flags or []))]
         score    = self.scorer.get(agent_id)
         all_dims = self.scorer.get_all(agent_id)
         trend    = self.scorer.trend(agent_id)
@@ -157,8 +160,10 @@ class EvolutionEngine:
         if path == "prompt":
             plan.prompt_upgrade = self._generate_prompt_upgrade(agent_id, error_patterns)
         elif path == "model":
+            # Read fallback_models from agent config instead of hardcoding
+            new_model = self._pick_fallback_model(agent_id)
             plan.model_swap = {
-                "new_model": "flock/qwen3-235b-thinking",
+                "new_model": new_model,
                 "reason":    root,
             }
         elif path == "role":
@@ -215,14 +220,84 @@ class EvolutionEngine:
             "changelog": changelog,
         }
 
+    MAX_OVERRIDES = 3  # Maximum number of override blocks per agent
+
     def _apply_prompt_upgrade(self, agent_id: str, upgrade: dict):
-        """Append new constraints to the agent's skill document."""
+        """Write constraints to the agent's skill override document.
+
+        Protections:
+          - Dedup: skip if the same additions text already exists
+          - Cap: keep at most MAX_OVERRIDES blocks; drop oldest when exceeded
+          - Cleanup: call clear_overrides() when agent reputation recovers
+        """
         skill_path = f"skills/agent_overrides/{agent_id}.md"
         os.makedirs(os.path.dirname(skill_path), exist_ok=True)
-        header = f"\n\n## Evolution Engine Override ({time.strftime('%Y-%m-%d')})\n"
-        with open(skill_path, "a") as f:
-            f.write(header + upgrade["additions"] + "\n")
-        logger.info("[evolution] wrote override skill to %s", skill_path)
+
+        additions = upgrade["additions"]
+
+        # Read existing content
+        existing = ""
+        if os.path.exists(skill_path):
+            with open(skill_path, "r") as f:
+                existing = f.read()
+
+        # Dedup: skip if identical additions already present
+        if additions.strip() in existing:
+            logger.info("[evolution] override dedup: identical block already "
+                        "exists for %s, skipping", agent_id)
+            return
+
+        # Parse existing override blocks
+        marker = "## Evolution Engine Override"
+        blocks = []
+        if existing.strip():
+            parts = existing.split(marker)
+            # First part is preamble (if any), rest are override blocks
+            for i, part in enumerate(parts):
+                if i == 0 and not part.strip():
+                    continue
+                if i == 0:
+                    # Preamble before first override — keep it
+                    blocks.append(("preamble", part))
+                else:
+                    blocks.append(("override", marker + part))
+
+        # Add new block
+        header = f"\n\n{marker} ({time.strftime('%Y-%m-%d')})\n"
+        blocks.append(("override", header + additions + "\n"))
+
+        # Cap: keep only MAX_OVERRIDES most recent override blocks
+        override_blocks = [b for b in blocks if b[0] == "override"]
+        preamble_blocks = [b for b in blocks if b[0] == "preamble"]
+
+        if len(override_blocks) > self.MAX_OVERRIDES:
+            dropped = len(override_blocks) - self.MAX_OVERRIDES
+            override_blocks = override_blocks[-self.MAX_OVERRIDES:]
+            logger.info("[evolution] override cap: dropped %d oldest blocks for %s",
+                        dropped, agent_id)
+
+        # Rewrite file
+        content = ""
+        for _, text in preamble_blocks:
+            content += text
+        for _, text in override_blocks:
+            content += text
+
+        with open(skill_path, "w") as f:
+            f.write(content.strip() + "\n")
+        logger.info("[evolution] wrote override skill to %s (%d blocks)",
+                    skill_path, len(override_blocks))
+
+    def clear_overrides(self, agent_id: str):
+        """Remove all evolution overrides when agent reputation recovers.
+
+        Called when agent reputation score returns above the recovery threshold (80+).
+        """
+        skill_path = f"skills/agent_overrides/{agent_id}.md"
+        if os.path.exists(skill_path):
+            os.remove(skill_path)
+            logger.info("[evolution] cleared overrides for recovered agent %s",
+                        agent_id)
 
     # ── Path B: Model Swap ──────────────────────────────────────────────────
 
@@ -379,6 +454,31 @@ class EvolutionEngine:
         return results
 
     # ── Config helpers ───────────────────────────────────────────────────────
+
+    def _pick_fallback_model(self, agent_id: str) -> str:
+        """Pick next fallback model from agent config's fallback_models list.
+
+        Reads the agent's current model and fallback_models from agents.yaml.
+        Returns the first fallback that isn't the current model, or the first
+        fallback if no current model is set.
+        Falls back to a sensible default if no fallback_models configured.
+        """
+        try:
+            cfg = self._load_agent_config(agent_id)
+            current_model = cfg.get("model", "")
+            fallbacks = cfg.get("fallback_models", [])
+            if fallbacks:
+                # Pick first fallback that isn't the current model
+                for fb in fallbacks:
+                    if fb != current_model:
+                        return fb
+                # All fallbacks are the same as current — return first anyway
+                return fallbacks[0]
+        except Exception as e:
+            logger.warning("[evolution] Failed to read fallback_models for %s: %s",
+                           agent_id, e)
+        # Ultimate fallback if no config found
+        return "minimax-m2.5"
 
     def _load_agent_config(self, agent_id: str) -> dict:
         import yaml
