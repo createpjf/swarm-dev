@@ -2,6 +2,9 @@
 adapters/channels/session.py
 File-backed session store for channel conversations.
 
+This is the **sole conversation persistence layer** for all channel interactions.
+(The former core/conversation_history.py was removed as dead code in Sprint 5.1.)
+
 Tracks per-user/group sessions across channel interactions.
 Stores conversation history per session in separate JSONL files.
 Uses the same FileLock pattern as ContextBus and TaskBoard.

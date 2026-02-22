@@ -90,6 +90,8 @@ class AgentConfig:
     kb_recall_budget:       int  = 800    # token budget for knowledge base recall
     cognition_file:         str  = ""     # path to cognition.md (legacy, optional)
     soul_file:              str  = ""     # path to soul.md (OpenClaw pattern, optional)
+    # System prompt budget (prevents exceeding model context window)
+    max_system_prompt_tokens: int = 4000   # ~16K chars; 0 = no limit
     # Tool configuration (OpenClaw-inspired)
     tools_config:           dict = field(default_factory=dict)  # {profile, allow, deny}
 
@@ -360,19 +362,18 @@ class BaseAgent:
             except Exception:
                 pass
 
-        system_prompt = (
-            f"You are {self.cfg.agent_id}.\n\n"
-            f"## Role\n{self.cfg.role}"
-            f"{soul_section}"
-            f"{tools_md_section}"
-            f"{user_section}\n\n"
-            f"## Skills\n{skills_text}"
-            f"{tools_section}"
-            f"{docs_section}"
-            f"{memory_block}"
-            f"{history_section}"
-            f"{workspace_section}\n\n"
-            f"## Shared Context\n{context_snap}\n"
+        system_prompt = self._budget_system_prompt(
+            role_section=self.cfg.role,
+            soul_section=soul_section,
+            tools_md_section=tools_md_section,
+            user_section=user_section,
+            skills_text=skills_text,
+            tools_section=tools_section,
+            docs_section=docs_section,
+            memory_block=memory_block,
+            history_section=history_section,
+            workspace_section=workspace_section,
+            context_snap=context_snap,
         )
 
         messages = [
@@ -591,6 +592,145 @@ class BaseAgent:
             result = _strip_think(result)
 
         return result
+
+    @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        """Rough token count — ~4 chars per token for English/mixed-lang text."""
+        return len(text) // 4 if text else 0
+
+    def _budget_system_prompt(
+        self,
+        *,
+        role_section: str,
+        soul_section: str,
+        tools_md_section: str,
+        user_section: str,
+        skills_text: str,
+        tools_section: str,
+        docs_section: str,
+        memory_block: str,
+        history_section: str,
+        workspace_section: str,
+        context_snap: str,
+    ) -> str:
+        """Assemble system prompt and trim to fit within token budget.
+
+        Priority (highest → lowest):
+          P0: role identity + soul (never trimmed)
+          P1: tools_md + tools_section + user_section (rarely trimmed)
+          P2: skills_text (trimmed first — can be very large)
+          P3: docs_section, memory_block, history_section
+          P4: workspace_section, context_snap (trimmed last)
+
+        If max_system_prompt_tokens <= 0, no budget is applied.
+        """
+        budget = self.cfg.max_system_prompt_tokens
+        if budget <= 0:
+            # No budget — assemble as-is
+            return (
+                f"You are {self.cfg.agent_id}.\n\n"
+                f"## Role\n{role_section}"
+                f"{soul_section}"
+                f"{tools_md_section}"
+                f"{user_section}\n\n"
+                f"## Skills\n{skills_text}"
+                f"{tools_section}"
+                f"{docs_section}"
+                f"{memory_block}"
+                f"{history_section}"
+                f"{workspace_section}\n\n"
+                f"## Shared Context\n{context_snap}\n"
+            )
+
+        # ── Build in priority order, track running total ──
+        # P0 — identity (never trimmed)
+        header = f"You are {self.cfg.agent_id}.\n\n## Role\n{role_section}{soul_section}"
+        used = self._estimate_tokens(header)
+
+        # P1 — tools + user
+        p1_parts = [tools_md_section, user_section, tools_section]
+        for part in p1_parts:
+            used += self._estimate_tokens(part)
+
+        # Remaining budget for P2–P4
+        remaining = max(budget - used, 200)  # always keep at least 200 tokens
+
+        # P2 — skills (biggest contributor, trim if needed)
+        skills_tokens = self._estimate_tokens(skills_text)
+        if skills_tokens > remaining * 0.6:
+            # Trim skills to 60% of remaining budget
+            max_chars = int(remaining * 0.6 * 4)
+            if len(skills_text) > max_chars:
+                skills_text = skills_text[:max_chars] + "\n\n[... skills truncated for context budget ...]\n"
+                logger.warning(
+                    "[%s] system prompt budget: skills trimmed from %d to %d tokens",
+                    self.cfg.agent_id, skills_tokens, max_chars // 4)
+
+        # Recalculate remaining after skills
+        used += self._estimate_tokens(skills_text)
+        remaining = max(budget - used, 100)
+
+        # P3 — docs, memory, history (trim proportionally if over budget)
+        p3_sections = [
+            ("docs", docs_section),
+            ("memory", memory_block),
+            ("history", history_section),
+        ]
+        p3_total = sum(self._estimate_tokens(s) for _, s in p3_sections)
+        if p3_total > remaining * 0.8:
+            # Trim each proportionally to fit 80% of remaining
+            max_p3_chars = int(remaining * 0.8 * 4)
+            trimmed_p3 = []
+            for label, section in p3_sections:
+                if not section:
+                    trimmed_p3.append(("", label))
+                    continue
+                share = max(len(section) * max_p3_chars // max(p3_total * 4, 1), 100)
+                if len(section) > share:
+                    section = section[:share] + f"\n[... {label} truncated ...]\n"
+                    logger.warning(
+                        "[%s] system prompt budget: %s trimmed to %d chars",
+                        self.cfg.agent_id, label, share)
+                trimmed_p3.append((section, label))
+            docs_section = trimmed_p3[0][0]
+            memory_block = trimmed_p3[1][0]
+            history_section = trimmed_p3[2][0]
+
+        # P4 — workspace, context (lowest priority, hard cap)
+        used += sum(self._estimate_tokens(s) for s in [docs_section, memory_block, history_section])
+        remaining = max(budget - used, 50)
+        p4_budget_chars = remaining * 4
+
+        if len(workspace_section) + len(context_snap) > p4_budget_chars:
+            # Trim context first (it's the least critical)
+            ctx_limit = max(p4_budget_chars - len(workspace_section), 200)
+            if len(context_snap) > ctx_limit:
+                context_snap = context_snap[:ctx_limit] + "\n[... context truncated ...]\n"
+                logger.warning("[%s] system prompt budget: context_snap trimmed to %d chars",
+                               self.cfg.agent_id, ctx_limit)
+            if len(workspace_section) > p4_budget_chars // 2:
+                workspace_section = workspace_section[:p4_budget_chars // 2] + "\n[... truncated ...]\n"
+
+        prompt = (
+            f"{header}"
+            f"{tools_md_section}"
+            f"{user_section}\n\n"
+            f"## Skills\n{skills_text}"
+            f"{tools_section}"
+            f"{docs_section}"
+            f"{memory_block}"
+            f"{history_section}"
+            f"{workspace_section}\n\n"
+            f"## Shared Context\n{context_snap}\n"
+        )
+
+        final_tokens = self._estimate_tokens(prompt)
+        if final_tokens > budget:
+            logger.warning(
+                "[%s] system prompt (%d est. tokens) still exceeds budget (%d) after trimming",
+                self.cfg.agent_id, final_tokens, budget)
+
+        return prompt
 
     def _recall_long_term(self, query: str) -> str:
         """

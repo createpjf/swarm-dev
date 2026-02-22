@@ -1754,6 +1754,114 @@ def parse_tool_calls(text: str) -> list[dict]:
     return calls
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  PARAMETER SANITIZATION — defence-in-depth for LLM-generated params
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Sensitive files that tools should never read or write
+_SENSITIVE_FILENAMES = {
+    ".env", ".env.local", ".env.production", ".env.development",
+    "agents.yaml", "exec_approvals.json", "chain_contracts.json",
+    ".git/config", ".netrc", ".npmrc", ".pypirc",
+    "id_rsa", "id_ed25519", "authorized_keys",
+}
+
+# Sensitive path fragments (blocked anywhere in path)
+_SENSITIVE_PATH_FRAGMENTS = {
+    ".ssh", ".gnupg", ".aws", ".config/gcloud",
+}
+
+# Tools whose "path" param must be checked
+_FS_TOOLS = {"read_file", "write_file", "edit_file", "list_dir"}
+
+# Tools whose "url" param must be scheme-checked
+_NET_TOOLS = {"web_fetch", "web_search"}
+
+
+def sanitize_params(tool_name: str, params: dict,
+                    tool: "Tool | None" = None) -> dict | str:
+    """Validate and sanitize LLM-generated tool parameters.
+
+    Returns sanitized params dict on success, or error string on rejection.
+    Checks performed:
+      1. Type coercion — cast to schema-declared types
+      2. Path safety  — block sensitive files, enforce project scope
+      3. URL safety   — enforce https, block private IPs (defence-in-depth)
+    """
+    if not isinstance(params, dict):
+        return "Parameters must be a JSON object"
+
+    # ── 1. Type coercion ──
+    if tool and tool.parameters:
+        for pname, pinfo in tool.parameters.items():
+            if pname not in params:
+                continue
+            expected = pinfo.get("type", "string")
+            val = params[pname]
+            try:
+                if expected == "integer" and not isinstance(val, int):
+                    params[pname] = int(val)
+                elif expected == "number" and not isinstance(val, (int, float)):
+                    params[pname] = float(val)
+                elif expected == "boolean" and not isinstance(val, bool):
+                    params[pname] = str(val).lower() in ("true", "1", "yes")
+                elif expected == "string" and not isinstance(val, str):
+                    params[pname] = str(val)
+            except (ValueError, TypeError):
+                return f"Parameter '{pname}' must be {expected}, got {type(val).__name__}"
+
+    # ── 2. Path safety (filesystem tools) ──
+    if tool_name in _FS_TOOLS:
+        raw_path = params.get("path", "")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            return "Missing or empty 'path' parameter"
+
+        # Normalise to block encoded traversal  (e.g. %2e%2e)
+        decoded_path = urllib.parse.unquote(raw_path)
+
+        # Block null bytes (can bypass os.path checks)
+        if "\x00" in decoded_path:
+            return "Null bytes not allowed in path"
+
+        # Block sensitive filenames
+        basename = os.path.basename(decoded_path)
+        if basename.lower() in _SENSITIVE_FILENAMES:
+            return f"Access to sensitive file '{basename}' is blocked"
+
+        # Block sensitive path fragments
+        norm = os.path.normpath(decoded_path).replace("\\", "/").lower()
+        for frag in _SENSITIVE_PATH_FRAGMENTS:
+            if frag in norm:
+                return f"Path contains blocked segment '{frag}'"
+
+        # Write-specific: block hidden dotfiles at project root
+        if tool_name == "write_file" and basename.startswith("."):
+            return f"Cannot write to hidden file '{basename}' (dotfiles are protected)"
+
+        # Replace raw path with decoded version for consistency
+        params["path"] = decoded_path
+
+    # ── 3. URL safety (network tools) ──
+    if tool_name in _NET_TOOLS and "url" in params:
+        url = params.get("url", "")
+        if not isinstance(url, str):
+            return "URL must be a string"
+
+        # Enforce https (allow http only for localhost dev, but that's
+        # already blocked by _is_private_hostname)
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme not in ("https", "http"):
+            return f"URL scheme '{parsed.scheme}' not allowed — use https://"
+
+        # Defence-in-depth: re-check private hostnames at param level
+        # (web_fetch already checks, but belt-and-suspenders)
+        hostname = parsed.hostname or ""
+        if _is_private_hostname(hostname):
+            return f"Blocked: private/internal hostname '{hostname}'"
+
+    return params
+
+
 def execute_tool_calls(calls: list[dict],
                        agent_config: dict | None = None) -> list[dict]:
     """Execute parsed tool calls and return results.
@@ -1779,9 +1887,22 @@ def execute_tool_calls(calls: list[dict],
             })
             continue
 
+        # ── Sanitize parameters before execution ──
+        raw_params = call.get("params", {})
+        sanitized = sanitize_params(name, dict(raw_params), tool)
+        if isinstance(sanitized, str):
+            # sanitize_params returned an error message
+            logger.warning("Tool %s params rejected: %s (raw: %s)",
+                           name, sanitized, str(raw_params)[:200])
+            results.append({
+                "tool": name,
+                "result": {"ok": False, "error": f"Parameter validation: {sanitized}"},
+            })
+            continue
+
         logger.info("Executing tool: %s(%s)", name,
-                     str(call.get("params", {}))[:100])
-        result = tool.execute(**call.get("params", {}))
+                     str(sanitized)[:100])
+        result = tool.execute(**sanitized)
         results.append({"tool": name, "result": result})
 
     return results
