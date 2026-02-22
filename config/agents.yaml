@@ -65,6 +65,9 @@ channels:
     app_token_env: SLACK_APP_TOKEN
     allowed_channels: []
     mention_required: true
+skill_registry:
+  url: https://raw.githubusercontent.com/punkpeye/cleo-skills/main/registry.json
+  auto_update: false
 workspace:
   path: workspace
   shared: true

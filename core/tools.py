@@ -8,13 +8,13 @@ Architecture:
   - Agents invoke tools via structured JSON blocks in their output
   - Tool results are fed back to the agent as context
 
-Tool categories (20 tools across 8 groups):
+Tool categories (22 tools across 8 groups):
   - Web:        web_search (Brave + Perplexity), web_fetch (text + markdown)
   - Filesystem: read_file, write_file, edit_file, list_dir
   - Memory:     memory_search, memory_save, kb_search, kb_write
   - Task:       task_create, task_status
   - Automation: exec, cron, process
-  - Skill:      check_skill_deps, install_skill_cli
+  - Skill:      check_skill_deps, install_skill_cli, search_skills, install_remote_skill
   - Media:      screenshot, notify
   - Messaging:  send_mail
 
@@ -123,12 +123,14 @@ class Tool:
 
 TOOL_PROFILES = {
     "minimal": {"web_search", "web_fetch", "memory_search", "kb_search",
-                "check_skill_deps", "install_skill_cli"},
+                "check_skill_deps", "install_skill_cli",
+                "search_skills", "install_remote_skill"},
     "coding": {"web_search", "web_fetch", "exec", "read_file", "write_file",
                "edit_file", "list_dir", "process", "cron_list", "cron_add",
                "notify", "transcribe", "memory_search", "memory_save",
                "kb_search", "kb_write", "task_create", "task_status",
-               "send_mail", "check_skill_deps", "install_skill_cli"},
+               "send_mail", "check_skill_deps", "install_skill_cli",
+               "search_skills", "install_remote_skill"},
     "full": None,  # None = all tools allowed
 }
 
@@ -140,7 +142,8 @@ TOOL_GROUPS = {
     "group:fs": ["read_file", "write_file", "edit_file", "list_dir"],
     "group:memory": ["memory_search", "memory_save", "kb_search", "kb_write"],
     "group:task": ["task_create", "task_status"],
-    "group:skill": ["check_skill_deps", "install_skill_cli"],
+    "group:skill": ["check_skill_deps", "install_skill_cli",
+                    "search_skills", "install_remote_skill"],
     "group:messaging": ["send_mail"],
 }
 
@@ -829,6 +832,39 @@ def _handle_send_mail(to: str, content: str,
         return {"ok": False, "error": str(e)}
 
 
+def _handle_send_file(**kwargs) -> dict:
+    """Send a file to the user via their chat channel.
+
+    Requires the task to have originated from a channel message.
+    The channel adapter will pick up the file and deliver it.
+    """
+    file_path = kwargs.get("file_path", "")
+    caption = kwargs.get("caption", "")
+
+    if not file_path:
+        return {"ok": False, "error": "file_path parameter required"}
+
+    if not os.path.exists(file_path):
+        return {"ok": False, "error": f"File not found: {file_path}"}
+
+    # Store file delivery request for the channel adapter to pick up
+    try:
+        delivery_dir = ".file_delivery"
+        os.makedirs(delivery_dir, exist_ok=True)
+        delivery = {
+            "file_path": os.path.abspath(file_path),
+            "caption": caption,
+            "ts": time.time(),
+        }
+        delivery_file = os.path.join(delivery_dir, f"{int(time.time()*1000)}.json")
+        with open(delivery_file, "w") as f:
+            json.dump(delivery, f)
+        return {"ok": True, "message": f"File queued for delivery: {file_path}",
+                "delivery_id": os.path.basename(delivery_file)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 # ── Skill CLI install/check handlers ──
 
 def _handle_check_skill_deps(**kwargs) -> dict:
@@ -953,6 +989,97 @@ def _auto_approve_skill_bins(bins: list[str]):
         logger.warning("Could not auto-approve bins: %s", e)
 
 
+# ── Remote skill registry handlers ──
+
+def _handle_search_skills(**kwargs) -> dict:
+    """Search the remote skill registry for new skills to install."""
+    try:
+        from core.skill_registry import get_registry
+    except ImportError:
+        return {"ok": False, "error": "skill_registry module not available"}
+
+    query = kwargs.get("query", "")
+    if not query:
+        return {"ok": False, "error": "query parameter required"}
+
+    registry = get_registry()
+    try:
+        results = registry.search(query, limit=kwargs.get("limit", 10))
+    except Exception as e:
+        return {"ok": False, "error": f"Search failed: {e}"}
+
+    if not results:
+        return {
+            "ok": True,
+            "count": 0,
+            "message": f"No skills found matching '{query}'",
+            "results": [],
+        }
+
+    # Format results for agent consumption
+    formatted = []
+    for r in results:
+        entry = {
+            "slug": r.get("slug", ""),
+            "name": r.get("name", ""),
+            "description": r.get("description", ""),
+            "version": r.get("version", ""),
+            "tags": r.get("tags", []),
+            "installed": r.get("installed", False),
+        }
+        if r.get("installed"):
+            entry["installed_version"] = r.get("installed_version", "")
+        if r.get("requires", {}).get("bins"):
+            entry["requires_cli"] = r["requires"]["bins"]
+        formatted.append(entry)
+
+    return {
+        "ok": True,
+        "count": len(formatted),
+        "query": query,
+        "results": formatted,
+    }
+
+
+def _handle_install_remote_skill(**kwargs) -> dict:
+    """Install a skill from the remote registry."""
+    try:
+        from core.skill_registry import get_registry
+    except ImportError:
+        return {"ok": False, "error": "skill_registry module not available"}
+
+    slug = kwargs.get("slug", "")
+    if not slug:
+        return {"ok": False, "error": "slug parameter required"}
+
+    agent_id = kwargs.get("agent", "")
+    add_to_all = kwargs.get("add_to_all", True)
+
+    registry = get_registry()
+
+    # Step 1: Install the skill
+    result = registry.install(slug)
+    if not result.get("ok"):
+        return result
+
+    # Step 2: Add to agent config
+    if add_to_all:
+        cfg_result = registry.add_to_all_agents(slug)
+    elif agent_id:
+        cfg_result = registry.add_to_agent(slug, agent_id)
+    else:
+        cfg_result = {"ok": True, "message": "Skill installed but not added to any agent config"}
+
+    result["config"] = cfg_result.get("message", "")
+    result["message"] = (
+        f"{result.get('message', '')}. "
+        f"{cfg_result.get('message', '')}. "
+        "Skill will be active on the next task (hot-reload)."
+    )
+
+    return result
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  REGISTRY
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1023,6 +1150,33 @@ _BUILTIN_TOOLS: list[Tool] = [
                      "description": "Skill name whose CLI to install (e.g. 'apple-reminders', 'github')",
                      "required": True}},
          _handle_install_skill_cli, group="skill"),
+
+    Tool("search_skills",
+         "Search the remote skill registry for new capabilities. Use this when you "
+         "need a skill that isn't currently installed. Returns matching skills with "
+         "descriptions, versions, and install status.",
+         {"query": {"type": "string",
+                     "description": "Search query (skill name, description, or tag, e.g. 'pdf', 'browser', 'email')",
+                     "required": True},
+          "limit": {"type": "integer",
+                     "description": "Max results to return (default 10)",
+                     "required": False}},
+         _handle_search_skills, group="skill"),
+
+    Tool("install_remote_skill",
+         "Download and install a skill from the remote registry. After installation, "
+         "the skill is immediately available via hot-reload (no restart needed). "
+         "CLI dependencies are auto-installed if possible. Use search_skills first.",
+         {"slug": {"type": "string",
+                    "description": "Skill slug from search_skills results (e.g. 'pdf-rotate', 'browser-control')",
+                    "required": True},
+          "agent": {"type": "string",
+                     "description": "Agent ID to add skill to (default: add to all agents)",
+                     "required": False},
+          "add_to_all": {"type": "boolean",
+                          "description": "Add skill to all agents (default: true)",
+                          "required": False}},
+         _handle_install_remote_skill, group="skill"),
 
     # ── Media tools ──
     Tool("screenshot",

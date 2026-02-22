@@ -1,0 +1,145 @@
+{
+  "version": "1.0",
+  "updated_at": "2025-02-22T00:00:00Z",
+  "description": "Cleo Skill Registry — community skills for dynamic installation",
+  "skills": [
+    {
+      "slug": "browser-control",
+      "name": "Browser Control",
+      "description": "Playwright-based browser automation — navigate, click, type, screenshot, extract data from web pages. Use for web scraping, form filling, and automated testing.",
+      "version": "0.1.0",
+      "author": "cleo-core",
+      "tags": ["browser", "web", "automation", "playwright", "scraping"],
+      "requires": {"bins": ["playwright"]},
+      "install": [
+        {"kind": "node", "package": "playwright", "bins": ["playwright"], "label": "Install Playwright via npm"}
+      ],
+      "download_url": "https://raw.githubusercontent.com/punkpeye/cleo-skills/main/skills/browser-control.md",
+      "pack": false
+    },
+    {
+      "slug": "pdf-tools",
+      "name": "PDF Tools",
+      "description": "Advanced PDF manipulation — merge, split, rotate, extract text, convert pages to images. Requires qpdf and poppler.",
+      "version": "0.2.0",
+      "author": "cleo-core",
+      "tags": ["pdf", "document", "merge", "split", "convert"],
+      "requires": {"bins": ["qpdf"]},
+      "install": [
+        {"kind": "brew", "formula": "qpdf", "bins": ["qpdf"], "label": "Install qpdf via Homebrew"},
+        {"kind": "apt", "package": "qpdf", "bins": ["qpdf"], "label": "Install qpdf via apt"}
+      ],
+      "download_url": "https://raw.githubusercontent.com/punkpeye/cleo-skills/main/skills/pdf-tools.md",
+      "pack": false
+    },
+    {
+      "slug": "image-magick",
+      "name": "ImageMagick Tools",
+      "description": "Image manipulation — resize, crop, convert formats, add watermarks, create thumbnails. Uses ImageMagick CLI.",
+      "version": "0.1.0",
+      "author": "cleo-core",
+      "tags": ["image", "media", "resize", "convert", "watermark"],
+      "requires": {"bins": ["magick"]},
+      "install": [
+        {"kind": "brew", "formula": "imagemagick", "bins": ["magick"], "label": "Install ImageMagick via Homebrew"}
+      ],
+      "download_url": "https://raw.githubusercontent.com/punkpeye/cleo-skills/main/skills/image-magick.md",
+      "pack": false
+    },
+    {
+      "slug": "yt-dlp",
+      "name": "YouTube Downloader",
+      "description": "Download videos and audio from YouTube and 1000+ other sites. Extract metadata, thumbnails, subtitles.",
+      "version": "0.1.0",
+      "author": "cleo-community",
+      "tags": ["youtube", "video", "download", "media", "audio"],
+      "requires": {"bins": ["yt-dlp"]},
+      "install": [
+        {"kind": "brew", "formula": "yt-dlp", "bins": ["yt-dlp"], "label": "Install yt-dlp via Homebrew"},
+        {"kind": "uv", "package": "yt-dlp", "bins": ["yt-dlp"], "label": "Install yt-dlp via uv"}
+      ],
+      "download_url": "https://raw.githubusercontent.com/punkpeye/cleo-skills/main/skills/yt-dlp.md",
+      "pack": false
+    },
+    {
+      "slug": "ffmpeg-tools",
+      "name": "FFmpeg Media Tools",
+      "description": "Audio/video processing — convert formats, extract audio, trim clips, merge files, create GIFs from video.",
+      "version": "0.1.0",
+      "author": "cleo-core",
+      "tags": ["ffmpeg", "video", "audio", "convert", "media"],
+      "requires": {"bins": ["ffmpeg"]},
+      "install": [
+        {"kind": "brew", "formula": "ffmpeg", "bins": ["ffmpeg"], "label": "Install FFmpeg via Homebrew"}
+      ],
+      "download_url": "https://raw.githubusercontent.com/punkpeye/cleo-skills/main/skills/ffmpeg-tools.md",
+      "pack": false
+    },
+    {
+      "slug": "sqlite-query",
+      "name": "SQLite Query",
+      "description": "Query and manage SQLite databases — run SQL, export CSV/JSON, schema inspection, data analysis.",
+      "version": "0.1.0",
+      "author": "cleo-core",
+      "tags": ["database", "sqlite", "sql", "query", "data"],
+      "requires": {"bins": ["sqlite3"]},
+      "install": [],
+      "download_url": "https://raw.githubusercontent.com/punkpeye/cleo-skills/main/skills/sqlite-query.md",
+      "pack": false
+    },
+    {
+      "slug": "docker-compose",
+      "name": "Docker Compose",
+      "description": "Manage Docker containers and compose stacks — build, run, monitor, debug containerized services.",
+      "version": "0.1.0",
+      "author": "cleo-community",
+      "tags": ["docker", "container", "devops", "deploy"],
+      "requires": {"bins": ["docker"]},
+      "install": [
+        {"kind": "brew-cask", "formula": "docker", "bins": ["docker"], "label": "Install Docker Desktop via Homebrew"}
+      ],
+      "download_url": "https://raw.githubusercontent.com/punkpeye/cleo-skills/main/skills/docker-compose.md",
+      "pack": false
+    },
+    {
+      "slug": "jq-processor",
+      "name": "JQ JSON Processor",
+      "description": "Process and transform JSON data using jq — filter, map, reduce, format JSON from APIs and files.",
+      "version": "0.1.0",
+      "author": "cleo-community",
+      "tags": ["json", "jq", "data", "transform", "api"],
+      "requires": {"bins": ["jq"]},
+      "install": [
+        {"kind": "brew", "formula": "jq", "bins": ["jq"], "label": "Install jq via Homebrew"}
+      ],
+      "download_url": "https://raw.githubusercontent.com/punkpeye/cleo-skills/main/skills/jq-processor.md",
+      "pack": false
+    },
+    {
+      "slug": "rsync-backup",
+      "name": "Rsync Backup",
+      "description": "File synchronization and backup using rsync — incremental backups, remote sync, excludes, dry-run preview.",
+      "version": "0.1.0",
+      "author": "cleo-community",
+      "tags": ["backup", "sync", "rsync", "files"],
+      "requires": {"bins": ["rsync"]},
+      "install": [],
+      "download_url": "https://raw.githubusercontent.com/punkpeye/cleo-skills/main/skills/rsync-backup.md",
+      "pack": false
+    },
+    {
+      "slug": "ollama-local",
+      "name": "Ollama Local LLM",
+      "description": "Run local LLMs via Ollama — query models, compare outputs, use as secondary opinion or fallback.",
+      "version": "0.1.0",
+      "author": "cleo-community",
+      "tags": ["llm", "ollama", "local", "ai", "inference"],
+      "requires": {"bins": ["ollama"]},
+      "install": [
+        {"kind": "brew", "formula": "ollama", "bins": ["ollama"], "label": "Install Ollama via Homebrew"}
+      ],
+      "download_url": "https://raw.githubusercontent.com/punkpeye/cleo-skills/main/skills/ollama-local.md",
+      "pack": false
+    }
+  ]
+}
