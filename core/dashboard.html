@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Cleo Dashboard</title>
 <style>
+/* ── DejaVu Sans Mono Web Font ───────────────────────────────── */
+@font-face{font-family:'DejaVu Sans Mono';src:url('https://cdn.jsdelivr.net/npm/dejavu-fonts-ttf@2.37/ttf/DejaVuSansMono.ttf') format('truetype');font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:'DejaVu Sans Mono';src:url('https://cdn.jsdelivr.net/npm/dejavu-fonts-ttf@2.37/ttf/DejaVuSansMono-Bold.ttf') format('truetype');font-weight:700;font-style:normal;font-display:swap}
+
 /* ── Reset & Base ─────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
 :root{
@@ -14,8 +18,8 @@
   --green:#22c55e;--cyan:#03BFD4;--red:#ef4444;--yellow:#eab308;
   --magenta:#9C59F3;--orange:#FF8B00;
   --radius:10px;--shadow:0 2px 12px rgba(0,0,0,.6);
-  --font:'TWK Everett','Inter','SF Pro Display','Helvetica Neue','Arial',sans-serif;
-  --mono:"SF Mono","Fira Code","JetBrains Mono",Menlo,monospace;
+  --font:"DejaVu Sans Mono","SF Mono","Menlo","Consolas",monospace;
+  --mono:"DejaVu Sans Mono","SF Mono","Fira Code","JetBrains Mono",Menlo,monospace;
   --sidebar-w:220px;
 }
 html,body{background:var(--bg);color:var(--fg);font:14px/1.6 var(--font);height:100%;overflow:hidden}
@@ -26,7 +30,7 @@ a{color:var(--accent2);text-decoration:none}
 
 /* ── Sidebar ──────────────────────────────────────────────────── */
 .sidebar{width:var(--sidebar-w);min-width:var(--sidebar-w);background:var(--bg2);border-right:1px solid var(--bg3);display:flex;flex-direction:column;overflow-y:auto}
-.sidebar-logo{padding:16px 18px;font-size:16px;font-weight:700;letter-spacing:-.3px;border-bottom:1px solid var(--bg3);display:flex;align-items:center;gap:8px}
+.sidebar-logo{padding:16px 18px;font-size:16px;font-weight:700;letter-spacing:-.3px;border-bottom:1px solid var(--bg3);display:flex;align-items:center;justify-content:center;gap:8px}
 .sidebar-logo span{color:var(--accent)}
 .status-dot{width:8px;height:8px;border-radius:50%;background:var(--fg3);display:inline-block}
 .status-dot.online{background:var(--green);box-shadow:0 0 6px var(--green)}
@@ -319,12 +323,27 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .ov-agent-chip.active.alic .chip-dot{background:var(--magenta)}
 
 /* ── Subtask Tree ─────────────────────────────────────────── */
-.subtask-tree{flex-shrink:0;padding:0 4px;margin-bottom:8px;display:none}
+.subtask-tree{flex-shrink:0;padding:0;margin-bottom:8px;display:none}
 .subtask-tree.has-tree{display:block}
-.st-toggle{font-size:10px;color:var(--fg3);cursor:pointer;padding:4px 8px;user-select:none}
-.st-toggle:hover{color:var(--fg2)}
-.st-container{display:flex;flex-wrap:wrap;gap:6px;padding:6px 0}
-.st-node{display:flex;align-items:center;gap:5px;padding:4px 10px;border-radius:6px;font-size:10px;border:1px solid var(--bg4);background:var(--bg3);max-width:220px;overflow:hidden}
+/* Unified block: header + body share one container */
+.st-block{background:var(--bg2);border:1px solid var(--bg3);border-radius:var(--radius);overflow:hidden}
+/* Collapsible header */
+.st-header{display:flex;align-items:center;gap:8px;padding:7px 12px;cursor:pointer;user-select:none;transition:background .15s}
+.st-header:hover{background:var(--bg3)}
+.st-chevron{font-size:10px;color:var(--fg3);transition:transform .2s;flex-shrink:0}
+.st-chevron.open{transform:rotate(90deg)}
+.st-header-text{font-size:11px;font-weight:600;color:var(--fg2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+.st-progress-wrap{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.st-progress-bar{width:80px;height:4px;background:var(--bg4);border-radius:2px;overflow:hidden;display:flex}
+.st-progress-fill{height:100%;transition:width .3s}
+.st-fill-done{background:var(--green)}
+.st-fill-active{background:var(--cyan)}
+.st-progress-label{font-family:var(--mono);font-size:10px;color:var(--fg3);min-width:28px;text-align:right}
+/* Collapsible body — CSS Grid for smooth animation */
+.st-body{overflow:hidden;border-top:1px solid var(--bg3);padding:6px 12px;display:grid;grid-template-rows:1fr;opacity:1;transition:grid-template-rows .35s cubic-bezier(.4,0,.2,1),opacity .25s,padding .35s cubic-bezier(.4,0,.2,1),border-color .2s}
+.st-body>.st-group{overflow:hidden;min-height:0}
+.st-body.collapsed{grid-template-rows:0fr;opacity:0;padding-top:0;padding-bottom:0;border-top-color:transparent}
+.st-node{display:flex;align-items:center;gap:5px;padding:4px 10px;border-radius:6px;font-size:10px;border:1px solid var(--bg4);background:var(--bg3);max-width:280px;overflow:hidden}
 .st-node .st-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
 .st-node .st-dot.pending{background:var(--fg3)}
 .st-node .st-dot.claimed{background:var(--yellow);animation:livePulse 1.2s infinite}
@@ -335,7 +354,7 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .st-node .st-desc{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg2)}
 .st-node .st-agent{font-weight:600;color:var(--fg3);flex-shrink:0;font-size:9px}
 .st-edge{color:var(--fg3);font-size:10px;align-self:center}
-.st-group{display:flex;flex-direction:column;gap:4px;padding:4px 0 4px 16px;border-left:1.5px solid var(--bg4)}
+.st-group{display:flex;flex-direction:column;gap:4px;padding:6px 0 4px 16px;border-left:1.5px solid var(--bg4)}
 .st-parent-label{font-size:10px;font-weight:600;color:var(--fg3);padding:2px 6px}
 
 .ov-bottom{display:flex;flex-direction:column;flex:1;min-height:200px;overflow:hidden}
@@ -373,6 +392,7 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .dispatch-agent.leo-d{color:var(--accent)}
 .dispatch-agent.jerry-d{color:var(--cyan)}
 .dispatch-agent.alic-d{color:var(--magenta)}
+.dispatch-agent.user-d{color:var(--accent2)}
 .dispatch-text{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dispatch-tokens{font-family:var(--mono);font-size:9px;color:var(--fg3);flex-shrink:0}
 .dispatch-tokens .tok-in{color:var(--cyan)}
@@ -400,7 +420,7 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 @keyframes wfReceivePulsePurple{0%{box-shadow:0 0 0 0 rgba(156,89,243,.4)}50%{box-shadow:0 0 0 12px rgba(156,89,243,0)}100%{box-shadow:none}}
 
 /* ── Overview: Chat Messages (bottom panel) ──────────────────── */
-.chat-messages{flex:1;overflow-y:auto;padding:16px 12px;display:flex;flex-direction:column;gap:12px;min-height:0}
+.chat-messages{flex:1;overflow-y:auto;padding:16px 12px;display:flex;flex-direction:column;gap:12px;min-height:0;background:linear-gradient(180deg,var(--bg) 0%,rgba(10,10,18,.95) 40%,rgba(8,8,20,.9) 100%)}
 .chat-messages::-webkit-scrollbar{width:5px}
 .chat-messages::-webkit-scrollbar-track{background:transparent}
 .chat-messages::-webkit-scrollbar-thumb{background:var(--bg4);border-radius:3px}
@@ -538,7 +558,10 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .chat-attach-thumb img{width:100%;height:100%;object-fit:cover}
 .chat-attach-thumb .chat-attach-name{position:absolute;bottom:0;left:0;right:0;font-size:8px;background:rgba(0,0,0,.7);color:var(--fg);padding:1px 3px;text-overflow:ellipsis;overflow:hidden;white-space:nowrap}
 .chat-attach-remove{position:absolute;top:-4px;right:-4px;width:16px;height:16px;border-radius:50%;background:var(--red);color:#fff;font-size:10px;display:flex;align-items:center;justify-content:center;cursor:pointer;border:1.5px solid var(--bg);z-index:1}
-.chat-input-box{display:flex;flex-direction:column;background:var(--bg2);border:1.5px solid var(--bg4);border-radius:16px;transition:border-color .15s,box-shadow .15s;overflow:hidden}
+.chat-input-box{display:grid;grid-template-columns:1fr auto;grid-template-rows:1fr auto;background:var(--bg2);border:1.5px solid var(--bg4);border-radius:16px;transition:border-color .15s,box-shadow .15s;overflow:hidden}
+.chat-input-box .chat-textarea{grid-column:1;grid-row:1}
+.chat-input-box .chat-input-bottom{grid-column:1;grid-row:2}
+.chat-input-box .chat-send{grid-column:2;grid-row:1/3;align-self:center;margin:0 8px}
 .chat-input-box:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px rgba(55,115,255,.08)}
 .chat-textarea{flex:1;background:transparent;border:none;color:var(--fg);padding:12px 16px 4px;font-size:14px;font-family:var(--font);outline:none;resize:none;line-height:1.5;max-height:160px;overflow-y:auto;min-height:24px}
 .chat-textarea::placeholder{color:var(--fg3)}
@@ -560,6 +583,12 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .chat-bubble .chat-images img{max-width:200px;max-height:150px;border-radius:6px;cursor:pointer;border:1px solid var(--bg4)}
 .chat-bubble .chat-images img:hover{border-color:var(--accent)}
 .chat-bubble .chat-file-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:6px;background:var(--bg3);font-size:11px;color:var(--fg2);margin-top:4px}
+.task-decomp{display:flex;flex-direction:column;gap:6px;margin:8px 0}
+.task-decomp-item{display:flex;align-items:flex-start;gap:8px;padding:8px 12px;background:var(--bg);border:1px solid var(--bg3);border-radius:10px;font-size:13px;line-height:1.45;transition:border-color .15s}
+.task-decomp-item:hover{border-color:var(--accent)}
+.task-decomp-num{flex-shrink:0;font-size:14px;margin-top:1px}
+.task-decomp-text{flex:1;color:var(--fg)}
+.task-role-badge{flex-shrink:0;font-size:10px;padding:2px 7px;border-radius:4px;background:rgba(55,115,255,.1);color:var(--accent);font-weight:600;text-transform:uppercase;letter-spacing:.3px;margin-top:1px}
 .chat-file-card{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg3);border:1px solid var(--bg4);border-radius:8px;text-decoration:none;color:var(--fg);transition:.15s;min-width:180px;max-width:280px}
 .chat-file-card:hover{border-color:var(--accent);background:rgba(55,115,255,.05)}
 .chat-file-card .file-icon{font-size:20px;flex-shrink:0}
@@ -590,6 +619,36 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
   .chat-bubble.assistant-bubble .asst-body table{font-size:11px}
   .chat-bubble.assistant-bubble .asst-body th,.chat-bubble.assistant-bubble .asst-body td{padding:4px 6px}
   .chat-msg{max-width:92%}
+}
+
+/* ── Responsive: MacBook 14" (~1440–1512px) ──────────────────── */
+@media(max-width:1600px){
+  :root{--sidebar-w:200px}
+  .content{padding:16px 20px}
+  .chat-bubble.assistant-bubble .asst-body{font-size:13.5px}
+}
+
+/* ── Responsive: MacBook 16" (~1680–1728px) ──────────────────── */
+@media(min-width:1601px) and (max-width:1920px){
+  .content{padding:20px 28px}
+}
+
+/* ── Responsive: 24" monitor (~1920–2560px) ──────────────────── */
+@media(min-width:1921px){
+  .content{padding:24px 48px}
+  .chat-bubble.assistant-bubble .asst-body{font-size:14.5px;line-height:1.8}
+}
+
+/* ── Responsive: 27"+ monitor (2560px+, including 4K) ────────── */
+@media(min-width:2561px){
+  :root{--sidebar-w:260px}
+  .content{padding:28px 64px}
+  html,body{font-size:15px}
+  .chat-textarea{font-size:15px}
+  .chat-bubble{font-size:14px}
+  .chat-bubble.assistant-bubble .asst-body{font-size:15px}
+  .stat-value{font-size:28px}
+  .agent-grid{grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}
 }
 </style>
 </head>
@@ -714,8 +773,8 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
             <button class="chat-action-btn" id="searchToggle" title="Web search (Brave)" onclick="toggleSearchMode()">🔍</button>
             <input type="file" id="chatFileInput" multiple accept="image/*,.pdf,.txt,.md,.json,.csv,.py,.js,.ts" style="display:none" onchange="handleFileSelect(this)">
           </div>
-          <button class="btn chat-send" id="chatSend" onclick="chatSubmit()">Send ↑</button>
         </div>
+        <button class="btn chat-send" id="chatSend" onclick="chatSubmit()">Send ↑</button>
       </div>
     </div>
   </div>
@@ -1080,6 +1139,7 @@ let chatMsgs = [];              // {id, type:'user'|'agent'|'system', agent, tex
 let chatPrevSnapshot = {};      // previous polling snapshot for diff
 let chatTaskMap = {};           // taskId → Set of generated message types (dedup)
 let chatMsgCounter = 0;        // unique msg id counter
+let dashboardUser = 'createpjf';  // default submitter name for dashboard tasks
 
 // ══════════════════════════════════════════════════════════════════
 //  AUTH & API HELPERS
@@ -1299,7 +1359,11 @@ const AGENT_META = {
 
 function agentMeta(agentId) {
   const id = (agentId||'').toLowerCase();
-  const m = AGENT_META[id] || {emoji:'🤖', color:'var(--fg2)', cls:'jerry'};
+  const known = AGENT_META[id];
+  // Non-agent names (users) get a user icon with accent color
+  const m = known
+    ? {...known}
+    : {emoji:'👤', color:'var(--accent2)', cls:'user', label: agentId};
   m.icon = m.emoji;
   return m;
 }
@@ -1329,11 +1393,14 @@ let dispatchLastIdx = 0;
 // ── Add entry to TOP dispatch log ──
 function addDispatch(icon, agentId, text, opts={}) {
   const meta = agentMeta(agentId);
+  const knownAgents = new Set(['leo','jerry','alic','search','system','advisor']);
+  const isUser = !knownAgents.has((agentId||'').toLowerCase());
   dispatchEntries.push({
     id: ++chatMsgCounter,
     icon: icon || '•',
     agent: agentId,
     agentCls: meta.cls,
+    isUser,
     text,
     ts: Date.now(),
     taskId: opts.taskId || null,
@@ -1378,8 +1445,9 @@ function renderDispatchHtml(d) {
   // Expandable result for agent output in dispatch
   if (d.result) {
     const rid = 'dRes' + d.id;
+    const cleanedResult = stripLlmTags(d.result);
     text += ' <span class="chat-result-toggle" onclick="toggleChatResult(\'' + rid + '\',this)" style="font-size:10px">▸ detail</span>'
-      + '<div class="chat-result-content" id="' + rid + '" style="margin-top:3px"><pre style="font-size:10px;max-height:160px;overflow-y:auto;margin:0;padding:4px 6px">' + escHtml(d.result) + '</pre></div>';
+      + '<div class="chat-result-content" id="' + rid + '" style="margin-top:3px"><pre style="font-size:10px;max-height:160px;overflow-y:auto;margin:0;padding:4px 6px">' + escHtml(cleanedResult) + '</pre></div>';
   }
   if (d.score != null) {
     const c = scoreColor(d.score);
@@ -1428,14 +1496,25 @@ function updateHeaderStatuses() {
     el.innerHTML = '<span class="ov-status-empty">Ready — Submit a task to start</span>';
     return;
   }
+  // Sort: user-submitted entries always first
+  const sorted = [...latest].reverse();
+  const knownAgents = new Set(['leo','jerry','alic','search','system','advisor']);
+  sorted.sort((a, b) => {
+    const aIsUser = !knownAgents.has((a.agent||'').toLowerCase());
+    const bIsUser = !knownAgents.has((b.agent||'').toLowerCase());
+    return aIsUser === bIsUser ? 0 : aIsUser ? -1 : 1;
+  });
   let html = '';
-  for (const d of latest.reverse()) {
-    const agentCls = d.agent ? d.agent.toLowerCase().replace(/[^a-z]/g,'') : '';
+  for (const d of sorted) {
+    const aid = (d.agent||'').toLowerCase();
+    const isUser = !knownAgents.has(aid);
+    const agentCls = aid.replace(/[^a-z]/g,'');
     const colorCls = agentCls.includes('leo') ? 'leo-d' : agentCls.includes('jerry') ? 'jerry-d' : agentCls.includes('alic') ? 'alic-d' : '';
     const sMeta = agentMeta(d.agent || '');
-    const sIcon = sMeta.avatar ? '<img src="'+sMeta.avatar+'">' : '▸';
-    const agentName = capitalize(d.agent || 'system');
-    const statusText = titleCase(truncate(d.text || '', 30));
+    const sIcon = sMeta.avatar ? '<img src="'+sMeta.avatar+'">' : (sMeta.emoji || '▸');
+    // User entries: show name as-is (lowercase); agents: capitalize
+    const agentName = isUser ? (d.agent || 'You') : capitalize(d.agent || 'system');
+    const statusText = titleCase(truncate(cleanTaskDesc(d.text || ''), 30));
     html += '<div class="ov-status-item">'
       + '<span class="status-icon">' + sIcon + '</span>'
       + '<span class="status-agent ' + colorCls + '">' + escHtml(agentName) + '</span>'
@@ -1557,6 +1636,17 @@ function stripLlmTags(text) {
   text = text.replace(/^##\s*Phase\s+\d+.*$/gm, '');
   text = text.replace(/^\*\*TASK:\*\*\s*.+$/gm, '');
   text = text.replace(/^\*\*COMPLEXITY:\*\*\s*.+$/gm, '');
+  // Strip conversation history injection (manager.py injects these into task descriptions)
+  text = text.replace(/^##\s*对话历史\s*\(Conversation History\)[\s\S]*?(?=^##\s*当前消息|^---\s*$)/gm, '');
+  text = text.replace(/^##\s*当前消息\s*\(Current Message\)\s*\n?/gm, '');
+  // Strip session context headers that leak through
+  text = text.replace(/^##\s*对话历史[\s\S]*?^---\s*$/gm, '');
+  text = text.replace(/^\*\*\[助手\]\*\*.*$/gm, '');
+  text = text.replace(/^\*\*\[用户\]\*\*.*$/gm, '');
+  // Strip agent comment markers (<!-- agent:xxx task:xxx -->)
+  text = text.replace(/<!--\s*agent:[\s\S]*?-->/g, '');
+  // Strip task status lines (■ 当前状 — 1/1, ● task description)
+  text = text.replace(/^[■●]\s+.{0,120}$/gm, '');
   // Strip --- separator lines (orchestration artifacts)
   text = text.replace(/^---\s*$/gm, '');
   // Clean up excessive blank lines left after stripping
@@ -1609,9 +1699,24 @@ function formatResultBody(text) {
       return stepsHtml + '<span style="color:var(--fg2)">✓ Done — results sent to planner for synthesis.</span>';
     return '<span style="color:var(--fg2)">✓ Completed</span>';
   }
-  // Try JSON pretty-print
+  // Try JSON — render task arrays as cards, other JSON as pretty-print
   try {
     const obj = JSON.parse(text);
+    // Task decomposition array: [{"task": "...", "role": "..."}]
+    if (Array.isArray(obj) && obj.length && obj[0].task) {
+      let html = '<div class="task-decomp">';
+      for (let i = 0; i < obj.length; i++) {
+        const t = obj[i];
+        const roleIcon = t.role === 'implement' ? '⚡' : t.role === 'research' ? '🔍' : t.role === 'review' ? '🧠' : '📋';
+        const roleBadge = t.role ? '<span class="task-role-badge">' + escHtml(t.role) + '</span>' : '';
+        html += '<div class="task-decomp-item">'
+          + '<span class="task-decomp-num">' + roleIcon + '</span>'
+          + '<span class="task-decomp-text">' + escHtml(t.task) + '</span>'
+          + roleBadge + '</div>';
+      }
+      html += '</div>';
+      return stepsHtml + html;
+    }
     return '<pre>' + escHtml(JSON.stringify(obj, null, 2)) + '</pre>';
   } catch(e) {}
   // Render markdown then enhance with file/image detection
@@ -2283,6 +2388,8 @@ function updateCostBadge(taskId, costUsd) {
 //  SUBTASK TREE — visual decomposition of leo subtasks
 // ══════════════════════════════════════════════════════════════════
 
+let _subtreeCollapsed = false;  // track collapsed state across re-renders
+
 function renderSubtaskTree(tasks) {
   const container = document.getElementById('subtaskTree');
   if (!container) return;
@@ -2311,7 +2418,7 @@ function renderSubtaskTree(tasks) {
   let html = '';
   for (const pid of parentIds) {
     const parent = tasks[pid];
-    const parentDesc = parent ? (parent.description || '').substring(0, 50) : pid.substring(0, 8);
+    const parentDesc = parent ? cleanTaskDesc(parent.description || '').substring(0, 50) : pid.substring(0, 8);
     const children = childrenOf[pid];
 
     // Count statuses
@@ -2322,14 +2429,31 @@ function renderSubtaskTree(tasks) {
     }
     const total = children.length;
     const done = counts.completed;
+    const working = counts.claimed + counts.review;
     const progress = total > 0 ? Math.round((done / total) * 100) : 0;
 
-    html += '<div class="st-parent-label">📋 ' + escHtml(parentDesc) + ' — '
-      + done + '/' + total + ' (' + progress + '%)</div>';
+    // Progress bar color: green for completed, cyan for active, gray for pending
+    const greenW = progress;
+    const cyanW = total > 0 ? Math.round((working / total) * 100) : 0;
+
+    // Unified block: header + collapsible body
+    html += '<div class="st-block">';
+    html += '<div class="st-header" onclick="toggleSubtree()">'
+      + '<span class="st-chevron' + (_subtreeCollapsed ? '' : ' open') + '">▸</span>'
+      + '<span class="st-header-text">' + escHtml(parentDesc) + '</span>'
+      + '<span class="st-progress-wrap">'
+      + '<span class="st-progress-bar">'
+      + '<span class="st-progress-fill st-fill-done" style="width:' + greenW + '%"></span>'
+      + '<span class="st-progress-fill st-fill-active" style="width:' + cyanW + '%"></span>'
+      + '</span>'
+      + '<span class="st-progress-label">' + done + '/' + total + '</span>'
+      + '</span>'
+      + '</div>';
+    html += '<div class="st-body' + (_subtreeCollapsed ? ' collapsed' : '') + '">';
     html += '<div class="st-group">';
     for (const child of children) {
       const st = child.status || 'pending';
-      const desc = (child.description || '').substring(0, 40);
+      const desc = cleanTaskDesc(child.description || '').substring(0, 50);
       const agent = child.agent_id || '';
       html += '<div class="st-node">'
         + '<span class="st-dot ' + st + '"></span>'
@@ -2337,10 +2461,45 @@ function renderSubtaskTree(tasks) {
         + (agent ? '<span class="st-agent">' + escHtml(capitalize(agent)) + '</span>' : '')
         + '</div>';
     }
-    html += '</div>';
+    html += '</div></div></div>';  // close st-group, st-body, st-block
   }
 
   container.innerHTML = html;
+}
+
+function toggleSubtree() {
+  _subtreeCollapsed = !_subtreeCollapsed;
+  const bodies = document.querySelectorAll('.st-body');
+  const chevrons = document.querySelectorAll('.st-chevron');
+  bodies.forEach(b => b.classList.toggle('collapsed', _subtreeCollapsed));
+  chevrons.forEach(c => c.classList.toggle('open', !_subtreeCollapsed));
+}
+
+// ── Clean task description for display (strip injected conversation history) ──
+function cleanTaskDesc(desc) {
+  if (!desc) return '';
+  // 1) Full sweep: strip from "## 对话历史" through "## 当前消息" header in one pass
+  desc = desc.replace(/##\s*对话历史\s*\(Conversation History\)[\s\S]*?##\s*当前消息\s*\(Current Message\)\s*\n?/g, '');
+  // 2) Fallback: partial patterns (history block without 当前消息)
+  desc = desc.replace(/##\s*对话历史[\s\S]*?---\s*\n*/g, '');
+  desc = desc.replace(/##\s*当前消息\s*\(Current Message\)\s*\n?/g, '');
+  // 3) Strip any **[username]** session context lines (matches 助手, 用户, or any name)
+  desc = desc.replace(/^\*\*\[[^\]]+\]\*\*.*$/gm, '');
+  desc = desc.replace(/^[■●]\s+.{0,120}$/gm, '');
+  desc = desc.replace(/\n{2,}/g, '\n');
+  return desc.trim();
+}
+
+// ── Extract submitter username from task description ──
+function extractSubmitter(desc) {
+  if (!desc) return null;
+  // Look for **[username]** patterns — pick the last user entry (not 助手)
+  const re = /\*\*\[([^\]]+)\]\*\*/g;
+  let match, last = null;
+  while ((match = re.exec(desc)) !== null) {
+    if (match[1] !== '助手') last = match[1];
+  }
+  return last;
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -2377,7 +2536,8 @@ function diffAndRoute(prev, current) {
     // ── New task detected → TOP dispatch ──
     if (!oldStatus && !seen.has('created')) {
       seen.add('created');
-      addDispatch('📋', 'system', 'Task: ' + truncate(task.description, 80), {taskId});
+      const submitter = dashboardUser || extractSubmitter(task.description) || 'You';
+      addDispatch('📋', submitter, truncate(cleanTaskDesc(task.description), 80), {taskId});
     }
 
     // ── Agent claimed task → TOP dispatch ──
