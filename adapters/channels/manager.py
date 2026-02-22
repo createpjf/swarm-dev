@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass
 from threading import Thread
@@ -75,6 +76,9 @@ class ChannelManager:
         self._processor_task: Optional[asyncio.Task] = None
         self._health_task: Optional[asyncio.Task] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        # Persistent orchestrator pool — created lazily on first message
+        self._persistent_orch = None
+        self._orch_lock = threading.Lock()
 
     async def start(self):
         """Load and start all enabled channel adapters."""
@@ -107,8 +111,16 @@ class ChannelManager:
         logger.info("ChannelManager started with %d adapter(s)", len(self.adapters))
 
     async def stop(self):
-        """Stop all adapters gracefully."""
+        """Stop all adapters and the persistent agent pool gracefully."""
         self._running = False
+        # Shut down persistent agent pool
+        with self._orch_lock:
+            if self._persistent_orch:
+                try:
+                    self._persistent_orch.shutdown()
+                except Exception as e:
+                    logger.error("Error shutting down agent pool: %s", e)
+                self._persistent_orch = None
         for task in (self._processor_task, self._health_task):
             if task:
                 task.cancel()
@@ -467,7 +479,43 @@ class ChannelManager:
     async def _process_message(self, msg: ChannelMessage,
                                 adapter: ChannelAdapter,
                                 session):
-        """Process a single channel message end-to-end."""
+        """End-to-end message processing pipeline for every channel adapter.
+
+        Orchestrates the full lifecycle of a single user message from
+        ingestion to response delivery.  Runs inside the asyncio event
+        loop of the channel adapter (e.g. Telegram long-poll loop).
+
+        **Pipeline stages:**
+
+        1. **Typing indicator** — immediate visual feedback to the user.
+        2. **Session history** — persist the user message to the
+           ``SessionStore`` and load the last 10 turns for context
+           injection into the task description.
+        3. **Task submission** — delegate to ``_submit_task()`` which
+           runs synchronously in a thread-pool executor (because the
+           ``TaskBoard`` uses file locks).  The persistent orchestrator
+           pool picks up the new task from the board.
+        4. **Polling** — ``_wait_for_result()`` polls the ``TaskBoard``
+           until the task reaches ``completed`` / ``failed`` status or
+           a configurable timeout (default 120 s) expires.
+        5. **Response delivery** — the result is truncated to 2000 chars
+           for session storage, then chunked per platform character
+           limits (Telegram 4096, Discord 2000) and sent back.
+
+        **Error handling:**
+        - Task submission failure → send "❌ 任务提交失败".
+        - Timeout → send "⏰ 任务超时" message.
+        - Unhandled exception → caught by the caller ``_on_message()``
+          which sends a generic error reply.
+
+        Args:
+            msg:     Normalised ``ChannelMessage`` with text, user info,
+                     session_id, and channel type.
+            adapter: Platform-specific ``ChannelAdapter`` for sending
+                     replies and typing indicators.
+            session: ``SessionStore`` instance (currently unused directly;
+                     accessed via ``self._sessions`` for consistency).
+        """
         # Send typing indicator
         await adapter.send_typing(msg.chat_id)
 
@@ -517,9 +565,23 @@ class ChannelManager:
             await adapter.send_message(
                 msg.chat_id, "⏰ 任务超时，请稍后重试或简化请求")
 
+    # ── Persistent Orchestrator Pool ─────────────────────────────
+    #
+    # Instead of spawning 3 OS processes per message (2-5s overhead),
+    # we keep a single pool of agent processes alive between messages.
+    # Agents self-claim tasks from the file-based TaskBoard.
+    # Pool is created lazily on first message, restarted if agents
+    # exit due to idle timeout (default: 5 minutes of inactivity).
+
+    AGENT_IDLE_CYCLES = 300  # ~5 minutes (1s per cycle in _agent_loop)
+
     def _submit_task(self, description: str,
                      session_history: str = "") -> Optional[str]:
-        """Submit a task via Orchestrator (runs in thread pool).
+        """Submit a task to the persistent agent pool (runs in thread pool).
+
+        Agents are kept alive between messages to avoid process startup
+        overhead. The pool is created on first call and restarted if all
+        agents have exited due to idle timeout.
 
         Args:
             description: The user's message / task description.
@@ -527,25 +589,9 @@ class ChannelManager:
                              into the task description for context continuity.
         """
         try:
-            from core.orchestrator import Orchestrator
             from core.task_board import TaskBoard
 
             board = TaskBoard()
-
-            # Archive old tasks for context persistence
-            try:
-                from core.task_history import save_round
-                old_data = board._read()
-                if old_data:
-                    save_round(old_data)
-            except Exception:
-                pass
-
-            # Soft clear: archive completed tasks, keep context alive
-            # (ContextBus TTL mechanism handles natural expiry)
-            board.clear(force=True)
-            # NOTE: We no longer destroy .context_bus.json or .mailboxes
-            # to preserve cross-round context for session continuity.
 
             # Inject conversation history into task description
             if session_history:
@@ -558,25 +604,93 @@ class ChannelManager:
             else:
                 full_description = description
 
-            # Submit and launch
-            orch = Orchestrator()
-            task_id = orch.submit(full_description)
+            # Ensure agents are running (start or restart pool)
+            with self._orch_lock:
+                self._ensure_agents_running(board)
 
-            # Run agents in background thread
-            def _run():
-                try:
-                    orch._launch_all()
-                    orch._wait()
-                except Exception as e:
-                    logger.error("Channel task execution error: %s", e)
+            # Archive completed/failed tasks from previous messages
+            # NOTE: We no longer destroy .context_bus.json or .mailboxes
+            # to preserve cross-round context for session continuity.
+            self._archive_completed_tasks(board)
 
-            t = Thread(target=_run, daemon=True)
-            t.start()
+            # Submit task — persistent agents will claim it from the board
+            task = board.create(full_description, required_role="planner")
+            logger.info("Submitted channel task %s to persistent pool",
+                        task.task_id)
+            return task.task_id
 
-            return task_id
         except Exception as e:
             logger.error("Failed to submit channel task: %s", e)
             return None
+
+    def _ensure_agents_running(self, board):
+        """Start or restart the persistent agent process pool.
+
+        Called with self._orch_lock held.  On first call, archives stale
+        tasks from previous server sessions and launches all agents.
+        On subsequent calls, checks process health and restarts if needed.
+        """
+        if self._persistent_orch is None:
+            from core.orchestrator import Orchestrator
+
+            # Archive and clear stale tasks from previous server sessions
+            try:
+                from core.task_history import save_round
+                old_data = board._read()
+                if old_data:
+                    save_round(old_data)
+            except Exception:
+                pass
+            board.clear(force=True)
+
+            self._persistent_orch = Orchestrator()
+            # Extended idle timeout: agents stay alive between messages
+            self._persistent_orch.config["max_idle_cycles"] = \
+                self.AGENT_IDLE_CYCLES
+            self._persistent_orch._launch_all()
+            logger.info("Persistent agent pool started (%d processes)",
+                        len(self._persistent_orch.procs))
+            return
+
+        # Check process health — restart pool if all agents exited
+        alive = [p for p in self._persistent_orch.procs if p.is_alive()]
+        if not alive:
+            logger.info("All agent processes exited (idle timeout), "
+                        "restarting pool")
+            self._persistent_orch.procs.clear()
+            self._persistent_orch._launch_all()
+            logger.info("Agent pool restarted (%d processes)",
+                        len(self._persistent_orch.procs))
+        elif len(alive) < len(self._persistent_orch.procs):
+            dead = [p.name for p in self._persistent_orch.procs
+                    if not p.is_alive()]
+            logger.warning("Agent processes died: %s (%d/%d alive)",
+                           dead, len(alive),
+                           len(self._persistent_orch.procs))
+            self._persistent_orch.procs = alive
+
+    @staticmethod
+    def _archive_completed_tasks(board):
+        """Archive completed/failed tasks without clearing the entire board.
+
+        Unlike the previous board.clear(force=True), this preserves any
+        pending or in-progress tasks so persistent agents can keep working.
+        """
+        try:
+            from core.task_history import save_round
+            data = board._read()
+            done = {k: v for k, v in data.items()
+                    if v.get("status") in
+                    ("completed", "failed", "cancelled")}
+            if done:
+                save_round(done)
+                with board.lock:
+                    fresh = board._read()
+                    for tid in done:
+                        fresh.pop(tid, None)
+                    board._write(fresh)
+        except Exception as e:
+            logger.debug("Task archival failed (non-critical): %s", e)
 
     async def _wait_for_result(self, task_id: str,
                                 msg: ChannelMessage,

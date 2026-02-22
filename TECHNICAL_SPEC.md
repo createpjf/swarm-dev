@@ -86,26 +86,39 @@ Agent Stack is a local multi-process agent framework. Each agent runs in its own
 ### Module map
 
 ```
-agent-stack/
+cleo-dev/
 ├── core/
-│   ├── agent.py            BaseAgent — run, review, send_mail, read_mail
-│   ├── agent_memory.py     Three-layer memory (short / long / working)
+│   ├── agent.py            BaseAgent — run, tool loop, system prompt budget
 │   ├── context_bus.py      Shared file KV store
-│   ├── task_board.py       File-locked task lifecycle + self-claim
+│   ├── task_board.py       File-locked task lifecycle + self-claim + critique
 │   ├── skill_loader.py     Hot-reload markdown skills
-│   └── orchestrator.py     Process launcher + shutdown
+│   ├── skill_registry.py   Remote GitHub skill registry + install
+│   ├── orchestrator.py     Process launcher + planner close-out + subtask extraction
+│   ├── tools.py            32 tools + sanitize_params() security layer
+│   ├── exec_tool.py        Shell execution with DENY_LIST + allowlist
+│   ├── provider_router.py  Cross-provider LLM routing + health probes
+│   ├── gateway.py          HTTP gateway + WebSocket + dashboard
+│   ├── search.py           FTS5 full-text search engine
+│   ├── rate_limiter.py     Token bucket rate limiter
+│   ├── user_auth.py        Pairing code authentication
+│   ├── heartbeat.py        Per-agent heartbeat files
+│   └── usage_tracker.py    LLM cost tracking + budget enforcement
 ├── reputation/
-│   ├── scorer.py           5-dimension EMA scoring
+│   ├── scorer.py           5-dimension EMA scoring + persistence
 │   ├── peer_review.py      Weighted reviews + anti-gaming
-│   ├── scheduler.py        Event hooks + cron analysis
-│   └── evolution.py        Evolution Engine (Path A/B/C)
+│   ├── scheduler.py        Event hooks → reputation updates → evolution triggers
+│   └── evolution.py        Evolution Engine (Path A/B/C) + override management
 ├── adapters/
-│   ├── llm/                flock.py  openai.py  ollama.py
-│   ├── memory/             chroma.py  mock.py
-│   └── chain/              erc8004.py  mock.py
-├── skills/                 Markdown skill documents
+│   ├── llm/                flock.py  openai.py  ollama.py  minimax.py  resilience.py
+│   ├── memory/             chroma.py  hybrid.py  episodic.py  embedding.py  mock.py
+│   ├── chain/              erc8004.py  mock.py
+│   ├── channels/           manager.py  telegram.py  session.py  base.py
+│   ├── browser/            playwright_adapter.py (7 browser automation tools)
+│   └── voice/              tts_engine.py (4 TTS providers + caching)
+├── skills/                 Markdown skill documents + agent_overrides/
 ├── config/agents.yaml      Team configuration
-└── main.py                 CLI entry point
+├── main.py                 CLI entry point
+└── tests/                  Unit + integration tests
 ```
 
 ---
@@ -144,19 +157,20 @@ async def _agent_loop(agent, bus, board, config):
         # 3. execute task (external LLM call)
         result = await agent.run(task, bus)
 
-        # 4. submit for peer review
+        # 4. submit result and route by complexity
         board.submit_for_review(task.task_id, result)
 
-        # 5. notify reviewer agents via mailbox
-        agent.send_mail(reviewer_id, review_request, msg_type="review_request")
+        # 5. send critique request to advisor agent
+        agent.send_mail(advisor_id, critique_request, msg_type="critique_request")
+        # Advisor scores 1-10 but NEVER blocks — tasks always pass through.
+        # Planner reads scores/suggestions during final synthesis.
 
         # 6. update reputation (EMA scoring)
         await scheduler.on_task_complete(agent_id, task, result)
 
-        # 7. TaskCompleted hook — may reject if review score < 60
-        completed = board.complete(task.task_id)
-        if "review_failed" in completed.evolution_flags:
-            board.create(task.description + "\n\n[REWORK]")   # re-queue
+        # 7. check for rework (actual flags: "failed:{reason}", "timeout_recovered:{state}")
+        if any(f.startswith("failed:") for f in task.evolution_flags):
+            # rework detected → completion_signal = 70 (instead of 100)
 ```
 
 ### Why not asyncio concurrency within one process?
@@ -189,8 +203,8 @@ Key state transitions:
 | `board.claim_next()` succeeds | Task status → `claimed`, `claimed_at` set |
 | `agent.run()` completes | `board.submit_for_review()` → status `review` |
 | Peer review recorded | `board.add_review()`, reviewer reputation updated |
-| `board.complete()` — avg score ≥ 60 | Status → `completed`, `completed_at` set |
-| `board.complete()` — avg score < 60 | `evolution_flags` += `review_failed`, sent back |
+| `board.complete()` | Status → `completed`, `completed_at` set |
+| Critique score < threshold | `evolution_flags` += `failed:{reason}`, rework queued |
 | Error during `agent.run()` | `board.fail()`, `scheduler.on_error()` |
 
 ---
@@ -281,17 +295,15 @@ task_b = board.create("Implement API endpoints",
 
 ### TaskCompleted hook
 
-The `board.complete()` method acts as Claude Agent Teams' `TaskCompleted` hook — it can reject completion and send the task back for rework.
+The `board.complete()` method acts as Claude Agent Teams' `TaskCompleted` hook. In Phase 6 (critique system), the advisor NEVER blocks tasks — completion always succeeds. Rework is detected by evolution flags set during task lifecycle:
 
 ```python
 def complete(self, task_id: str) -> Task:
-    avg = average_review_score(task)
-    if avg < 60:
-        task.status = "claimed"          # back to the agent
-        task.evolution_flags += ["review_failed"]
-        return task                      # hook rejected completion
     task.status = "completed"
+    task.completed_at = time.time()
     return task
+# Rework detection uses actual flags: "failed:{reason}", "timeout_recovered:{state}"
+# These are set by board.fail(), timeout recovery, etc. — not by reviewers.
 ```
 
 ---
@@ -336,45 +348,49 @@ trend  = scorer.trend("executor")   # "improving" | "declining" | "stable"
 
 ---
 
-## 8. Peer Review
+## 8. Quality Assurance — Critique System (Phase 6)
 
-### Weight calculation
+> **Note:** The original peer review gating system (score < 60 blocks completion) was replaced in Phase 6 by an **advisor-based critique** system. Reviewers are ADVISORS, not gatekeepers — tasks are never blocked.
 
-```python
-def compute_weight(reviewer_id, target_id) -> float:
-    weight = reviewer_reputation / 100          # base: reviewer quality
+### Critique Flow
 
-    # Anti-gaming 1: mutual inflation
-    if avg_given > 85 and avg_received > 85:
-        weight *= 0.5
-
-    # Anti-gaming 2: consistency tracking
-    deviation = reviewer_deviation_from_consensus(reviewer_id)
-    weight *= max(0.3, 1.0 - deviation)
-
-    return weight
+```
+Executor completes task
+  └─▶ Complexity check
+        ├─▶ "simple" → auto-complete (skip review)
+        └─▶ "normal"/"complex" → send critique_request to advisor
+              └─▶ Advisor scores 1-10 with optional suggestions
+                    ├─▶ score >= 7: task completes as-is
+                    └─▶ score < 7: max 1 revision round, then complete
+                          └─▶ Planner synthesizes all results + feedback
 ```
 
-### Three anti-gaming mechanisms
-
-**1. Mutual inflation detection**
-If agent A consistently gives B high scores, and B consistently gives A high scores, both their review weights are halved for each other.
-
-**2. Reviewer reputation weighting**
-A reviewer with score 90 has 3× more impact than one with score 30.
-
-**3. Consistency tracking**
-Reviewers who systematically deviate from consensus (outliers in either direction) have their weight reduced: `weight *= max(0.3, 1.0 − deviation)`.
-
-### TaskCompleted integration
+### Advisor scoring
 
 ```python
-# board.complete() reads aggregated peer review score
-avg = peer_review.aggregate(task_id)   # weighted average
-if avg < 60:
-    # hook rejects — task goes back for rework
-    task.evolution_flags.append("review_failed")
+# Advisor (Alic) scores subtask output 1-10
+critique_data = {"score": 8, "suggestions": [], "comment": "Good work"}
+board.add_critique(task_id, reviewer_id, passed=True,
+                   suggestions, comment, score=score)
 ```
+
+Reviewers update their `review_accuracy` reputation dimension based on score differentiation — moderate scores (4-8) indicate careful review.
+
+### Anti-gaming mechanisms (reputation layer)
+
+**1. Mutual inflation detection** — Peer review weights detect when agents consistently exchange high scores.
+
+**2. Reviewer reputation weighting** — Higher-reputation reviewers have more impact on aggregated scores.
+
+**3. Consistency tracking** — Deviation from consensus reduces reviewer weight: `weight *= max(0.3, 1.0 − deviation)`.
+
+### Rework detection (Evolution Engine)
+
+Rework is detected by **task lifecycle flags**, not reviewer scores:
+- `"failed:{reason}"` — task failed with an exception
+- `"timeout_recovered:{state}"` — task recovered from timeout
+
+The scheduler uses these flags to set `completion_signal = 70` (rework) vs `100` (normal), feeding into the 5-dimension reputation EMA.
 
 ---
 
@@ -442,7 +458,29 @@ class LLMAdapter(Protocol):
 |---|---|---|
 | `flock.py` | FLock API | `FLOCK_API_KEY`, `FLOCK_BASE_URL` |
 | `openai.py` | OpenAI / compatible | `OPENAI_API_KEY`, `OPENAI_BASE_URL` |
+| `minimax.py` | MiniMax API | `MINIMAX_API_KEY`, `MINIMAX_BASE_URL` |
 | `ollama.py` | Local Ollama | `OLLAMA_URL` (default: localhost:11434) |
+| `resilience.py` | Retry + circuit breaker + model failover wrapper | Wraps any adapter above |
+
+### Provider Router (cross-provider failover)
+
+`core/provider_router.py` sits above `ResilientLLM` to enable cross-provider failover with latency-weighted routing:
+
+```
+ProviderRouter (strategy: latency | cost | preference | round_robin)
+  ├── minimax (priority=1, EMA latency, circuit breaker)
+  ├── openai  (priority=2, auto-failover if minimax is down)
+  └── ollama  (priority=3, local fallback)
+```
+
+Enabled via `agents.yaml`:
+```yaml
+provider_router:
+  enabled: true
+  strategy: preference
+  preferred: minimax
+  probe_interval: 60  # background health check interval
+```
 
 ### Memory Adapters
 
@@ -591,49 +629,70 @@ python main.py evolve executor confirm
 ## 13. File Layout
 
 ```
-agent-stack/
+cleo-dev/
 ├── main.py                     CLI entry point
 ├── requirements.txt
 ├── config/
-│   └── agents.yaml             Team configuration
+│   └── agents.yaml             Team configuration (3 agents: Leo/Jerry/Alic)
 ├── core/
-│   ├── agent.py                BaseAgent
-│   ├── agent_memory.py         Short / long / working memory
+│   ├── agent.py                BaseAgent + system prompt budget + compaction
 │   ├── context_bus.py          Shared KV store (filelock)
-│   ├── task_board.py           Task lifecycle + self-claim
+│   ├── task_board.py           Task lifecycle + self-claim + critique flow
+│   ├── orchestrator.py         Process launcher + subtask extraction + close-out
+│   ├── tools.py                32 tools + sanitize_params() security layer
+│   ├── exec_tool.py            Shell exec with DENY_LIST + allowlist + approvals
 │   ├── skill_loader.py         Hot-reload markdown skills
-│   └── orchestrator.py         Process launcher
+│   ├── skill_registry.py       Remote GitHub skill registry
+│   ├── provider_router.py      Cross-provider routing + health probes
+│   ├── gateway.py              HTTP API + WebSocket push + static dashboard
+│   ├── ws_gateway.py           WebSocket server (port+1, token auth)
+│   ├── search.py               FTS5 full-text search
+│   ├── rate_limiter.py         Token bucket rate limiter
+│   ├── user_auth.py            Pairing code auth for channels
+│   ├── heartbeat.py            Per-agent heartbeat files
+│   └── usage_tracker.py        LLM cost tracking + budget enforcement
 ├── reputation/
-│   ├── scorer.py               EMA scoring
-│   ├── peer_review.py          Anti-gaming peer review
-│   ├── scheduler.py            Event hooks
-│   └── evolution.py            Evolution Engine (Path A/B/C)
+│   ├── scorer.py               5-dim EMA scoring + file persistence
+│   ├── peer_review.py          Anti-gaming peer review weights
+│   ├── scheduler.py            Event hooks → score updates → evolution triggers
+│   └── evolution.py            Evolution Engine (Path A/B/C) + override management
 ├── adapters/
 │   ├── llm/
-│   │   ├── flock.py
-│   │   ├── openai.py
-│   │   └── ollama.py
+│   │   ├── flock.py            FLock API adapter
+│   │   ├── openai.py           OpenAI-compatible adapter
+│   │   ├── minimax.py          MiniMax API adapter
+│   │   ├── ollama.py           Local Ollama adapter
+│   │   └── resilience.py       ResilientLLM: retry + circuit breaker + failover
 │   ├── memory/
-│   │   ├── chroma.py
-│   │   └── mock.py
-│   └── chain/
-│       ├── erc8004.py
-│       └── mock.py
+│   │   ├── chroma.py           ChromaDB vector store
+│   │   ├── hybrid.py           BM25 + vector + RRF fusion search
+│   │   ├── episodic.py         Per-agent episodic memory
+│   │   ├── embedding.py        Multi-provider embedding (OpenAI/FLock/local)
+│   │   └── mock.py             In-memory mock for tests
+│   ├── channels/
+│   │   ├── manager.py          Channel manager + persistent orchestrator pool
+│   │   ├── session.py          File-backed conversation sessions (sole persistence)
+│   │   ├── telegram.py         Telegram bot adapter
+│   │   └── base.py             Channel adapter protocol
+│   ├── browser/
+│   │   └── playwright_adapter.py  7 browser automation tools
+│   └── voice/
+│       └── tts_engine.py       4 TTS providers + MP3 caching
 ├── skills/
 │   ├── _base.md                Core operating principles
-│   ├── planning.md
-│   ├── coding.md
-│   ├── review.md
-│   └── agent_overrides/        Evolution Engine writes here
+│   ├── _team.md                Auto-generated team topology
+│   └── agent_overrides/        Evolution Engine prompt overrides (max 3)
 ├── memory/                     Runtime data (auto-created)
 │   ├── reputation_cache.json
 │   ├── score_log.jsonl
-│   ├── peer_reviews.jsonl
 │   ├── evolution_log.jsonl
+│   ├── sessions/               Per-session JSONL conversation history
 │   ├── pending_swaps/
 │   ├── pending_votes/
-│   └── chroma/
-└── .mailboxes/                 Per-agent JSONL inboxes (auto-created)
+│   └── agents/<id>/chroma/     Per-agent vector memory
+├── workspace/                  Agent working directory
+├── .mailboxes/                 Per-agent JSONL inboxes (auto-created)
+└── tests/                      Unit + integration tests
 ```
 
 ---

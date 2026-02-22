@@ -733,14 +733,45 @@ class BaseAgent:
         return prompt
 
     def _recall_long_term(self, query: str) -> str:
-        """
-        Recall from all long-term memory layers.
-        Returns formatted text for system prompt injection.
+        """Recall from all long-term memory layers for system prompt injection.
 
-        Progressive loading (OpenViking L0→L1→L2):
-        - Episodic: recent episodes, cases, patterns
-        - Knowledge base: shared notes, cross-agent insights
-        - Vector: hybrid BM25+ChromaDB results
+        Assembles contextual memory from five independent sources, each
+        failure-tolerant (a failing source is skipped, never fatal).
+        Results are concatenated and injected into the system prompt
+        before the LLM call in ``BaseAgent.run()``.
+
+        **Source priority (highest → lowest):**
+
+        1. **Hot Memory (MEMORY.md)** — hand-curated P0/P1/P2
+           crystallised knowledge per agent.  Loaded from
+           ``memory/agents/{agent_id}/MEMORY.md``, truncated to 1500
+           chars.  Always included when the file exists.
+        2. **Episodic Memory** — recent task episodes, failure cases,
+           and behavioural patterns from ``EpisodicMemory.recall()``.
+           Budget-controlled via ``cfg.episodic_recall_budget`` tokens.
+        3. **Knowledge Base** — shared cross-agent notes and insights
+           from ``KnowledgeBase.recall()``.  Budget-controlled via
+           ``cfg.kb_recall_budget`` tokens.
+        4. **Vector / BM25 Hybrid** — semantic search via ChromaDB +
+           BM25 reranking from ``HybridMemory.query()``.  Returns
+           ``cfg.recall_top_k`` results (default 5), each truncated
+           to 300 chars.
+        5. **FTS5 Search (QMD)** — full-text SQLite search as an
+           optional augmentation.  Returns up to 3 results with
+           title + 200-char snippets.
+
+        The total recall output is bounded by ``_budget_system_prompt()``
+        which trims low-priority sections when the system prompt
+        approaches the configured token budget.
+
+        Args:
+            query: The user's task description or message, used as the
+                   search query across all memory layers.
+
+        Returns:
+            Concatenated markdown sections (``## Persistent Memory``,
+            ``## Vector Memory Recall``, etc.) ready for system prompt
+            injection.  Empty string if all sources return nothing.
         """
         parts = []
 

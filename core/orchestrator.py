@@ -360,11 +360,51 @@ def _has_active_tasks(board: TaskBoard) -> bool:
 
 async def _agent_loop(agent, bus: ContextBus, board: TaskBoard,
                        config: dict, tracker=None, heartbeat=None):
-    """
-    Agent Teams self-claim loop.
-    After finishing a task, immediately tries to claim the next one.
-    Sends periodic heartbeats for gateway status monitoring.
-    Checks for shutdown signals and recovers stale tasks.
+    """Core event loop for every agent process (Leo, Jerry, Alic).
+
+    Runs as the main coroutine inside each ``multiprocessing.Process``
+    spawned by ``Orchestrator._launch_all()``.  The loop is a state
+    machine with three priority-ordered claim stages per tick:
+
+    **State Machine (per tick, high → low priority):**
+
+    1. **Mailbox scan** — read P2P messages from teammates.
+       • ``shutdown`` → exit.
+       • ``critique_request`` / ``review_request`` → advisor handles the
+         review, then checks whether any planner close-outs unblocked.
+    2. **Critique revision** — if the agent's own task was sent back
+       with suggestions, pick it up for revision (max 1 round).
+    3. **Regular task claim** — ``board.claim_next()`` using the agent's
+       role (planner / executor / advisor) and reputation score.
+       • **Planner path:** run task → extract subtasks → register
+         parent-child mapping → wait for close-out.
+       • **Executor path:** run task → submit result → route to
+         advisor (complexity-based: simple tasks skip review).
+
+    **Idle / shutdown behaviour:**
+    - Each tick with no claimable task increments ``idle_count``.
+    - If other tasks are still active (pending/claimed/review/blocked),
+      the counter grows at half rate so the agent waits for subtask
+      completions.
+    - ``max_idle_cycles`` (default 30, overridden to ~300 by the
+      persistent pool in ``ChannelManager``) controls exit threshold.
+
+    **Background duties (every 30 s):**
+    - ``board.recover_stale_tasks()`` — reclaim tasks stuck in
+      ``claimed`` state beyond their heartbeat timeout.
+
+    **Reputation integration:**
+    - ``ReputationScheduler.on_task_complete()`` / ``on_error()`` feed
+      the 5-dim EMA scorer after each task.
+    - Score influences task claim priority via ``board.claim_next()``.
+
+    Args:
+        agent:     Fully initialised ``BaseAgent`` (skills, memory, LLM loaded).
+        bus:       Shared ``ContextBus`` for cross-agent state snapshots.
+        board:     File-locked ``TaskBoard`` (single source of truth for tasks).
+        config:    Merged ``agents.yaml`` config dict.
+        tracker:   Optional ``UsageTracker`` for per-call cost accounting.
+        heartbeat: Optional ``Heartbeat`` writer for gateway status display.
     """
     from reputation.scheduler import ReputationScheduler
     sched = ReputationScheduler(board)
