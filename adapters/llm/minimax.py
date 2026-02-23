@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -40,12 +41,22 @@ def _tool_calls_to_text(tool_calls: list[dict]) -> str:
         fn = tc.get("function", {})
         name = fn.get("name", "unknown")
         raw_args = fn.get("arguments") or "{}"
+        # MiniMax sometimes returns Python-style \UXXXXXXXX Unicode escapes
+        # which are invalid JSON (JSON only supports \uXXXX 4-digit escapes).
+        # Convert them to actual Unicode characters before parsing.
+        if isinstance(raw_args, str) and "\\U" in raw_args:
+            raw_args = re.sub(
+                r'\\U([0-9a-fA-F]{8})',
+                lambda m: chr(int(m.group(1), 16)),
+                raw_args,
+            )
         try:
             args = json.loads(raw_args)
-        except (json.JSONDecodeError, TypeError):
+        except (json.JSONDecodeError, TypeError) as exc:
             logger.warning("[minimax] Failed to parse tool_call arguments for %s: %r",
-                           name, raw_args[:200] if isinstance(raw_args, str) else raw_args)
-            args = {}
+                           name, raw_args[:300] if isinstance(raw_args, str) else raw_args)
+            # Propagate raw string so downstream handlers can attempt recovery
+            args = {"_parse_error": str(exc), "_raw_args": raw_args}
         block = json.dumps({"tool": name, "params": args}, ensure_ascii=False)
         blocks.append(f"<tool_code>\n{block}\n</tool_code>")
     return "\n".join(blocks)

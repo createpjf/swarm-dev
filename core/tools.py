@@ -971,6 +971,29 @@ def _handle_generate_doc(**kwargs) -> dict:
     title = kwargs.get("title", "")
     agent_id = kwargs.get("_agent_id", "unknown")
 
+    # Fallback: if LLM adapter couldn't parse JSON (e.g. MiniMax Unicode issue),
+    # attempt to extract content from the raw arguments string.
+    if not content and "_raw_args" in kwargs:
+        try:
+            import re as _re
+            raw = kwargs["_raw_args"]
+            m = _re.search(r'"content"\s*:\s*"((?:[^"\\]|\\.)*)"', raw, _re.DOTALL)
+            if m:
+                content = m.group(1).encode().decode('unicode_escape', errors='replace')
+            # Also try to recover format/title from raw args
+            if not fmt or fmt == "pdf":
+                mf = _re.search(r'"format"\s*:\s*"([^"]+)"', raw)
+                if mf:
+                    fmt = mf.group(1).lower().strip()
+            if not title:
+                mt = _re.search(r'"title"\s*:\s*"((?:[^"\\]|\\.)*)"', raw)
+                if mt:
+                    title = mt.group(1)
+            logger.info("[generate_doc] Recovered params from raw args (parse_error: %s)",
+                        kwargs.get("_parse_error", "?"))
+        except Exception as exc:
+            logger.warning("[generate_doc] Failed to recover from raw args: %s", exc)
+
     if not content:
         return {"ok": False, "error": "content parameter is required"}
 
