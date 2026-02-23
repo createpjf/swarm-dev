@@ -23,6 +23,7 @@ try:
     from rich.console import Console
     from rich.panel import Panel
     from rich.table import Table
+    from rich.progress import Progress, BarColumn, TextColumn, SpinnerColumn
     from rich import box
 except ImportError:
     print("ERROR: 'rich' package is required.  pip3 install rich")
@@ -32,29 +33,77 @@ import yaml
 
 console = Console()
 
-# ── Purple theme ──────────────────────────────────────────────────────────────
 
-STYLE = Style([
-    ("qmark",       "fg:#b388ff bold"),       # purple marker
-    ("question",    "bold"),
-    ("answer",      "fg:#ce93d8 bold"),        # light purple answer
-    ("pointer",     "fg:#b388ff bold"),        # purple arrow
-    ("highlighted", ""),                       # no color on whole row
-    ("selected",    "fg:#ce93d8"),             # light purple selected
-    ("instruction", "fg:#9e9e9e"),             # gray hint
-])
+# ── Theme-aware styling ───────────────────────────────────────────────────────
 
-# Rich markup colors
-C_ACCENT  = "bold magenta"       # main accent
-C_OK      = "green"              # success checkmark
-C_DIM     = "dim"                # subtle text
-C_WARN    = "yellow"             # warning
-C_AGENT   = "bold bright_magenta"  # agent names
+try:
+    from core.theme import theme as _theme
+    STYLE = _theme.questionary_style() or Style([
+        ("qmark", "fg:#b388ff bold"), ("question", "bold"),
+        ("answer", "fg:#ce93d8 bold"), ("pointer", "fg:#b388ff bold"),
+        ("highlighted", ""), ("selected", "fg:#ce93d8"),
+        ("instruction", "fg:#9e9e9e"),
+    ])
+    C_ACCENT = _theme.accent
+    C_OK = _theme.success
+    C_DIM = _theme.muted
+    C_WARN = _theme.warning
+    C_AGENT = _theme.agent
+except ImportError:
+    STYLE = Style([
+        ("qmark",       "fg:#b388ff bold"),
+        ("question",    "bold"),
+        ("answer",      "fg:#ce93d8 bold"),
+        ("pointer",     "fg:#b388ff bold"),
+        ("highlighted", ""),
+        ("selected",    "fg:#ce93d8"),
+        ("instruction", "fg:#9e9e9e"),
+    ])
+    C_ACCENT  = "bold magenta"
+    C_OK      = "green"
+    C_DIM     = "dim"
+    C_WARN    = "yellow"
+    C_AGENT   = "bold bright_magenta"
+
+
+# ── WizardCancelled exception (H1: graceful error recovery) ──────────────────
+
+class WizardCancelled(Exception):
+    """Raised when user cancels wizard via Ctrl+C or questionary returns None."""
+    def __init__(self, step: str = "", total_steps: int = 0,
+                 current_step: int = 0, partial_config: bool = False):
+        self.step = step
+        self.total_steps = total_steps
+        self.current_step = current_step
+        self.partial_config = partial_config
+        super().__init__(f"Wizard cancelled at step {current_step}/{total_steps}: {step}")
 
 def _pause(msg: str = "Press Enter to continue..."):
     """Show a message and wait for Enter before continuing."""
     console.print()
     questionary.press_any_key_to_continue(msg, style=STYLE).ask()
+
+
+def _wizard_progress(total: int, current: int, label: str):
+    """Show a compact progress indicator for wizard steps."""
+    bar_len = 20
+    filled = int(bar_len * current / total)
+    bar = "━" * filled + "╺" + "─" * (bar_len - filled - 1)
+    console.print(
+        f"  [{C_DIM}]Setup [{C_ACCENT}]{bar}[/{C_ACCENT}] "
+        f"{current}/{total} · {label}[/{C_DIM}]"
+    )
+
+
+def _check_cancelled(value, step: str = "", step_num: int = 0,
+                     total: int = 0, partial: bool = False):
+    """Raise WizardCancelled if a questionary answer is None (user pressed Ctrl+C)."""
+    if value is None:
+        raise WizardCancelled(
+            step=step, current_step=step_num,
+            total_steps=total, partial_config=partial,
+        )
+    return value
 
 
 # ── Constants ─────────────────────────────────────────────────────────────────
@@ -123,26 +172,93 @@ ENV_PATH = ".env"
 
 # ── ASCII Art Banner ─────────────────────────────────────────────────────────
 
-BANNER = r"""[bold magenta]
+BANNER = f"""[{C_ACCENT}]\
     ██████╗██╗     ███████╗ ██████╗
    ██╔════╝██║     ██╔════╝██╔═══██╗
    ██║     ██║     █████╗  ██║   ██║
    ██║     ██║     ██╔══╝  ██║   ██║
    ╚██████╗███████╗███████╗╚██████╔╝
-    ╚═════╝╚══════╝╚══════╝ ╚═════╝[/bold magenta]
-[dim]           Agent Stack · Configure[/dim]
+    ╚═════╝╚══════╝╚══════╝ ╚═════╝[/{C_ACCENT}]
+[{C_DIM}]           Agent Stack · Configure[/{C_DIM}]
 """
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  PYTHON DEPENDENCY CHECK
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _check_python_deps():
+    """Check core Python packages and offer to install if missing."""
+    CORE = [
+        ("httpx", "httpx"),
+        ("filelock", "filelock"),
+        ("yaml", "pyyaml"),
+    ]
+    OPTIONAL = [
+        ("chromadb", "chromadb", "Vector memory"),
+        ("telegram", "python-telegram-bot", "Telegram"),
+        ("discord", "discord.py", "Discord"),
+    ]
+
+    missing = []
+    for mod, pkg in CORE:
+        try:
+            __import__(mod)
+        except ImportError:
+            missing.append(pkg)
+
+    if missing:
+        console.print(f"  [{C_WARN}]Missing core packages: {', '.join(missing)}[/{C_WARN}]")
+        install = questionary.confirm(
+            "Install missing packages?", default=True, style=STYLE,
+        ).ask()
+        if install:
+            import subprocess
+            console.print(f"  [{C_DIM}]Installing...[/{C_DIM}]")
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-q"] + missing,
+                capture_output=True, text=True, timeout=120,
+            )
+            if result.returncode == 0:
+                console.print(f"  [{C_OK}]+[/{C_OK}] Core packages installed")
+            else:
+                console.print(f"  [{C_WARN}]Install failed: {result.stderr[:200]}[/{C_WARN}]")
+    else:
+        console.print(f"  [{C_OK}]+[/{C_OK}] Core packages OK")
+
+    for mod, pkg, label in OPTIONAL:
+        try:
+            __import__(mod)
+            console.print(f"    {label:<16s} [{C_OK}]installed[/{C_OK}]")
+        except ImportError:
+            console.print(f"    {label:<16s} [{C_DIM}]not installed "
+                          f"(pip install {pkg})[/{C_DIM}]")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  QUICK SETUP  — first-run in chat mode
 # ══════════════════════════════════════════════════════════════════════════════
 
-def run_quick_setup() -> bool:
-    """Minimal onboarding. Returns True on success."""
+def run_quick_setup(provider_arg: str = "", api_key_arg: str = "",
+                    model_arg: str = "", non_interactive: bool = False) -> bool:
+    """Minimal onboarding. Returns True on success.
+
+    Args:
+        provider_arg: Provider name for non-interactive mode
+        api_key_arg: API key for non-interactive mode
+        model_arg: Model name for non-interactive mode
+        non_interactive: If True, skip all prompts and use args/defaults
+    """
+    _partial_written = False
     try:
         console.print()
         console.print(BANNER)
+
+        # ── Non-interactive mode (H2: CI/Docker friendly) ──
+        if non_interactive or not sys.stdin.isatty():
+            return _run_non_interactive(
+                provider=provider_arg, api_key=api_key_arg, model=model_arg,
+            )
 
         # ── Risk acknowledgment (OpenClaw pattern: first-run only) ──
         if not os.path.exists(CONFIG_PATH):
@@ -158,42 +274,107 @@ def run_quick_setup() -> bool:
             _wizard_sections()
             return True
 
+        _wizard_progress(5, 1, "Model & Auth")
         console.print(f"  [{C_ACCENT}]Quick Setup[/{C_ACCENT}]\n")
 
+        # ── Python dependency check ──
+        _check_python_deps()
+        console.print()
+
         # ── Provider ──
-        provider = _ask_provider()
-        if provider is None:
-            return False
+        if provider_arg:
+            provider = provider_arg
+        else:
+            provider = _check_cancelled(
+                _ask_provider(), "Provider selection", 1, 5)
 
         # ── API key ──
-        api_key = _ensure_api_key(provider)
-        if api_key is None:
-            return False
+        if api_key_arg:
+            api_key = api_key_arg
+            _write_env(PROVIDERS[provider]["env"], api_key)
+            os.environ[PROVIDERS[provider]["env"]] = api_key
+        else:
+            api_key = _check_cancelled(
+                _ensure_api_key(provider), "API Key", 1, 5)
 
         # ── Model ──
-        model = _ask_model(provider, api_key)
-        if model is None:
-            return False
+        _wizard_progress(5, 2, "Model")
+        if model_arg:
+            model = model_arg
+        else:
+            model = _check_cancelled(
+                _ask_model(provider, api_key), "Model selection", 2, 5)
 
         # ── Write config ──
         _write_config_quick(provider, model, api_key)
+        _partial_written = True
 
         # ── Skill CLI dependencies ──
+        _wizard_progress(5, 3, "Skill Dependencies")
         console.print(f"\n  [{C_DIM}]Checking skill CLI dependencies...[/{C_DIM}]")
         _ask_skill_deps()
 
         # ── Health check ──
+        _wizard_progress(5, 4, "Health Check")
         console.print(f"\n  [{C_DIM}]Running health check...[/{C_DIM}]")
         from core.doctor import run_doctor_quick
         run_doctor_quick(console)
 
+        # ── Channel status ──
+        _show_channel_status_summary()
+
         # ── Gateway summary ──
+        _wizard_progress(5, 5, "Done")
         _show_gateway_summary(provider, model)
+        _show_next_steps()
         return True
 
-    except KeyboardInterrupt:
-        console.print(f"\n  [{C_WARN}]Cancelled.[/{C_WARN}]")
+    except WizardCancelled as e:
+        _show_cancelled_recovery(e, _partial_written)
         return False
+    except KeyboardInterrupt:
+        _show_cancelled_recovery(
+            WizardCancelled("Interrupted", 5, 0, _partial_written),
+            _partial_written,
+        )
+        return False
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  SECTION-ONLY MODE  — cleo configure --section <name>
+# ══════════════════════════════════════════════════════════════════════════════
+
+def run_onboard_section(section: str):
+    """Run a single configure section directly (--section flag)."""
+    if not os.path.exists(CONFIG_PATH):
+        console.print(f"  [{C_WARN}]No config found. Run `cleo onboard` first.[/{C_WARN}]")
+        return
+    handler = _SECTION_HANDLERS.get(section)
+    if not handler:
+        console.print(f"  [{C_WARN}]Unknown section: {section}[/{C_WARN}]")
+        return
+    with open(CONFIG_PATH) as f:
+        cfg = yaml.safe_load(f) or {}
+
+    label = section.replace("_", " ").title()
+    console.print(f"\n  [{C_ACCENT}]{'─' * 50}[/{C_ACCENT}]")
+    console.print(f"  [{C_ACCENT}]{label}[/{C_ACCENT}]")
+    console.print(f"  [{C_ACCENT}]{'─' * 50}[/{C_ACCENT}]\n")
+
+    handler(cfg)
+
+    os.makedirs("config", exist_ok=True)
+    with open(CONFIG_PATH, "w") as f:
+        f.write("# config/agents.yaml\n\n")
+        yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+    try:
+        from core.team_skill import generate_team_skill
+        generate_team_skill()
+    except Exception:
+        pass
+
+    console.print(f"\n  [{C_OK}]+[/{C_OK}] Config saved -> {CONFIG_PATH}\n")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -202,6 +383,7 @@ def run_quick_setup() -> bool:
 
 def run_onboard():
     """Full interactive wizard — QuickStart, Advanced, or Sectional mode."""
+    _partial_written = False
     try:
         console.print()
         console.print(BANNER)
@@ -220,66 +402,69 @@ def run_onboard():
             return
 
         # ── Fresh setup — QuickStart or Advanced ──
-        mode = questionary.select(
-            "Setup mode:",
-            choices=[
-                questionary.Choice(
-                    "QuickStart (sensible defaults, fast)",
-                    value="quick",
-                ),
-                questionary.Choice(
-                    "Advanced (per-agent LLM, gateway, daemon)",
-                    value="advanced",
-                ),
-            ],
-            default="quick",
-            style=STYLE,
-        ).ask()
-        if mode is None:
-            return
+        mode = _check_cancelled(
+            questionary.select(
+                "Setup mode:",
+                choices=[
+                    questionary.Choice(
+                        "QuickStart (sensible defaults, fast)",
+                        value="quick",
+                    ),
+                    questionary.Choice(
+                        "Advanced (per-agent LLM, gateway, daemon)",
+                        value="advanced",
+                    ),
+                ],
+                default="quick",
+                style=STYLE,
+            ).ask(),
+            "Mode selection", 0, 5,
+        )
 
         if mode == "quick":
             _wizard_quick()
         else:
             _wizard_advanced()
 
+    except WizardCancelled as e:
+        _show_cancelled_recovery(e, _partial_written)
     except KeyboardInterrupt:
-        console.print(f"\n  [{C_WARN}]Cancelled.[/{C_WARN}]")
+        _show_cancelled_recovery(
+            WizardCancelled("Interrupted", 5, 0, os.path.exists(CONFIG_PATH)),
+            os.path.exists(CONFIG_PATH),
+        )
 
 
 def _wizard_quick():
     """QuickStart path — same as run_quick_setup but called from configure."""
+    _wizard_progress(5, 1, "Model & Auth")
     console.print(f"\n  [{C_ACCENT}]Step 1/5 · Model & Auth[/{C_ACCENT}]")
 
-    provider = _ask_provider()
-    if provider is None:
-        return
-
-    api_key = _ensure_api_key(provider)
-    if api_key is None:
-        return
-
-    model = _ask_model(provider, api_key)
-    if model is None:
-        return
+    provider = _check_cancelled(_ask_provider(), "Provider", 1, 5)
+    api_key = _check_cancelled(_ensure_api_key(provider), "API Key", 1, 5)
+    model = _check_cancelled(_ask_model(provider, api_key), "Model", 1, 5)
 
     # Write config
     _write_config_quick(provider, model, api_key)
 
     # Skill CLI dependencies
+    _wizard_progress(5, 2, "Skill CLI Dependencies")
     console.print(f"\n  [{C_ACCENT}]Step 2/5 · Skill CLI Dependencies[/{C_ACCENT}]")
     _ask_skill_deps()
 
     # Tools quick setup
+    _wizard_progress(5, 3, "Tools")
     console.print(f"\n  [{C_ACCENT}]Step 3/5 · Tools[/{C_ACCENT}]")
     _ask_tools_quick()
 
     # Health check
+    _wizard_progress(5, 4, "Health Check")
     console.print(f"\n  [{C_ACCENT}]Step 4/5 · Health Check[/{C_ACCENT}]")
     from core.doctor import run_doctor_quick
     run_doctor_quick(console)
 
     # Gateway summary
+    _wizard_progress(5, 5, "Done")
     console.print(f"  [{C_ACCENT}]Step 5/5 · Gateway Summary[/{C_ACCENT}]")
     _show_gateway_summary(provider, model)
 
@@ -398,6 +583,7 @@ def _wizard_advanced():
 
     # ── Summary ──
     _show_gateway_summary_full(agents_cfg, memory, chain, gateway_port)
+    _show_next_steps()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -537,7 +723,7 @@ def _ask_skill_deps():
             continue
 
         emoji = dep.get("emoji", "")
-        console.print(f"  {emoji} {dep['skill']}: [dim]$ {cmd}[/dim]")
+        console.print(f"  {emoji} {dep['skill']}: [{C_DIM}]$ {cmd}[/{C_DIM}]")
         success = install_dep(best, quiet=False)
         if success:
             console.print(f"  [{C_OK}]✓[/{C_OK}] {dep['skill']} installed")
@@ -552,6 +738,74 @@ def _ask_skill_deps():
     else:
         console.print(f"  [{C_OK}]{ok_count} installed[/{C_OK}], "
                       f"[{C_WARN}]{fail_count} failed[/{C_WARN}]")
+
+    # ── Refresh PATH and re-verify installs ──
+    # After subprocess installs, new binaries may be in dirs not yet in
+    # the current process's PATH. Refresh from common locations.
+    _refresh_path_after_install()
+
+    # Re-scan to show updated status
+    if ok_count > 0:
+        fresh_missing = get_missing_deps()
+        newly_found = len(missing) - len(fresh_missing)
+        if newly_found > 0:
+            console.print(f"  [{C_OK}]Verified: {newly_found} new CLIs now available on PATH[/{C_OK}]")
+        elif ok_count > 0:
+            console.print(f"  [{C_DIM}]Note: installed CLIs may require a shell restart to appear on PATH[/{C_DIM}]")
+
+
+def _refresh_path_after_install():
+    """Refresh PATH to detect newly installed binaries.
+
+    After running subprocess install commands (brew, npm, go install, etc.),
+    the binaries may be placed in directories not in the current process's
+    os.environ['PATH']. We add common install locations.
+    """
+    import shutil as _shutil
+
+    extra_dirs = []
+    home = os.path.expanduser("~")
+
+    # Common install destinations
+    candidates = [
+        os.path.join(home, ".local", "bin"),       # pip, pipx, uv
+        os.path.join(home, "go", "bin"),            # go install
+        os.path.join(home, ".cargo", "bin"),         # cargo install
+        "/usr/local/bin",                            # brew on Intel Mac
+        "/opt/homebrew/bin",                         # brew on Apple Silicon
+        os.path.join(home, ".nvm", "versions", "node"),  # nvm managed node
+    ]
+
+    # For nvm, find the currently active node bin dir
+    nvm_dir = os.path.join(home, ".nvm", "versions", "node")
+    if os.path.isdir(nvm_dir):
+        try:
+            versions = sorted(os.listdir(nvm_dir), reverse=True)
+            for v in versions:
+                nbin = os.path.join(nvm_dir, v, "bin")
+                if os.path.isdir(nbin):
+                    candidates.append(nbin)
+                    break
+        except OSError:
+            pass
+
+    current_path = os.environ.get("PATH", "")
+    path_dirs = set(current_path.split(os.pathsep))
+
+    for d in candidates:
+        if os.path.isdir(d) and d not in path_dirs:
+            extra_dirs.append(d)
+
+    if extra_dirs:
+        os.environ["PATH"] = os.pathsep.join(extra_dirs) + os.pathsep + current_path
+
+    # Also clear Python's internal which() cache if any
+    # (shutil.which doesn't cache, but importlib might)
+    try:
+        import importlib
+        importlib.invalidate_caches()
+    except Exception:
+        pass
 
 
 def _ask_tools_quick():
@@ -622,8 +876,9 @@ def _ask_tools_quick():
                     f.write("# config/agents.yaml\n\n")
                     yaml.dump(cfg, f, allow_unicode=True,
                               default_flow_style=False, sort_keys=False)
-        except Exception:
-            pass
+        except Exception as e:
+            console.print(f"  [red]✗[/red] Failed to save tool profile: {e}")
+            return
         console.print(f"  [{C_OK}]+[/{C_OK}] Tool profile: {profile}")
 
 
@@ -641,6 +896,7 @@ _SECTIONS = [
     ("memory",      "Memory",      "Switch memory backend (mock / chroma / hybrid)"),
     ("resilience",  "Resilience",  "Retry count, circuit breaker, backoff timing"),
     ("compaction",  "Compaction",  "Context window compaction settings"),
+    ("channels",    "Channels",    "Enable/disable channels, set tokens, test connectivity"),
     ("gateway",     "Gateway",     "Port, auth token, daemon settings"),
     ("chain",       "Chain",       "On-chain reputation (ERC-8004)"),
     ("tools",       "Tools",       "Built-in tools: web search, exec, cron, media"),
@@ -655,23 +911,18 @@ def _wizard_sections():
     while True:
         console.print()
 
-        # ── Section selector (checkbox) ──
+        # ── Section selector (single-select menu) ──
         choices = [
-            questionary.Choice(
-                f"{label:<14s}({desc})",
-                value=value,
-                checked=False,
-            )
-            for value, label, desc in _SECTIONS
+            questionary.Choice(label, value=value)
+            for value, label, _desc in _SECTIONS
         ]
         choices.append(questionary.Choice(
             "[Done] — save & exit",
             value="_exit",
-            checked=False,
         ))
 
-        selected = questionary.checkbox(
-            "Select sections to configure (or Done to exit):",
+        selected = questionary.select(
+            "Select a section to configure (or Done to exit):",
             choices=choices,
             style=STYLE,
         ).ask()
@@ -679,30 +930,29 @@ def _wizard_sections():
         if selected is None:
             console.print(f"\n  [{C_WARN}]Cancelled.[/{C_WARN}]\n")
             return
-        if "_exit" in selected or not selected:
+        if selected == "_exit":
             break
 
         # Load current config
         with open(CONFIG_PATH) as f:
             cfg = yaml.safe_load(f) or {}
 
-        # ── Run each selected section handler ──
-        for i, section in enumerate(selected):
-            label = _label_map.get(section, section.title())
+        # ── Run the selected section handler ──
+        section = selected
+        label = _label_map.get(section, section.title())
 
-            # Section separator
-            console.print()
-            console.print(f"  [{C_ACCENT}]{'─' * 50}[/{C_ACCENT}]")
-            console.print(f"  [{C_ACCENT}]{label}[/{C_ACCENT}]"
-                           f"  [{C_DIM}]({i+1}/{len(selected)})[/{C_DIM}]")
-            console.print(f"  [{C_ACCENT}]{'─' * 50}[/{C_ACCENT}]")
-            console.print()
+        # Section separator
+        console.print()
+        console.print(f"  [{C_ACCENT}]{'─' * 50}[/{C_ACCENT}]")
+        console.print(f"  [{C_ACCENT}]{label}[/{C_ACCENT}]")
+        console.print(f"  [{C_ACCENT}]{'─' * 50}[/{C_ACCENT}]")
+        console.print()
 
-            handler = _SECTION_HANDLERS.get(section)
-            if handler:
-                handler(cfg)
-            else:
-                console.print(f"  [{C_WARN}]No handler for section: {section}[/{C_WARN}]")
+        handler = _SECTION_HANDLERS.get(section)
+        if handler:
+            handler(cfg)
+        else:
+            console.print(f"  [{C_WARN}]No handler for section: {section}[/{C_WARN}]")
 
         # ── Write updated config after each round ──
         os.makedirs("config", exist_ok=True)
@@ -2044,6 +2294,180 @@ def _section_tools(cfg: dict):
                           f"Use the API: POST /v1/exec[/{C_DIM}]")
 
 
+def _section_channels(cfg: dict):
+    """Section: Enable/disable channels, set tokens, test connectivity."""
+    channels = cfg.setdefault("channels", {})
+
+    _CHANNEL_DEFS = {
+        "telegram": {"token_env": "TELEGRAM_BOT_TOKEN", "label": "Telegram"},
+        "discord":  {"token_env": "DISCORD_BOT_TOKEN",  "label": "Discord"},
+        "slack":    {"token_env": "SLACK_BOT_TOKEN",     "label": "Slack"},
+        "feishu":   {"token_env": "FEISHU_APP_ID",       "label": "Feishu (Lark)"},
+    }
+
+    # Show current channel status
+    console.print(f"  [{C_DIM}]Current channel status:[/{C_DIM}]")
+    for ch_id, ch_def in _CHANNEL_DEFS.items():
+        ch_cfg = channels.get(ch_id, {})
+        enabled = ch_cfg.get("enabled", False)
+        token_env = ch_def["token_env"]
+        has_token = bool(os.environ.get(token_env, ""))
+        status = f"[{C_OK}]✓ enabled[/{C_OK}]" if enabled else f"[{C_DIM}]✗ disabled[/{C_DIM}]"
+        token_status = f"[{C_OK}]set[/{C_OK}]" if has_token else f"[{C_WARN}]not set[/{C_WARN}]"
+        console.print(f"    {ch_def['label']:<14s} {status}   token: {token_status}")
+    console.print()
+
+    # Select channel to configure
+    ch_choices = [
+        questionary.Choice(f"{d['label']}", value=ch_id)
+        for ch_id, d in _CHANNEL_DEFS.items()
+    ]
+    ch_choices.append(questionary.Choice("[Back]", value="_back"))
+
+    selected = questionary.select(
+        "Select channel to configure:",
+        choices=ch_choices,
+        style=STYLE,
+    ).ask()
+    if selected is None or selected == "_back":
+        return
+
+    ch_id = selected
+    ch_def = _CHANNEL_DEFS[ch_id]
+    ch_cfg = channels.setdefault(ch_id, {})
+
+    # Toggle enable/disable
+    currently_enabled = ch_cfg.get("enabled", False)
+    enable = questionary.confirm(
+        f"Enable {ch_def['label']}?",
+        default=currently_enabled,
+        style=STYLE,
+    ).ask()
+    if enable is None:
+        return
+    ch_cfg["enabled"] = enable
+
+    if not enable:
+        console.print(f"  [{C_DIM}]{ch_def['label']} disabled.[/{C_DIM}]")
+        return
+
+    # Token configuration
+    token_env = ch_def["token_env"]
+    current_token = os.environ.get(token_env, "")
+    if current_token:
+        console.print(f"  [{C_DIM}]{token_env}: {'*' * 8}...{current_token[-4:]}[/{C_DIM}]")
+        change = questionary.confirm(
+            f"Change {token_env}?",
+            default=False,
+            style=STYLE,
+        ).ask()
+        if change:
+            new_token = questionary.password(
+                f"Enter {token_env}:",
+                style=STYLE,
+            ).ask()
+            if new_token:
+                _write_env(token_env, new_token)
+                os.environ[token_env] = new_token
+                console.print(f"  [{C_OK}]+[/{C_OK}] Token saved to .env")
+    else:
+        console.print(f"  [{C_WARN}]{token_env} is not set.[/{C_WARN}]")
+        new_token = questionary.password(
+            f"Enter {token_env}:",
+            style=STYLE,
+        ).ask()
+        if new_token:
+            _write_env(token_env, new_token)
+            os.environ[token_env] = new_token
+            console.print(f"  [{C_OK}]+[/{C_OK}] Token saved to .env")
+
+    # Feishu needs app_secret too
+    if ch_id == "feishu":
+        secret_env = "FEISHU_APP_SECRET"
+        current_secret = os.environ.get(secret_env, "")
+        if not current_secret:
+            new_secret = questionary.password(
+                f"Enter {secret_env}:",
+                style=STYLE,
+            ).ask()
+            if new_secret:
+                _write_env(secret_env, new_secret)
+                os.environ[secret_env] = new_secret
+                console.print(f"  [{C_OK}]+[/{C_OK}] App secret saved to .env")
+
+    # Slack needs app_token too
+    if ch_id == "slack":
+        app_token_env = "SLACK_APP_TOKEN"
+        current_app_token = os.environ.get(app_token_env, "")
+        if not current_app_token:
+            new_app_token = questionary.password(
+                f"Enter {app_token_env} (xapp-...):",
+                style=STYLE,
+            ).ask()
+            if new_app_token:
+                _write_env(app_token_env, new_app_token)
+                os.environ[app_token_env] = new_app_token
+                console.print(f"  [{C_OK}]+[/{C_OK}] App token saved to .env")
+
+    # Auth mode
+    auth_modes = ["pairing", "open", "allowlist"]
+    current_auth = ch_cfg.get("auth_mode", "pairing")
+    auth_mode = questionary.select(
+        "Auth mode (who can talk to the bot?):",
+        choices=[
+            questionary.Choice("pairing  — users must pair with a code (recommended)", value="pairing"),
+            questionary.Choice("open     — anyone can message", value="open"),
+            questionary.Choice("allowlist — only pre-approved users", value="allowlist"),
+        ],
+        default=current_auth if current_auth in auth_modes else "pairing",
+        style=STYLE,
+    ).ask()
+    if auth_mode:
+        ch_cfg["auth_mode"] = auth_mode
+
+    # Mention required (for groups)
+    if ch_id in ("telegram", "discord", "slack"):
+        mention = questionary.confirm(
+            "Require @mention in group chats?",
+            default=ch_cfg.get("mention_required", True),
+            style=STYLE,
+        ).ask()
+        if mention is not None:
+            ch_cfg["mention_required"] = mention
+
+    # Test connectivity (optional)
+    test = questionary.confirm(
+        f"Test {ch_def['label']} connectivity?",
+        default=False,
+        style=STYLE,
+    ).ask()
+    if test:
+        console.print(f"  [{C_DIM}]Testing {ch_def['label']} connection...[/{C_DIM}]")
+        try:
+            if ch_id == "telegram":
+                import urllib.request
+                token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+                if token:
+                    url = f"https://api.telegram.org/bot{token}/getMe"
+                    req = urllib.request.Request(url, method="GET")
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        import json as _json
+                        data = _json.loads(resp.read())
+                        if data.get("ok"):
+                            bot_name = data["result"].get("username", "?")
+                            console.print(f"  [{C_OK}]+[/{C_OK}] Connected as @{bot_name}")
+                        else:
+                            console.print(f"  [{C_WARN}]API returned ok=false[/{C_WARN}]")
+                else:
+                    console.print(f"  [{C_WARN}]No token set, cannot test.[/{C_WARN}]")
+            else:
+                console.print(f"  [{C_DIM}]Connectivity test not yet implemented for {ch_def['label']}.[/{C_DIM}]")
+        except Exception as e:
+            console.print(f"  [{C_WARN}]Connection failed: {e}[/{C_WARN}]")
+
+    console.print(f"  [{C_OK}]+[/{C_OK}] {ch_def['label']} configured.")
+
+
 def _section_health(cfg: dict):
     """Section: Run health check."""
     from core.doctor import run_doctor
@@ -2067,6 +2491,7 @@ _SECTION_HANDLERS = {
     "memory":     _section_memory,
     "resilience": _section_resilience,
     "compaction": _section_compaction,
+    "channels":   _section_channels,
     "gateway":    _section_gateway,
     "chain":      _section_chain,
     "health":     _section_health,
@@ -2135,6 +2560,35 @@ def _ask_daemon(port: int, token: str):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  CHANNEL STATUS + NEXT STEPS
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _show_channel_status_summary():
+    """Compact channel status display after setup."""
+    _CH = [
+        ("Telegram", "TELEGRAM_BOT_TOKEN"),
+        ("Discord",  "DISCORD_BOT_TOKEN"),
+        ("Slack",    "SLACK_BOT_TOKEN"),
+        ("Feishu",   "FEISHU_APP_ID"),
+    ]
+    console.print(f"\n  [{C_DIM}]Channels:[/{C_DIM}]")
+    for label, env in _CH:
+        ok = bool(os.environ.get(env, ""))
+        mark = f"[{C_OK}]ready[/{C_OK}]" if ok else f"[{C_DIM}]not configured[/{C_DIM}]"
+        console.print(f"    {label:<12s} {mark}")
+
+
+def _show_next_steps():
+    """Show actionable guidance after setup completion."""
+    console.print(f"  [{C_ACCENT}]Next Steps[/{C_ACCENT}]")
+    console.print(f"    1. [{C_OK}]cleo[/{C_OK}]                                Start chatting")
+    console.print(f"    2. [{C_OK}]cleo gateway start[/{C_OK}]                   Launch dashboard")
+    console.print(f"    3. [{C_OK}]cleo configure --section channels[/{C_OK}]    Connect channels")
+    console.print(f"    4. [{C_OK}]cleo doctor[/{C_OK}]                          System health check")
+    console.print()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  GATEWAY SUMMARY — OpenClaw-style post-setup display
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -2154,8 +2608,7 @@ def _show_gateway_summary(provider: str, model: str):
         f"  Memory     [{C_DIM}]mock (in-memory)[/{C_DIM}]\n"
         f"  Gateway    [{C_DIM}]http://127.0.0.1:{gateway_port}/[/{C_DIM}]\n"
         f"{token_line}"
-        f"  Config     [{C_DIM}]{CONFIG_PATH}[/{C_DIM}]\n\n"
-        f"  [{C_OK}]+[/{C_OK}] Type a task to get started!",
+        f"  Config     [{C_DIM}]{CONFIG_PATH}[/{C_DIM}]",
         border_style="magenta",
         box=box.ROUNDED,
     ))
@@ -2197,8 +2650,7 @@ def _show_gateway_summary_full(agents_cfg: list[dict], memory: str, chain: bool,
         console.print(f"  Gateway  [{C_DIM}]{gw_label}[/{C_DIM}]")
     if gateway_token:
         console.print(f"  Token    [{C_DIM}]{gateway_token}[/{C_DIM}]")
-    console.print(f"  Config   [{C_DIM}]{CONFIG_PATH}[/{C_DIM}]")
-    console.print(f"\n  [{C_OK}]+[/{C_OK}] Type a task to get started!\n")
+    console.print(f"  Config   [{C_DIM}]{CONFIG_PATH}[/{C_DIM}]\n")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2538,6 +2990,23 @@ def _ask_provider() -> str | None:
     return provider
 
 
+def _validate_api_key(provider: str, key: str):
+    """Quick validation of an API key by attempting to list models."""
+    console.print(f"  [{C_DIM}]Validating...[/{C_DIM}]", end="")
+    try:
+        models, err = _fetch_models(provider, key)
+        if models:
+            console.print(f"\r  [{C_OK}]+[/{C_OK}] API key valid "
+                          f"({len(models)} models available)    ")
+        elif err:
+            console.print(f"\r  [{C_WARN}]! Key might be invalid: "
+                          f"{err[:80]}[/{C_WARN}]" + " " * 20)
+        else:
+            console.print(f"\r  [{C_OK}]+[/{C_OK}] API key saved                  ")
+    except Exception:
+        console.print(f"\r  [{C_OK}]+[/{C_OK}] API key saved (validation skipped)")
+
+
 def _ensure_api_key(provider: str) -> str | None:
     """
     Make sure API key is available. Returns the key value (or empty to keep existing).
@@ -2571,15 +3040,17 @@ def _ensure_api_key(provider: str) -> str | None:
 
         key = questionary.password("New API Key:", style=STYLE).ask()
         if key:
-            # Write immediately so model fetching can use it
             _write_env(env_var, key)
+            os.environ[env_var] = key
+            _validate_api_key(provider, key)
         return key
 
     console.print(f"  [{C_DIM}]({env_var} not found in environment)[/{C_DIM}]")
     key = questionary.password("API Key:", style=STYLE).ask()
     if key:
-        # Write immediately so model fetching can use it
         _write_env(env_var, key)
+        os.environ[env_var] = key
+        _validate_api_key(provider, key)
     return key
 
 
@@ -2723,3 +3194,85 @@ def _write_config_full(agents_cfg: list[dict], memory: str, chain: bool):
         generate_team_skill()
     except Exception:
         pass
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  NON-INTERACTIVE MODE — H2: CI/Docker friendly setup
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _run_non_interactive(provider: str = "", api_key: str = "",
+                         model: str = "") -> bool:
+    """Run setup without any interactive prompts (for CI/Docker/piped input).
+
+    Uses provided args or sensible defaults for everything.
+    """
+    console.print(f"  [{C_ACCENT}]Non-interactive setup[/{C_ACCENT}]\n")
+
+    # Defaults
+    provider = provider or os.environ.get("CLEO_PROVIDER", "flock")
+    if provider not in PROVIDERS:
+        console.print(f"  [{C_WARN}]Unknown provider: {provider}. Using 'flock'.[/{C_WARN}]")
+        provider = "flock"
+
+    pinfo = PROVIDERS[provider]
+
+    # API key: from arg, env, or fail
+    if not api_key:
+        api_key = os.environ.get(pinfo["env"], "") if pinfo["env"] else ""
+    if not api_key and pinfo["env"]:
+        console.print(f"  [{C_WARN}]✗[/{C_WARN}] No API key provided. Set {pinfo['env']} or use --api-key.")
+        return False
+
+    # Model: from arg or provider default
+    model = model or pinfo["model"]
+
+    # Write env
+    if pinfo["env"] and api_key:
+        _write_env(pinfo["env"], api_key)
+        os.environ[pinfo["env"]] = api_key
+
+    # Write config
+    _write_config_quick(provider, model, api_key)
+
+    console.print(f"  [{C_OK}]✓[/{C_OK}] Provider: {pinfo['label']}")
+    console.print(f"  [{C_OK}]✓[/{C_OK}] Model: {model}")
+    console.print(f"  [{C_OK}]✓[/{C_OK}] Config written → {CONFIG_PATH}")
+
+    # Quick health check (non-interactive)
+    console.print(f"\n  [{C_DIM}]Running health check...[/{C_DIM}]")
+    from core.doctor import run_doctor_quick
+    results = run_doctor_quick(console)
+
+    ok_count = sum(1 for ok, _, _ in results if ok)
+    console.print(f"\n  [{C_OK}]✓[/{C_OK}] Setup complete ({ok_count}/{len(results)} checks passed)\n")
+    return True
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  GRACEFUL RECOVERY — H1: WizardCancelled error handling
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _show_cancelled_recovery(exc: WizardCancelled, partial_written: bool):
+    """Show recovery guidance when wizard is cancelled mid-flow."""
+    console.print()
+    if exc.current_step and exc.total_steps:
+        console.print(
+            f"  [{C_WARN}]⚠ Setup interrupted at Step "
+            f"{exc.current_step}/{exc.total_steps}"
+            f"{(' · ' + exc.step) if exc.step else ''}[/{C_WARN}]"
+        )
+    else:
+        console.print(f"  [{C_WARN}]⚠ Setup interrupted.[/{C_WARN}]")
+
+    _h = C_ACCENT or "bold"
+    if partial_written or os.path.exists(CONFIG_PATH):
+        console.print(
+            f"  [{C_DIM}]Config partially written. To resume or redo:[/{C_DIM}]"
+        )
+        console.print(f"    • [{_h}]cleo configure[/{_h}]    — resume configuration")
+        console.print(f"    • [{_h}]cleo doctor[/{_h}]       — check what's working")
+    else:
+        console.print(
+            f"  [{C_DIM}]No config written. Run [{_h}]cleo onboard[/{_h}] to start again.[/{C_DIM}]"
+        )
+    console.print()

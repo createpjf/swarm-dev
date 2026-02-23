@@ -16,6 +16,15 @@ import sys
 
 import yaml
 
+try:
+    from core.theme import theme as _theme
+except ImportError:
+    class _FallbackTheme:
+        success = "green"; error = "red"; warning = "yellow"
+        muted = "dim"; heading = "bold"; info = "cyan"
+        accent = "bold magenta"; accent_light = "magenta"
+    _theme = _FallbackTheme()
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  PREFLIGHT — fast startup checks with fix suggestions
@@ -410,12 +419,169 @@ def check_chain() -> tuple[bool, str, str]:
     return ok, "Chain", detail
 
 
+def check_plugins() -> tuple[bool, str, str]:
+    """Check installed plugins for integrity."""
+    plugins_dir = "plugins"
+    if not os.path.isdir(plugins_dir):
+        return True, "Plugins", "No plugins directory"
+
+    total = 0
+    ok_count = 0
+    broken = []
+    disabled = 0
+
+    for name in os.listdir(plugins_dir):
+        plugin_dir = os.path.join(plugins_dir, name)
+        if not os.path.isdir(plugin_dir) or name.startswith("."):
+            continue
+        total += 1
+
+        if os.path.exists(os.path.join(plugin_dir, ".disabled")):
+            disabled += 1
+            ok_count += 1
+            continue
+
+        # Check manifest
+        manifest_path = None
+        for mf in ("manifest.yaml", "manifest.yml", "manifest.json"):
+            p = os.path.join(plugin_dir, mf)
+            if os.path.exists(p):
+                manifest_path = p
+                break
+
+        if not manifest_path:
+            broken.append(f"{name}(no manifest)")
+            continue
+
+        try:
+            if manifest_path.endswith(".json"):
+                import json
+                with open(manifest_path) as f:
+                    json.load(f)
+            else:
+                import yaml
+                with open(manifest_path) as f:
+                    data = yaml.safe_load(f)
+                if not data or not isinstance(data, dict):
+                    broken.append(f"{name}(empty manifest)")
+                    continue
+            ok_count += 1
+        except Exception:
+            broken.append(f"{name}(invalid manifest)")
+
+    if not total:
+        return True, "Plugins", "No plugins installed"
+    if broken:
+        return False, "Plugins", f"{ok_count}/{total} OK, broken: {', '.join(broken[:3])}"
+    disabled_str = f", {disabled} disabled" if disabled else ""
+    return True, "Plugins", f"{total} installed ({ok_count} OK{disabled_str})"
+
+
+def check_disk_space() -> tuple[bool, str, str]:
+    """Check disk usage of Cleo data directories."""
+    dirs = {"memory": 0, "workspace": 0, ".logs": 0, "plugins": 0}
+    total = 0
+
+    for dirname in dirs:
+        if os.path.isdir(dirname):
+            size = sum(
+                os.path.getsize(os.path.join(dp, f))
+                for dp, _, filenames in os.walk(dirname)
+                for f in filenames
+            )
+            dirs[dirname] = size
+            total += size
+
+    # Also count state files
+    for sf in [".task_board.json", ".context_bus.json"]:
+        if os.path.exists(sf):
+            total += os.path.getsize(sf)
+
+    size_mb = total / (1024 * 1024)
+    ok = size_mb < 500  # < 500MB is healthy
+    parts = [f"{k}: {v / (1024*1024):.1f}MB" for k, v in dirs.items() if v > 0]
+    detail = f"{size_mb:.1f}MB total"
+    if parts:
+        detail += f" ({', '.join(parts)})"
+    if not ok:
+        detail += " ⚠ consider cleanup"
+    return ok, "Disk", detail
+
+
+def check_config_schema() -> tuple[bool, str, str]:
+    """Validate config schema and check for needed migrations."""
+    try:
+        from core.config_schema import validate_config, CURRENT_SCHEMA_VERSION
+    except ImportError:
+        return True, "Schema", "Validator not available"
+
+    if not os.path.exists("config/agents.yaml"):
+        return True, "Schema", "No config (OK for fresh install)"
+
+    errors = validate_config()
+    if errors:
+        return False, "Schema", f"{len(errors)} issue(s): {errors[0]}"
+
+    # Check version
+    try:
+        import yaml
+        with open("config/agents.yaml") as f:
+            cfg = yaml.safe_load(f) or {}
+        version = cfg.get("schema_version", 1)
+        if version < CURRENT_SCHEMA_VERSION:
+            return True, "Schema", (
+                f"v{version} (migration available → v{CURRENT_SCHEMA_VERSION}, "
+                f"run `cleo doctor --repair`)"
+            )
+        return True, "Schema", f"v{version} — valid"
+    except Exception as e:
+        return False, "Schema", str(e)
+
+
+def check_stale_tasks() -> tuple[bool, str, str]:
+    """Check for tasks stuck in claimed/review status."""
+    import time as _time
+    if not os.path.exists(".task_board.json"):
+        return True, "Tasks", "No task board"
+
+    try:
+        import json
+        with open(".task_board.json") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return False, "Tasks", "Cannot read task board"
+
+    total = len(data)
+    now = _time.time()
+    stale = 0
+    active = 0
+    for tid, t in data.items():
+        status = t.get("status", "")
+        if status in ("claimed", "review"):
+            active += 1
+            claimed_at = t.get("claimed_at", now)
+            if (now - claimed_at) > 600:  # Stale after 10 min
+                stale += 1
+        elif status in ("pending",):
+            active += 1
+
+    if stale:
+        return False, "Tasks", (
+            f"{total} total, {active} active, "
+            f"[{_theme.warning}]{stale} stale[/{_theme.warning}] (>10min) — run `cleo doctor --repair`"
+        )
+    completed = sum(1 for t in data.values() if t.get("status") == "completed")
+    failed = sum(1 for t in data.values() if t.get("status") == "failed")
+    return True, "Tasks", f"{total} total ({completed} done, {failed} failed, {active} active)"
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  RUNNER
 # ══════════════════════════════════════════════════════════════════════════════
 
 ALL_CHECKS = [
     check_config,
+    check_config_schema,
     check_env,
     check_api_key,
     check_llm_reachable,
@@ -424,6 +590,9 @@ ALL_CHECKS = [
     check_resilience,
     check_gateway,
     check_chain,
+    check_plugins,
+    check_disk_space,
+    check_stale_tasks,
 ]
 
 
@@ -476,7 +645,7 @@ def run_doctor_repair(rich_console=None) -> list[tuple[bool, str, str]]:
     results = run_doctor(rich_console=rich_console)
     if rich_console:
         from core.i18n import t as _t
-        rich_console.print(f"\n  [bold magenta]── Auto-Repair ──[/bold magenta]\n")
+        rich_console.print(f"\n  [{_theme.accent}]── Auto-Repair ──[/{_theme.accent}]\n")
 
     repaired = 0
 
@@ -486,13 +655,13 @@ def run_doctor_repair(rich_console=None) -> list[tuple[bool, str, str]]:
             import shutil
             shutil.copy(".env.example", ".env")
             if rich_console:
-                rich_console.print("  [green]+[/green] Created .env from .env.example")
+                rich_console.print(f"  [{_theme.success}]+[/{_theme.success}] Created .env from .env.example")
             repaired += 1
         else:
             with open(".env", "w") as f:
                 f.write("# Cleo Agent Stack — Environment\n# Add your API key below:\n# FLOCK_API_KEY=\n")
             if rich_console:
-                rich_console.print("  [green]+[/green] Created empty .env")
+                rich_console.print(f"  [{_theme.success}]+[/{_theme.success}] Created empty .env")
             repaired += 1
 
     # Fix 2: Create required directories
@@ -500,7 +669,7 @@ def run_doctor_repair(rich_console=None) -> list[tuple[bool, str, str]]:
         if not os.path.isdir(d):
             os.makedirs(d, exist_ok=True)
             if rich_console:
-                rich_console.print(f"  [green]+[/green] Created directory: {d}/")
+                rich_console.print(f"  [{_theme.success}]+[/{_theme.success}] Created directory: {d}/")
             repaired += 1
 
     # Fix 3: Recover stale tasks (stuck in claimed/review)
@@ -524,12 +693,24 @@ def run_doctor_repair(rich_console=None) -> list[tuple[bool, str, str]]:
                 with open(".task_board.json", "w") as f:
                     json.dump(data, f, indent=2)
                 if rich_console:
-                    rich_console.print(f"  [green]+[/green] Recovered {stale_count} stale task(s)")
+                    rich_console.print(f"  [{_theme.success}]+[/{_theme.success}] Recovered {stale_count} stale task(s)")
                 repaired += 1
         except Exception:
             pass
 
-    # Fix 4: Auto-install missing optional packages
+    # Fix 4: Config schema migration
+    if os.path.exists("config/agents.yaml"):
+        try:
+            from core.config_schema import migrate_config
+            migrated, msg = migrate_config()
+            if migrated:
+                if rich_console:
+                    rich_console.print(f"  [{_theme.success}]+[/{_theme.success}] {msg}")
+                repaired += 1
+        except ImportError:
+            pass
+
+    # Fix 5: Auto-install missing optional packages
     fixable = _detect_fixable(results)
     if fixable and rich_console:
         _offer_auto_fix(rich_console, fixable)
@@ -537,9 +718,9 @@ def run_doctor_repair(rich_console=None) -> list[tuple[bool, str, str]]:
 
     if rich_console:
         if repaired:
-            rich_console.print(f"\n  [green]+[/green] Repaired {repaired} issue(s)\n")
+            rich_console.print(f"\n  [{_theme.success}]+[/{_theme.success}] Repaired {repaired} issue(s)\n")
         else:
-            rich_console.print(f"  [dim]Nothing to repair.[/dim]\n")
+            rich_console.print(f"  [{_theme.muted}]Nothing to repair.[/{_theme.muted}]\n")
 
     return results
 
@@ -555,7 +736,7 @@ def run_doctor_deep(rich_console=None) -> list[tuple[bool, str, str]]:
     results = run_doctor(rich_console=rich_console)
 
     if rich_console:
-        rich_console.print(f"\n  [bold magenta]── Deep Diagnostics ──[/bold magenta]\n")
+        rich_console.print(f"\n  [{_theme.accent}]── Deep Diagnostics ──[/{_theme.accent}]\n")
 
     deep_results = []
 
@@ -620,8 +801,8 @@ def run_doctor_deep(rich_console=None) -> list[tuple[bool, str, str]]:
     # Print deep results
     if rich_console:
         for ok, label, detail in deep_results:
-            icon = "[green]+[/green]" if ok else "[red]x[/red]"
-            rich_console.print(f"  {icon} [bold]{label:14}[/bold] [dim]{detail}[/dim]")
+            icon = f"[{_theme.success}]+[/{_theme.success}]" if ok else f"[{_theme.error}]x[/{_theme.error}]"
+            rich_console.print(f"  {icon} [{_theme.heading}]{label:14}[/{_theme.heading}] [{_theme.muted}]{detail}[/{_theme.muted}]")
         rich_console.print()
 
     return results + deep_results
@@ -638,19 +819,19 @@ def _print_rich(console, results: list[tuple[bool, str, str]]):
     total = len(results)
 
     for ok, label, detail in results:
-        icon = "[green]+[/green]" if ok else "[red]x[/red]"
-        lines.append(f"  {icon} [bold]{label:14}[/bold] [dim]{detail}[/dim]")
+        icon = f"[{_theme.success}]+[/{_theme.success}]" if ok else f"[{_theme.error}]x[/{_theme.error}]"
+        lines.append(f"  {icon} [{_theme.heading}]{label:14}[/{_theme.heading}] [{_theme.muted}]{detail}[/{_theme.muted}]")
 
     body = "\n".join(lines)
     if ok_count == total:
-        status = f"[green]{_t('doctor.all_ok')}[/green]"
+        status = f"[{_theme.success}]{_t('doctor.all_ok')}[/{_theme.success}]"
     else:
-        status = f"[yellow]{_t('doctor.some_fail', ok=ok_count, total=total)}[/yellow]"
+        status = f"[{_theme.warning}]{_t('doctor.some_fail', ok=ok_count, total=total)}[/{_theme.warning}]"
 
     console.print()
     console.print(Panel(
-        f"[bold magenta]{_t('doctor.title')}[/bold magenta]\n\n{body}\n\n  {status}",
-        border_style="magenta",
+        f"[{_theme.accent}]{_t('doctor.title')}[/{_theme.accent}]\n\n{body}\n\n  {status}",
+        border_style=_theme.accent_light,
         box=box.ROUNDED,
     ))
     console.print()
@@ -722,19 +903,19 @@ def _offer_auto_fix(console, fixable: list[str]):
 
     import subprocess
     for pkg in selected:
-        console.print(f"  [dim]{_t('doctor.installing', pkg=pkg)}[/dim]")
+        console.print(f"  [{_theme.muted}]{_t('doctor.installing', pkg=pkg)}[/{_theme.muted}]")
         try:
             result = subprocess.run(
                 [sys.executable, "-m", "pip", "install", pkg],
                 capture_output=True, text=True, timeout=120,
             )
             if result.returncode == 0:
-                console.print(f"  [green]+[/green] {_t('doctor.installed', pkg=pkg)}")
+                console.print(f"  [{_theme.success}]+[/{_theme.success}] {_t('doctor.installed', pkg=pkg)}")
             else:
-                console.print(f"  [red]x[/red] {_t('doctor.install_fail', pkg=pkg)}")
+                console.print(f"  [{_theme.error}]x[/{_theme.error}] {_t('doctor.install_fail', pkg=pkg)}")
                 if result.stderr:
-                    console.print(f"    [dim]{result.stderr.strip()[:100]}[/dim]")
+                    console.print(f"    [{_theme.muted}]{result.stderr.strip()[:100]}[/{_theme.muted}]")
         except Exception as e:
-            console.print(f"  [red]x[/red] {_t('doctor.install_fail', pkg=pkg)}: {e}")
+            console.print(f"  [{_theme.error}]x[/{_theme.error}] {_t('doctor.install_fail', pkg=pkg)}: {e}")
 
     console.print()

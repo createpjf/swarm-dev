@@ -108,6 +108,8 @@ class ChannelManager:
         self._processor_task = asyncio.create_task(self._task_processor())
         # Start the health monitor
         self._health_task = asyncio.create_task(self._health_monitor())
+        # Start session cleanup timer
+        self._cleanup_task = asyncio.create_task(self._session_cleanup_loop())
         logger.info("ChannelManager started with %d adapter(s)", len(self.adapters))
 
     async def stop(self):
@@ -398,7 +400,7 @@ class ChannelManager:
         try:
             from core.user_auth import get_user_auth
             channel_cfg = self.channels_config.get(msg.channel, {})
-            auth_mode = channel_cfg.get("auth_mode", "open")
+            auth_mode = channel_cfg.get("auth_mode", "pairing")
             allowed_users = channel_cfg.get("allowed_users", [])
 
             auth = get_user_auth(auth_mode)
@@ -418,13 +420,18 @@ class ChannelManager:
                                     msg.user_id, msg.channel)
                     return
 
-                # Not authorized — send pairing prompt
+                # Not authorized — auto-generate code and send to user
                 adapter = self._get_adapter(msg.channel)
                 if adapter:
+                    code = auth.generate_pairing_code(
+                        label=f"auto:{msg.channel}:{msg.user_id}")
                     await adapter.send_message(
                         msg.chat_id,
-                        "🔒 身份验证未通过。请输入配对码。\n"
-                        "Authentication required. Please enter your pairing code.")
+                        f"🔒 First-time verification required.\n"
+                        f"Your code: {code}\n"
+                        f"Please send this code back to verify.")
+                    logger.info("[pairing] Auto-generated code for %s:%s (%s)",
+                                msg.channel, msg.user_id, msg.user_name)
                 return
         except ImportError:
             pass  # user_auth not available, continue without
@@ -455,9 +462,10 @@ class ChannelManager:
                 logger.error("No adapter found for channel: %s", msg.channel)
                 continue
 
-            # Track session
+            # Track session (per-user in groups for isolation)
             session = self._sessions.get_or_create(
-                msg.channel, msg.chat_id, msg.user_id, msg.user_name)
+                msg.channel, msg.chat_id, msg.user_id, msg.user_name,
+                is_group=msg.is_group)
 
             # Show queue position if there are waiting messages
             queue_size = self._queue.qsize()
@@ -513,35 +521,57 @@ class ChannelManager:
                      session_id, and channel type.
             adapter: Platform-specific ``ChannelAdapter`` for sending
                      replies and typing indicators.
-            session: ``SessionStore`` instance (currently unused directly;
-                     accessed via ``self._sessions`` for consistency).
+            session: ``ChannelSession`` instance — its session_id may differ
+                     from msg.session_id when per-user group isolation is on.
         """
+        # Use the session object's session_id (may be per-user in groups)
+        sid = session.session_id
+
         # Send typing indicator
         await adapter.send_typing(msg.chat_id)
 
         # Save user message to session conversation history
-        self._sessions.add_message(
-            msg.session_id, "user", msg.text, msg.user_name)
+        self._sessions.add_message(sid, "user", msg.text, msg.user_name)
 
         # Load conversation history for context injection
         session_history = self._sessions.format_history_for_prompt(
-            msg.session_id, max_turns=10)
+            sid, max_turns=10)
         if session_history:
             logger.info("[session:%s] loaded conversation history for context",
-                        msg.session_id)
+                        sid)
 
         # Save channel session info for tool access (e.g., send_file)
         self._save_active_session(msg)
 
-        # Submit task via Orchestrator (with session history)
+        # Track user preferences (non-blocking, best-effort)
+        try:
+            from adapters.memory.user_profile import UserProfileStore
+            profile_store = UserProfileStore()
+            profile_store.record_interaction(
+                user_id=msg.user_id, text=msg.text,
+                channel=msg.channel, display_name=msg.user_name)
+        except Exception:
+            pass  # User profiling is optional
+
+        # Inject image attachment context if present
+        task_text = msg.text
+        for att in (msg.attachments or []):
+            if att.get("type") == "image" and att.get("file_path"):
+                task_text += (
+                    f"\n\n[Image attached: {att['file_path']}]"
+                    f"\nUse the analyze_image tool with "
+                    f"image_path=\"{att['file_path']}\" to understand this image."
+                )
+
+        # Submit task via Orchestrator (with session history + channel tag)
         task_id = await asyncio.get_event_loop().run_in_executor(
-            None, self._submit_task, msg.text, session_history)
+            None, self._submit_task, task_text, session_history, msg.channel)
 
         if not task_id:
             await adapter.send_message(msg.chat_id, "❌ 任务提交失败")
             return
 
-        self._sessions.update_task(msg.session_id, task_id)
+        self._sessions.update_task(sid, task_id)
         await adapter.send_message(
             msg.chat_id, f"🚀 任务已提交，正在处理...")
 
@@ -551,8 +581,7 @@ class ChannelManager:
 
         if result:
             # Save assistant response to session conversation history
-            self._sessions.add_message(
-                msg.session_id, "assistant", result[:2000])
+            self._sessions.add_message(sid, "assistant", result[:2000])
 
             # Chunk and send result
             chunks = self._chunk_message(
@@ -576,7 +605,8 @@ class ChannelManager:
     AGENT_IDLE_CYCLES = 300  # ~5 minutes (1s per cycle in _agent_loop)
 
     def _submit_task(self, description: str,
-                     session_history: str = "") -> Optional[str]:
+                     session_history: str = "",
+                     channel_name: str = "") -> Optional[str]:
         """Submit a task to the persistent agent pool (runs in thread pool).
 
         Agents are kept alive between messages to avoid process startup
@@ -593,16 +623,18 @@ class ChannelManager:
 
             board = TaskBoard()
 
-            # Inject conversation history into task description
+            # Inject channel source tag + conversation history
+            source_tag = f"[source:{channel_name}]\n\n" if channel_name else ""
             if session_history:
                 full_description = (
+                    f"{source_tag}"
                     f"{session_history}\n"
                     f"---\n\n"
                     f"## 当前消息 (Current Message)\n"
                     f"{description}"
                 )
             else:
-                full_description = description
+                full_description = f"{source_tag}{description}"
 
             # Ensure agents are running (start or restart pool)
             with self._orch_lock:
@@ -651,6 +683,29 @@ class ChannelManager:
             logger.info("Persistent agent pool started (%d processes)",
                         len(self._persistent_orch.procs))
             return
+
+        # Check for hot-reload signal (new agent created via API)
+        reload_signal = ".agent_reload_signal"
+        if os.path.exists(reload_signal):
+            try:
+                os.remove(reload_signal)
+                logger.info("Agent config changed — hot-reloading pool")
+                # Graceful restart: let existing tasks finish, then relaunch
+                for p in self._persistent_orch.procs:
+                    if p.is_alive():
+                        p.terminate()
+                self._persistent_orch.procs.clear()
+                # Re-read config and launch
+                from core.orchestrator import Orchestrator
+                self._persistent_orch = Orchestrator()
+                self._persistent_orch.config["max_idle_cycles"] = \
+                    self.AGENT_IDLE_CYCLES
+                self._persistent_orch._launch_all()
+                logger.info("Agent pool hot-reloaded (%d processes)",
+                            len(self._persistent_orch.procs))
+                return
+            except Exception as e:
+                logger.warning("Hot-reload failed: %s", e)
 
         # Check process health — restart pool if all agents exited
         alive = [p for p in self._persistent_orch.procs if p.is_alive()]
@@ -787,6 +842,22 @@ class ChannelManager:
                 except Exception as e:
                     logger.error("Health check error for %s: %s",
                                  adapter.channel_name, e)
+
+    async def _session_cleanup_loop(self):
+        """Periodically clean up expired sessions (every 30 minutes)."""
+        cleanup_interval = 1800  # 30 minutes
+        while self._running:
+            try:
+                await asyncio.sleep(cleanup_interval)
+            except asyncio.CancelledError:
+                break
+            try:
+                removed = self._sessions.cleanup_expired()
+                if removed:
+                    logger.info("[session] periodic cleanup removed %d "
+                                "expired sessions", removed)
+            except Exception as e:
+                logger.warning("[session] cleanup error: %s", e)
 
     def _get_adapter(self, channel_name: str) -> Optional[ChannelAdapter]:
         """Find adapter by channel name."""

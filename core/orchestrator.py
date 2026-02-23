@@ -26,7 +26,11 @@ import yaml
 # ── Think-tag & tool-block strippers ──
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 _TOOL_BLOCK_RE = re.compile(
-    r"```tool\s*\n.*?\n```|<tool_code>.*?</tool_code>", re.DOTALL)
+    r"```tool\s*\n.*?\n```"          # ```tool ... ```
+    r"|<tool_code>.*?</tool_code>"   # <tool_code>...</tool_code>
+    r"|```tool\s*\n.*?</tool_code>"  # mixed: ```tool ... </tool_code>
+    r"|<tool_code>.*?\n```",         # mixed: <tool_code> ... ```
+    re.DOTALL)
 
 def _strip_think(text: str) -> str:
     """Strip <think>...</think> blocks from LLM output."""
@@ -53,14 +57,14 @@ except ImportError:
 from core.agent import AgentConfig
 from core.context_bus import ContextBus
 from core.task_board import TaskBoard
-from core.skill_loader import SkillLoader
 
 logger = logging.getLogger(__name__)
 
 
 # ── Per-process entry point ─────────────────────────────────────────────────
 
-def _agent_process(agent_cfg_dict: dict, agent_def: dict, config: dict):
+def _agent_process(agent_cfg_dict: dict, agent_def: dict, config: dict,
+                    wakeup=None):
     """
     Runs in a child process.
     Imports adapters here to avoid pickling issues.
@@ -125,7 +129,8 @@ def _agent_process(agent_cfg_dict: dict, agent_def: dict, config: dict):
     hb = Heartbeat(agent_id)
 
     try:
-        asyncio.run(_agent_loop(agent, bus, board, config, tracker, hb))
+        asyncio.run(_agent_loop(agent, bus, board, config, tracker, hb,
+                                wakeup=wakeup))
     finally:
         hb.stop()  # clean up heartbeat file on exit
 
@@ -192,6 +197,7 @@ async def _handle_critique_request(agent, board: TaskBoard, mail: dict, sched):
             task_obj.agent_id,
             passed_first_time=True,   # Always passes now
             had_revision=False,
+            critique_score=score,      # Use real Alic score instead of heuristic
         )
 
     logger.info("[%s] scored task %s: %d/10%s",
@@ -356,10 +362,27 @@ def _has_active_tasks(board: TaskBoard) -> bool:
     return any(t.get("status") in active_states for t in data.values())
 
 
+def _has_pending_closeouts() -> bool:
+    """Return True if any planner close-outs are registered but not yet synthesized.
+
+    Prevents agents from exiting while a planner is waiting for subtask
+    results to be collected and synthesized into a final answer.
+    """
+    try:
+        lock = FileLock(_SUBTASK_MAP_LOCK)
+        with lock:
+            with open(_SUBTASK_MAP_FILE, "r") as f:
+                mapping = json.load(f)
+        return bool(mapping)
+    except (FileNotFoundError, json.JSONDecodeError, Exception):
+        return False
+
+
 # ── Agent loop ─────────────────────────────────────────────────────────────
 
 async def _agent_loop(agent, bus: ContextBus, board: TaskBoard,
-                       config: dict, tracker=None, heartbeat=None):
+                       config: dict, tracker=None, heartbeat=None,
+                       wakeup=None):
     """Core event loop for every agent process (Leo, Jerry, Alic).
 
     Runs as the main coroutine inside each ``multiprocessing.Process``
@@ -500,24 +523,42 @@ async def _agent_loop(agent, bus: ContextBus, board: TaskBoard,
                                   agent_role=agent.cfg.role)
 
         if task is None:
+            # Check lightweight task signals before full board scan
+            signals = board.consume_task_signals()
+            if signals:
+                # New tasks created — immediately retry claim instead of sleeping
+                logger.debug("[%s] task signal detected (%d new), retrying claim",
+                             agent.cfg.agent_id, len(signals))
+                continue
+
             # If there are still tasks in-progress (claimed/review/pending),
             # keep waiting — other agents might produce subtasks for us
             active = _has_active_tasks(board)
-            if active:
+            pending_closeouts = _has_pending_closeouts()
+            if active or pending_closeouts:
                 idle_count = min(idle_count + 1, max_idle // 2)
-                # Never exit while work is happening — only slow the poll
+                # Never exit while work is happening or closeouts pending
             else:
                 idle_count += 1
 
-            if idle_count >= max_idle and not active:
-                logger.info("[%s] idle limit reached (no active tasks), exiting",
+            if idle_count >= max_idle and not active and not pending_closeouts:
+                logger.info("[%s] idle limit reached (no active tasks, no pending closeouts), exiting",
                             agent.cfg.agent_id)
                 return
-            await asyncio.sleep(1)
+            # Progressive backoff: idle longer → check less often (1s → 5s max)
+            # WakeupBus: block on event instead of blind sleep — instant wakeup
+            # when another agent creates subtasks.
+            backoff = min(1.0 + idle_count * 0.5, 5.0)
+            if wakeup:
+                await wakeup.async_wait(agent.cfg.agent_id, timeout=backoff)
+            else:
+                await asyncio.sleep(backoff)
             continue
 
         idle_count = 0
         logger.info("[%s] claimed task %s", agent.cfg.agent_id, task.task_id)
+        agent.log_transcript("task_claimed", task.task_id,
+                             task.description[:200])
 
         # --- heartbeat: working ---
         if heartbeat:
@@ -577,12 +618,55 @@ async def _agent_loop(agent, bus: ContextBus, board: TaskBoard,
                     board.submit_for_review(task.task_id, result)
                     logger.info("[%s] planner created %d subtasks for task %s, waiting for close-out",
                                 agent.cfg.agent_id, len(subtask_ids), task.task_id)
+                    # Wake executors instantly so they can claim subtasks
+                    if wakeup:
+                        wakeup.wake_all()
                 else:
-                    # No subtasks extracted — auto-complete
-                    board.submit_for_review(task.task_id, result)
-                    board.complete(task.task_id)
-                    logger.info("[%s] planner auto-completed task %s (no subtasks)",
-                                agent.cfg.agent_id, task.task_id)
+                    # No TASK: lines found — fallback delegation
+                    stripped_result = result.strip()
+                    if len(stripped_result) > 20 and task.description.strip():
+                        # Leo produced content but forgot TASK: format.
+                        # Wrap the original request as a single implement subtask
+                        # so Jerry still gets the work.
+                        logger.warning(
+                            "[%s] planner output has content but no TASK: lines "
+                            "— auto-delegating to executor: %s",
+                            agent.cfg.agent_id, task.task_id)
+                        fallback_desc = (
+                            f"执行以下任务（planner 未正确分解）：\n"
+                            f"原始请求：{task.description}\n"
+                            f"参考方案：{stripped_result[:1500]}"
+                        )
+                        fallback_task = board.create(
+                            fallback_desc,
+                            blocked_by=[],
+                            required_role="implement",
+                            parent_id=task.task_id,
+                        )
+                        # Set complexity to normal (goes through Alic review)
+                        with board.lock:
+                            data = board._read()
+                            t = data.get(fallback_task.task_id)
+                            if t:
+                                t["complexity"] = "normal"
+                                board._write(data)
+                        _register_subtasks(
+                            bus, task.task_id, [fallback_task.task_id])
+                        board.submit_for_review(task.task_id, result)
+                        logger.info(
+                            "[%s] auto-created fallback subtask %s for task %s",
+                            agent.cfg.agent_id, fallback_task.task_id,
+                            task.task_id)
+                        # Wake executors for fallback subtask
+                        if wakeup:
+                            wakeup.wake_all()
+                    else:
+                        # Truly empty or trivially short — auto-complete
+                        board.submit_for_review(task.task_id, result)
+                        board.complete(task.task_id)
+                        logger.info(
+                            "[%s] planner auto-completed task %s (no subtasks)",
+                            agent.cfg.agent_id, task.task_id)
                 await sched.on_task_complete(agent.cfg.agent_id, task, result)
                 _extract_and_store_memories(agent, task, result)
 
@@ -593,14 +677,9 @@ async def _agent_loop(agent, bus: ContextBus, board: TaskBoard,
             # Executor: complexity-based routing after task completion
             board.submit_for_review(task.task_id, result)
 
-            # Get task complexity
+            # Get task complexity (Task dataclass already has .complexity)
             task_data = board.get(task.task_id)
-            task_complexity = "normal"
-            if task_data:
-                # Read complexity from task dict
-                raw_data = board._read()
-                raw_t = raw_data.get(task.task_id, {})
-                task_complexity = raw_t.get("complexity", "normal")
+            task_complexity = task_data.complexity if task_data else "normal"
 
             if task_complexity == "simple":
                 # Simple tasks: skip review, auto-complete
@@ -628,6 +707,8 @@ async def _agent_loop(agent, bus: ContextBus, board: TaskBoard,
             # --- score & evolve ---
             await sched.on_task_complete(agent.cfg.agent_id, task, result)
             _extract_and_store_memories(agent, task, result)
+            agent.log_transcript("task_completed", task.task_id,
+                                 result[:200])
 
             # Check if planner close-outs are now possible
             await _check_planner_closeouts(agent, bus, board, config)
@@ -637,6 +718,13 @@ async def _agent_loop(agent, bus: ContextBus, board: TaskBoard,
                              agent.cfg.agent_id, task.task_id, exc)
             board.fail(task.task_id, str(exc))
             await sched.on_error(agent.cfg.agent_id, task.task_id, str(exc))
+            # Store failure in episodic memory for error pattern learning
+            error_type = type(exc).__name__
+            agent._store_to_memory(task, f"FAILED: {exc}",
+                                   outcome="failure", error_type=error_type)
+            agent.log_transcript("task_failed", task.task_id,
+                                 str(exc)[:200],
+                                 metadata={"error_type": error_type})
             # Track failed usage
             if tracker:
                 tracker.record(
@@ -667,7 +755,7 @@ _SUBTASK_MAP_LOCK = ".planner_subtasks.lock"
 
 
 def _register_subtasks(bus: "ContextBus", parent_task_id: str,
-                       subtask_ids: list[str]):
+                       subtask_ids: list[str]) -> None:
     """Register parent→subtask mapping for planner close-out."""
     lock = FileLock(_SUBTASK_MAP_LOCK)
     with lock:
@@ -683,7 +771,11 @@ def _register_subtasks(bus: "ContextBus", parent_task_id: str,
 
 async def _check_planner_closeouts(agent, bus, board: TaskBoard, config: dict):
     """Check if any planner parent tasks have all subtasks completed.
-    If so, synthesize a final answer and complete the parent task."""
+    If so, synthesize a final answer and complete the parent task.
+
+    Uses FileLock around the entire read-check-synthesize cycle to prevent
+    race conditions where multiple agents trigger close-out simultaneously.
+    """
     lock = FileLock(_SUBTASK_MAP_LOCK)
     with lock:
         try:
@@ -695,7 +787,10 @@ async def _check_planner_closeouts(agent, bus, board: TaskBoard, config: dict):
     if not mapping:
         return
 
-    data = board._read()
+    # Re-read board under the board's own lock for consistency
+    with board.lock:
+        data = board._read()
+
     completed_ids = set()
     for parent_id, subtask_ids in list(mapping.items()):
         parent = data.get(parent_id)
@@ -708,11 +803,24 @@ async def _check_planner_closeouts(agent, bus, board: TaskBoard, config: dict):
             continue
 
         # Check if ALL subtasks are completed
-        all_done = all(
-            data.get(sid, {}).get("status") == "completed"
-            for sid in subtask_ids
-        )
+        all_done = True
+        has_in_review = False
+        for sid in subtask_ids:
+            st = data.get(sid, {}).get("status", "")
+            if st == "completed":
+                continue
+            elif st in ("review", "critique"):
+                has_in_review = True
+                all_done = False
+                break
+            else:
+                all_done = False
+                break
+
         if not all_done:
+            if has_in_review:
+                logger.debug("Parent %s: subtask(s) still in review, deferring close-out",
+                             parent_id)
             continue
 
         # All subtasks done — synthesize final answer with reviewer feedback
@@ -847,7 +955,7 @@ async def _check_planner_closeouts(agent, bus, board: TaskBoard, config: dict):
 
 # ── Adapter factories ───────────────────────────────────────────────────────
 
-def _build_llm_for_agent(agent_def: dict, config: dict):
+def _build_llm_for_agent(agent_def: dict, config: dict) -> "ResilientLLM":
     """
     Build a Resilient LLM adapter for a specific agent.
 
@@ -871,12 +979,28 @@ def _build_llm_for_agent(agent_def: dict, config: dict):
 
     # ── Mode 2: Single provider + ResilientLLM (default) ──
     agent_llm    = agent_def.get("llm", {})
-    provider     = agent_llm.get("provider") or config.get("llm", {}).get("provider", "flock")
+    global_llm   = config.get("llm", {})
+    provider     = agent_llm.get("provider") or global_llm.get("provider", "flock")
     api_key_env  = agent_llm.get("api_key_env", "")
     base_url_env = agent_llm.get("base_url_env", "")
 
     api_key  = os.getenv(api_key_env) if api_key_env else None
     base_url = os.getenv(base_url_env) if base_url_env else None
+
+    # Multi-key rotation support: read api_keys array from agent or global config
+    api_keys_cfg = agent_llm.get("api_keys") or global_llm.get("api_keys", [])
+    all_keys = []
+    for kc in api_keys_cfg:
+        env_name = kc.get("env", "") if isinstance(kc, dict) else str(kc)
+        k = os.getenv(env_name) if env_name else None
+        if k:
+            all_keys.append(k)
+    # If primary key exists and not already in multi-key list, prepend it
+    if api_key and api_key not in all_keys:
+        all_keys.insert(0, api_key)
+    # If we only got keys from api_keys config but no primary, use first as primary
+    if not api_key and all_keys:
+        api_key = all_keys[0]
 
     # Build base adapter
     if provider == "flock":
@@ -897,10 +1021,17 @@ def _build_llm_for_agent(agent_def: dict, config: dict):
         base = OpenAIAdapter(api_key=api_key, base_url=base_url)
 
     # Wrap with resilience layer (retry + circuit breaker + model failover)
-    from adapters.llm.resilience import ResilientLLM
+    from adapters.llm.resilience import ResilientLLM, CredentialRotator
 
     fallback_models = agent_def.get("fallback_models", [])
     resilience_cfg  = config.get("resilience", {})
+
+    # Build credential rotator if multiple keys available
+    rotator = None
+    if len(all_keys) > 1:
+        rotator = CredentialRotator(all_keys)
+        logger.info("[orchestrator] Credential rotation enabled: %d keys for %s",
+                    len(all_keys), agent_def.get("id", "?"))
 
     return ResilientLLM(
         adapter=base,
@@ -911,6 +1042,7 @@ def _build_llm_for_agent(agent_def: dict, config: dict):
         jitter=resilience_cfg.get("jitter", 0.5),
         cb_threshold=resilience_cfg.get("circuit_breaker_threshold", 3),
         cb_cooldown=resilience_cfg.get("circuit_breaker_cooldown", 120.0),
+        credential_rotator=rotator,
     )
 
 def _build_memory(config: dict, agent_id: str = ""):
@@ -999,7 +1131,7 @@ def _build_episodic_memory(config: dict, agent_id: str):
 
 # ── Post-task memory extraction ────────────────────────────────────────────
 
-def _extract_and_store_memories(agent, task, result: str):
+def _extract_and_store_memories(agent, task, result: str) -> None:
     """
     Extract reusable knowledge from a completed task and store
     in episodic memory + shared knowledge base.
@@ -1064,6 +1196,14 @@ def _extract_and_store_memories(agent, task, result: str):
         except Exception:
             pass  # MEMORY.md generation is non-critical
 
+    # Auto-update docs (error pattern detection + lesson consolidation)
+    try:
+        from core.doc_updater import DocUpdater
+        updater = DocUpdater(agent.cfg.agent_id)
+        updater.check_and_update()
+    except Exception:
+        pass  # doc update is non-critical
+
 
 # ── Orchestrator ────────────────────────────────────────────────────────────
 
@@ -1081,6 +1221,12 @@ class Orchestrator:
         self.board  = TaskBoard()
         self.procs: list[mp.Process] = []
         self._shutting_down = False
+
+        # WakeupBus: event-driven agent wakeup (zero-delay subtask dispatch)
+        from core.wakeup import WakeupBus
+        self.wakeup = WakeupBus()
+        for agent_def in self.config.get("agents", []):
+            self.wakeup.register(agent_def["id"])
 
         # Ensure shared workspace directory exists
         ws_cfg = self.config.get("workspace", {})
@@ -1151,7 +1297,7 @@ class Orchestrator:
             }
             p = mp.Process(
                 target=_agent_process,
-                args=(cfg_dict, agent_def, self.config),
+                args=(cfg_dict, agent_def, self.config, self.wakeup),
                 name=agent_def["id"],
                 daemon=False,
             )

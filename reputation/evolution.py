@@ -177,15 +177,22 @@ class EvolutionEngine:
     async def _execute(self, agent_id: str, plan: EvolutionPlan):
         if plan.recommended_path == "prompt" and plan.prompt_upgrade:
             self._apply_prompt_upgrade(agent_id, plan.prompt_upgrade)
+            self._write_lessons(agent_id, plan)
             logger.info("[evolution] PATH A applied prompt upgrade for %s", agent_id)
             self._clear_pending(agent_id)
 
         elif plan.recommended_path == "model" and plan.model_swap:
-            self._write_pending_swap(agent_id, plan.model_swap)
-            logger.warning(
-                "[evolution] PATH B pending: %s → %s  (awaiting leader confirmation)",
-                agent_id, plan.model_swap["new_model"],
-            )
+            # Auto-execute model swap if configured for auto mode
+            if self._auto_model_swap_enabled(agent_id):
+                self.apply_model_swap(agent_id, auto=True, swap_data=plan.model_swap)
+                self._write_lessons(agent_id, plan)
+                self._clear_pending(agent_id)
+            else:
+                self._write_pending_swap(agent_id, plan.model_swap)
+                logger.warning(
+                    "[evolution] PATH B pending: %s → %s  (awaiting leader confirmation)",
+                    agent_id, plan.model_swap["new_model"],
+                )
 
         elif plan.recommended_path == "role" and plan.role_restructure:
             self._write_vote_request(agent_id, plan.role_restructure)
@@ -193,6 +200,68 @@ class EvolutionEngine:
                 "[evolution] PATH C pending: role restructure for %s (vote required)",
                 agent_id,
             )
+
+        # Always log to evolution_log.jsonl with execution result
+        self._log_execution(agent_id, plan)
+
+    # ── Lessons & Evolution Log ─────────────────────────────────────────────
+
+    def _write_lessons(self, agent_id: str, plan: EvolutionPlan):
+        """Append lessons learned to docs/{agent_id}/lessons.md."""
+        lessons_dir = f"docs/{agent_id}"
+        os.makedirs(lessons_dir, exist_ok=True)
+        lessons_path = os.path.join(lessons_dir, "lessons.md")
+
+        entry = (
+            f"\n## {time.strftime('%Y-%m-%d %H:%M')} — Evolution triggered\n"
+            f"- **Path**: {plan.recommended_path}\n"
+            f"- **Root cause**: {plan.root_cause}\n"
+            f"- **Patterns**: {', '.join(plan.error_patterns) or 'none'}\n"
+            f"- **Confidence**: {plan.confidence:.0%}\n"
+        )
+        if plan.prompt_upgrade:
+            entry += f"- **Additions**: {plan.prompt_upgrade.get('additions', '')[:200]}\n"
+        if plan.model_swap:
+            entry += f"- **Model change**: → {plan.model_swap.get('new_model', '?')}\n"
+
+        try:
+            if not os.path.exists(lessons_path):
+                with open(lessons_path, "w") as f:
+                    f.write(f"# {agent_id} — Lessons Learned\n\n"
+                            f"Auto-maintained by Evolution Engine.\n")
+            with open(lessons_path, "a") as f:
+                f.write(entry + "\n")
+            logger.info("[evolution] wrote lesson to %s", lessons_path)
+        except Exception as e:
+            logger.warning("[evolution] failed to write lessons for %s: %s", agent_id, e)
+
+    def _log_execution(self, agent_id: str, plan: EvolutionPlan):
+        """Log evolution execution to per-agent evolution_log.jsonl."""
+        agent_log_dir = f"memory/agents/{agent_id}"
+        os.makedirs(agent_log_dir, exist_ok=True)
+        agent_log_path = os.path.join(agent_log_dir, "evolution_log.jsonl")
+        entry = json.dumps({
+            "agent_id":         plan.agent_id,
+            "root_cause":       plan.root_cause,
+            "error_patterns":   plan.error_patterns,
+            "recommended_path": plan.recommended_path,
+            "confidence":       plan.confidence,
+            "executed":         True,
+            "ts":               time.time(),
+        }, ensure_ascii=False)
+        try:
+            with open(agent_log_path, "a") as f:
+                f.write(entry + "\n")
+        except Exception as e:
+            logger.warning("Failed to write agent evolution log: %s", e)
+
+    def _auto_model_swap_enabled(self, agent_id: str) -> bool:
+        """Check if auto model swap is enabled for this agent."""
+        try:
+            cfg = self._load_agent_config(agent_id)
+            return cfg.get("auto_model_swap", False)
+        except Exception:
+            return False
 
     # ── Path A: Prompt Upgrade ───────────────────────────────────────────────
 
@@ -311,23 +380,42 @@ class EvolutionEngine:
                 json.dump({**swap, "agent_id": agent_id, "ts": time.time()},
                           f, indent=2)
 
-    def apply_model_swap(self, agent_id: str):
-        """Called by leader/human after confirmation."""
-        path = f"memory/pending_swaps/{agent_id}.json"
-        if not os.path.exists(path):
-            return
-        lock = self._get_lock(path)
-        with lock:
-            with open(path, "r") as f:
-                swap = json.load(f)
+    def apply_model_swap(self, agent_id: str, auto: bool = False,
+                         swap_data: dict | None = None):
+        """Execute a model swap. Called by leader/human or auto-triggered.
+
+        Args:
+            agent_id: Agent to swap model for
+            auto: If True, use swap_data directly instead of reading pending file
+            swap_data: Direct swap config (used in auto mode)
+        """
+        if auto and swap_data:
+            swap = swap_data
+        else:
+            path = f"memory/pending_swaps/{agent_id}.json"
+            if not os.path.exists(path):
+                return
+            lock = self._get_lock(path)
+            with lock:
+                with open(path, "r") as f:
+                    swap = json.load(f)
+
         cfg = self._load_agent_config(agent_id)
         old = cfg.get("model", "")
         cfg["model"] = swap["new_model"]
         self._save_agent_config(agent_id, cfg)
-        os.remove(path)
+
+        # Clean up pending file if it exists
+        pending_path = f"memory/pending_swaps/{agent_id}.json"
+        if os.path.exists(pending_path):
+            try:
+                os.remove(pending_path)
+            except OSError:
+                pass
         self._clear_pending(agent_id)
-        logger.info("[evolution] PATH B swapped %s: %s → %s",
-                    agent_id, old, swap["new_model"])
+        logger.info("[evolution] PATH B swapped %s: %s → %s%s",
+                    agent_id, old, swap["new_model"],
+                    " (auto)" if auto else "")
 
     # ── Path C: Role Vote ────────────────────────────────────────────────────
 

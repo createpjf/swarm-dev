@@ -110,6 +110,99 @@ class CircuitState:
         return False
 
 
+# ── Credential Rotation ──────────────────────────────────────────────────────
+
+@dataclass
+class CredentialProfile:
+    """Single API key with cooldown tracking."""
+    key:            str
+    cooldown_until: float = 0.0      # timestamp when cooldown expires
+    error_count:    int   = 0
+    total_uses:     int   = 0
+
+    def is_available(self) -> bool:
+        return time.time() >= self.cooldown_until
+
+    def mark_rate_limited(self, cooldown_seconds: float = 60.0):
+        self.cooldown_until = time.time() + cooldown_seconds
+        self.error_count += 1
+        logger.warning("API key #... rate-limited, cooldown %ds", cooldown_seconds)
+
+    def mark_used(self):
+        self.total_uses += 1
+
+
+class CredentialRotator:
+    """
+    Multi-API-key rotator.
+
+    Cycles through multiple API keys for the same provider.
+    Automatically skips keys that are in cooldown (rate-limited).
+
+    Usage:
+        rotator = CredentialRotator(["key1", "key2", "key3"])
+        key = rotator.get_active()   # returns first available key
+        rotator.mark_rate_limited()  # current key hit rate limit
+        key = rotator.rotate()       # switch to next available key
+    """
+
+    def __init__(self, api_keys: list[str]):
+        if not api_keys:
+            raise ValueError("CredentialRotator requires at least one API key")
+        self.profiles = [CredentialProfile(key=k) for k in api_keys]
+        self.current_index = 0
+
+    @property
+    def key_count(self) -> int:
+        return len(self.profiles)
+
+    def get_active(self) -> str:
+        """Return the current active key (skip cooldown if possible)."""
+        profile = self.profiles[self.current_index]
+        if profile.is_available():
+            return profile.key
+        # Current key in cooldown — try to find another
+        rotated = self.rotate()
+        return rotated if rotated else profile.key  # fallback to cooldown key
+
+    def rotate(self) -> str | None:
+        """Switch to the next available key. Returns new key or None if all in cooldown."""
+        start = self.current_index
+        for _ in range(self.key_count):
+            self.current_index = (self.current_index + 1) % self.key_count
+            profile = self.profiles[self.current_index]
+            if profile.is_available():
+                logger.info("[rotator] Switched to key #%d/%d",
+                            self.current_index + 1, self.key_count)
+                return profile.key
+        # All keys in cooldown — stay on current, it'll be tried when cooldown expires
+        self.current_index = start
+        logger.warning("[rotator] All %d keys in cooldown", self.key_count)
+        return None
+
+    def mark_rate_limited(self, cooldown_seconds: float = 60.0):
+        """Mark current key as rate-limited."""
+        self.profiles[self.current_index].mark_rate_limited(cooldown_seconds)
+
+    def mark_used(self):
+        """Record a successful use of the current key."""
+        self.profiles[self.current_index].mark_used()
+
+    def get_stats(self) -> list[dict]:
+        """Return per-key statistics."""
+        now = time.time()
+        return [
+            {
+                "index": i,
+                "available": p.is_available(),
+                "cooldown_remaining": max(0, p.cooldown_until - now),
+                "error_count": p.error_count,
+                "total_uses": p.total_uses,
+            }
+            for i, p in enumerate(self.profiles)
+        ]
+
+
 # ── Usage tracking data ──────────────────────────────────────────────────────
 
 @dataclass
@@ -152,6 +245,7 @@ class ResilientLLM:
         jitter:          float = 0.5,     # jitter factor (0-1)
         cb_threshold:    int   = 3,       # circuit breaker threshold
         cb_cooldown:     float = 120.0,   # circuit breaker cooldown (s)
+        credential_rotator: CredentialRotator | None = None,
     ):
         self.adapter          = adapter
         self.fallback_models  = fallback_models or []
@@ -165,6 +259,9 @@ class ResilientLLM:
         self._cb_threshold = cb_threshold
         self._cb_cooldown  = cb_cooldown
 
+        # Credential rotation (multi-key support)
+        self._rotator = credential_rotator
+
         # Usage tracking
         self.usage_log: list[UsageRecord] = []
 
@@ -176,7 +273,7 @@ class ResilientLLM:
             )
         return self._circuits[model]
 
-    async def chat(self, messages: list[dict], model: str) -> str:
+    async def chat(self, messages: list[dict], model: str, **kwargs) -> str:
         """
         Two-stage resilient chat:
           Stage 1: Try primary model with retries (for transient errors)
@@ -210,14 +307,16 @@ class ResilientLLM:
                     usage_info = {}
                     if hasattr(self.adapter, 'chat_with_usage'):
                         result, usage_info = await self.adapter.chat_with_usage(
-                            messages, current_model)
+                            messages, current_model, **kwargs)
                     else:
-                        result = await self.adapter.chat(messages, current_model)
+                        result = await self.adapter.chat(messages, current_model, **kwargs)
 
                     latency = (time.time() - start_ts) * 1000
 
                     # Success!
                     circuit.record_success()
+                    if self._rotator:
+                        self._rotator.mark_used()
 
                     # Track usage (with real token counts from API)
                     record = UsageRecord(
@@ -258,6 +357,19 @@ class ResilientLLM:
 
                     if error_class == ErrorClass.RETRY:
                         circuit.record_failure()
+
+                        # On rate limit (429), try rotating API key first
+                        if hasattr(exc, 'response') and exc.response.status_code == 429:
+                            if self.rotate_credential():
+                                logger.info("Rotated API key on 429 — retrying immediately")
+                                retries += 1
+                                total_retries += 1
+                                if retries > self.max_retries:
+                                    break
+                                # Short delay after rotation (not full backoff)
+                                await asyncio.sleep(0.5)
+                                continue
+
                         retries += 1
                         total_retries += 1
 
@@ -289,7 +401,7 @@ class ResilientLLM:
 
         raise last_exc or RuntimeError("All models exhausted")
 
-    async def chat_stream(self, messages: list[dict], model: str):
+    async def chat_stream(self, messages: list[dict], model: str, **kwargs):
         """
         Streaming chat with same resilience logic.
         Yields content chunks as they arrive.
@@ -314,13 +426,13 @@ class ResilientLLM:
 
                     if hasattr(self.adapter, 'chat_stream'):
                         async for chunk in self.adapter.chat_stream(
-                            messages, current_model
+                            messages, current_model, **kwargs
                         ):
                             output_chars += len(chunk)
                             yield chunk
                     else:
                         # Fallback: non-streaming, yield whole result
-                        result = await self.adapter.chat(messages, current_model)
+                        result = await self.adapter.chat(messages, current_model, **kwargs)
                         output_chars = len(result)
                         yield result
 
@@ -370,6 +482,17 @@ class ResilientLLM:
                         break
 
         raise last_exc or RuntimeError("All models exhausted (stream)")
+
+    def rotate_credential(self):
+        """Rotate to next API key (if CredentialRotator is attached)."""
+        if self._rotator:
+            new_key = self._rotator.rotate()
+            if new_key and hasattr(self.adapter, 'api_key'):
+                self.adapter.api_key = new_key
+                logger.info("[resilience] Rotated to API key #%d",
+                            self._rotator.current_index + 1)
+                return True
+        return False
 
     # ── Usage stats ──────────────────────────────────────────────────────
 

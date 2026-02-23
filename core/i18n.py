@@ -155,8 +155,8 @@ _STRINGS = {
 
     # ── Onboarding ──────────────────────────────────────────────────────
     "onboard.first_run_hint": {
-        "en": "[dim]First time? Starting setup wizard…[/dim]",
-        "zh": "[dim]首次使用，进入配置向导…[/dim]",
+        "en": "First time? Starting setup wizard…",
+        "zh": "首次使用，进入配置向导…",
     },
 
     # ── Preflight ────────────────────────────────────────────────────────
@@ -211,6 +211,11 @@ _STRINGS = {
     "help.save":          {"en": "save task as template",    "zh": "保存为任务模板"},
     "help.templates":     {"en": "run from saved templates", "zh": "从模板运行任务"},
     "help.export":        {"en": "export last task result",  "zh": "导出上次任务结果"},
+    "help.logs":          {"en": "view agent logs",           "zh": "查看代理日志"},
+    "help.plugins":       {"en": "plugin management",         "zh": "插件管理"},
+    "help.pause":         {"en": "pause active tasks",        "zh": "暂停活动任务"},
+    "help.resume":        {"en": "resume paused tasks",       "zh": "恢复暂停任务"},
+    "help.doctor_export": {"en": "export diagnostic report",  "zh": "导出诊断报告"},
 
     # ── Doctor repair ─────────────────────────────────────────────────
     "doctor.repair_title": {"en": "Auto-Repair",             "zh": "自动修复"},

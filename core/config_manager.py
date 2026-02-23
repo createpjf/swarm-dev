@@ -173,6 +173,82 @@ def safe_write_json(config_path: str, data: dict, reason: str = ""):
     logger.info("Config written: %s (%s)", config_path, reason)
 
 
+# ── Config loading with $include + ${ENV} expansion ─────────────────────────
+
+import re
+
+def expand_env_vars(data):
+    """Recursively replace ${VAR} and ${VAR:-default} in string values."""
+    if isinstance(data, str):
+        return re.sub(
+            r'\$\{(\w+)(?::-([^}]*))?\}',
+            lambda m: os.environ.get(m.group(1), m.group(2) or ''),
+            data,
+        )
+    elif isinstance(data, dict):
+        return {k: expand_env_vars(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [expand_env_vars(v) for v in data]
+    return data
+
+
+def resolve_includes(data, base_dir: str):
+    """Process $include directives — merge external YAML files.
+
+    Example config:
+        channels:
+          $include: channels.yaml
+    """
+    import yaml as _yaml
+
+    if isinstance(data, dict):
+        if "$include" in data:
+            include_path = os.path.join(base_dir, data["$include"])
+            if os.path.exists(include_path):
+                try:
+                    with open(include_path) as f:
+                        included = _yaml.safe_load(f) or {}
+                    logger.debug("Included config: %s", include_path)
+                    # Merge any sibling keys (non-$include keys override included)
+                    merged = included.copy() if isinstance(included, dict) else included
+                    for k, v in data.items():
+                        if k != "$include":
+                            if isinstance(merged, dict):
+                                merged[k] = resolve_includes(v, base_dir)
+                    return merged
+                except Exception as e:
+                    logger.warning("Failed to include %s: %s", include_path, e)
+            else:
+                logger.warning("Include file not found: %s", include_path)
+            # Return data without $include key if file not found
+            return {k: v for k, v in data.items() if k != "$include"}
+        return {k: resolve_includes(v, base_dir) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [resolve_includes(v, base_dir) for v in data]
+    return data
+
+
+def load_config(path: str = "config/agents.yaml") -> dict:
+    """Load YAML config with $include resolution and ${ENV} expansion.
+
+    This is the canonical way to load configuration — use this instead of
+    direct yaml.safe_load() to get include and env support.
+    """
+    import yaml as _yaml
+
+    if not os.path.exists(path):
+        logger.warning("Config file not found: %s", path)
+        return {}
+
+    with open(path) as f:
+        raw = _yaml.safe_load(f) or {}
+
+    base_dir = os.path.dirname(os.path.abspath(path))
+    resolved = resolve_includes(raw, base_dir)
+    expanded = expand_env_vars(resolved)
+    return expanded
+
+
 # ── Manifest helpers ─────────────────────────────────────────────────────────
 
 def _manifest_path(config_path: str) -> str:

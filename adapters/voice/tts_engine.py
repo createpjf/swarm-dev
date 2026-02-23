@@ -415,10 +415,40 @@ class LocalTTS(TTSProvider):
         """Synthesize via Sherpa-ONNX."""
         out_path = _cache_path(text, voice or "default", self.name, "wav")
 
+        # Resolve model directory from env or default location
+        model_dir = os.environ.get(
+            "SHERPA_ONNX_MODEL_DIR",
+            os.path.join(os.path.dirname(__file__), "sherpa-onnx", "models"))
+
+        # Find model files in model_dir
+        onnx_file = ""
+        tokens_file = ""
+        data_dir = ""
+        for f in os.listdir(model_dir) if os.path.isdir(model_dir) else []:
+            if f.endswith(".onnx"):
+                onnx_file = os.path.join(model_dir, f)
+            elif f == "tokens.txt":
+                tokens_file = os.path.join(model_dir, f)
+            elif f == "espeak-ng-data":
+                data_dir = os.path.join(model_dir, f)
+
+        if not onnx_file:
+            return {"ok": False,
+                    "error": f"No .onnx model found in {model_dir}"}
+
         cmd = [
             self._sherpa_path,
-            "--speed", str(max(0.5, min(2.0, speed))),
-            "--output-filename", out_path,
+            f"--vits-model={onnx_file}",
+        ]
+        if tokens_file:
+            cmd.append(f"--vits-tokens={tokens_file}")
+        if data_dir:
+            cmd.append(f"--vits-data-dir={data_dir}")
+        # vits-length-scale: larger = slower, so invert user speed
+        length_scale = round(1.0 / max(0.5, min(2.0, speed)), 3)
+        cmd += [
+            f"--vits-length-scale={length_scale}",
+            f"--output-filename={out_path}",
             text[:2000],
         ]
 

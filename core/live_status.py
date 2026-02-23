@@ -16,16 +16,25 @@ from rich.live import Live
 from rich.table import Table
 from rich.text import Text
 
+try:
+    from core.theme import theme as _theme
+except ImportError:
+    class _FallbackTheme:
+        success = "green"; error = "red"; warning = "yellow"
+        muted = "dim"; heading = "bold"; info = "cyan"
+        accent = "bold magenta"; accent_light = "magenta"
+    _theme = _FallbackTheme()
+
 
 # ── Status icons ─────────────────────────────────────────────────────────────
 
-ICON_WORKING   = "[bold cyan]●[/bold cyan]"
-ICON_DONE      = "[bold green]✓[/bold green]"
-ICON_IDLE      = "[dim]○[/dim]"
-ICON_FAIL      = "[bold red]✗[/bold red]"
-ICON_REVIEW    = "[bold magenta]◆[/bold magenta]"
-ICON_CANCELLED = "[dim yellow]⊘[/dim yellow]"
-ICON_PAUSED    = "[bold yellow]⏸[/bold yellow]"
+ICON_WORKING   = f"[bold {_theme.info}]●[/bold {_theme.info}]"
+ICON_DONE      = f"[bold {_theme.success}]✓[/bold {_theme.success}]"
+ICON_IDLE      = f"[{_theme.muted}]○[/{_theme.muted}]"
+ICON_FAIL      = f"[bold {_theme.error}]✗[/bold {_theme.error}]"
+ICON_REVIEW    = f"[{_theme.accent}]◆[/{_theme.accent}]"
+ICON_CANCELLED = f"[{_theme.muted} {_theme.warning}]⊘[/{_theme.muted} {_theme.warning}]"
+ICON_PAUSED    = f"[bold {_theme.warning}]⏸[/bold {_theme.warning}]"
 
 
 # ── Task row ─────────────────────────────────────────────────────────────────
@@ -205,30 +214,30 @@ class LiveStatus:
 
             if row.status == "working":
                 if row.partial_preview:
-                    desc_text = f"[cyan]{row.partial_preview}[/cyan]"
+                    desc_text = f"[{_theme.info}]{row.partial_preview}[/{_theme.info}]"
                 else:
-                    desc_text = f"[cyan]{row.description}[/cyan]"
+                    desc_text = f"[{_theme.info}]{row.description}[/{_theme.info}]"
                 working_count += 1
             elif row.status == "review":
-                desc_text = f"[magenta]{t('status.review')}[/magenta]"
+                desc_text = f"[{_theme.accent_light}]{t('status.review')}[/{_theme.accent_light}]"
                 working_count += 1
             elif row.status == "done":
                 if row.review_score is not None:
-                    desc_text = f"[green]{row.description} ({row.review_score}/100)[/green]"
+                    desc_text = f"[{_theme.success}]{row.description} ({row.review_score}/100)[/{_theme.success}]"
                 else:
-                    desc_text = f"[green]{row.description}[/green]"
+                    desc_text = f"[{_theme.success}]{row.description}[/{_theme.success}]"
                 done_count += 1
             elif row.status == "failed":
                 reason = row.error_msg or t("status.failed")
-                desc_text = f"[red]{reason}[/red]"
+                desc_text = f"[{_theme.error}]{reason}[/{_theme.error}]"
                 fail_count += 1
             elif row.status == "cancelled":
                 desc_text = f"[dim yellow]{t('status.cancelled')}[/dim yellow]"
                 cancelled_count += 1
             elif row.status == "paused":
-                desc_text = f"[yellow]{t('status.paused')} — {row.description}[/yellow]"
+                desc_text = f"[{_theme.warning}]{t('status.paused')} — {row.description}[/{_theme.warning}]"
             else:  # pending
-                desc_text = f"[dim]{t('status.pending')}[/dim]"
+                desc_text = f"[{_theme.muted}]{t('status.pending')}[/{_theme.muted}]"
 
             elapsed_str = _fmt_time(row.elapsed) if row.elapsed else "—"
             table.add_row(icon, row.agent_id, desc_text, elapsed_str)
@@ -236,7 +245,7 @@ class LiveStatus:
         # If no rows yet, show agents waiting
         if not self.rows:
             for aid in self.agent_ids:
-                table.add_row(ICON_IDLE, aid, f"[dim]{t('status.pending')}[/dim]", "—")
+                table.add_row(ICON_IDLE, aid, f"[{_theme.muted}]{t('status.pending')}[/{_theme.muted}]", "—")
 
         # Summary row
         table.add_row()
@@ -245,14 +254,14 @@ class LiveStatus:
         if final:
             parts = [f"{done_count} {t('summary.done').lower()}"]
             if fail_count:
-                parts.append(f"[red]{fail_count} {t('summary.failed')}[/red]")
+                parts.append(f"[{_theme.error}]{fail_count} {t('summary.failed')}[/{_theme.error}]")
             if cancelled_count:
-                parts.append(f"[yellow]{cancelled_count} {t('summary.cancelled')}[/yellow]")
+                parts.append(f"[{_theme.warning}]{cancelled_count} {t('summary.cancelled')}[/{_theme.warning}]")
             parts.append(_fmt_time(total_elapsed))
             if fail_count or cancelled_count:
-                summary = f"[yellow]{t('summary.finished')}[/yellow] · {' · '.join(parts)}"
+                summary = f"[{_theme.warning}]{t('summary.finished')}[/{_theme.warning}] · {' · '.join(parts)}"
             else:
-                summary = f"[green]{t('summary.done')}[/green] · {' · '.join(parts)}"
+                summary = f"[{_theme.success}]{t('summary.done')}[/{_theme.success}] · {' · '.join(parts)}"
         else:
             parts = []
             if done_count:
@@ -260,11 +269,11 @@ class LiveStatus:
             if working_count:
                 parts.append(f"{working_count} {t('summary.working')}")
             if fail_count:
-                parts.append(f"[red]{fail_count} {t('summary.failed')}[/red]")
+                parts.append(f"[{_theme.error}]{fail_count} {t('summary.failed')}[/{_theme.error}]")
             if cancelled_count:
-                parts.append(f"[yellow]{cancelled_count} {t('summary.cancelled')}[/yellow]")
+                parts.append(f"[{_theme.warning}]{cancelled_count} {t('summary.cancelled')}[/{_theme.warning}]")
             parts.append(f"{_fmt_time(total_elapsed)} {t('summary.elapsed')}")
-            summary = f"[dim]{' · '.join(parts)}[/dim]"
+            summary = f"[{_theme.muted}]{' · '.join(parts)}[/{_theme.muted}]"
 
         table.add_row("", "", summary, "")
 

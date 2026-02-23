@@ -11,6 +11,11 @@ Base URL: https://api.minimax.io/v1
 
 Minimax is fully OpenAI-compatible, so this adapter follows the same
 SSE streaming protocol as FLockAdapter/OpenAIAdapter.
+
+Native function calling: when `tools` kwarg is provided, tool schemas
+are sent to the API and any tool_calls in the response are converted
+back to <tool_code> text format for transparent parsing by the existing
+parse_tool_calls() pipeline.
 """
 
 from __future__ import annotations
@@ -24,6 +29,39 @@ logger = logging.getLogger(__name__)
 MINIMAX_BASE_URL = "https://api.minimax.io/v1"
 
 
+def _tool_calls_to_text(tool_calls: list[dict]) -> str:
+    """Convert OpenAI-format tool_calls to <tool_code> text blocks.
+
+    This allows the existing parse_tool_calls() regex pipeline to
+    extract tool invocations without any changes to the agent loop.
+    """
+    blocks = []
+    for tc in tool_calls:
+        fn = tc.get("function", {})
+        name = fn.get("name", "unknown")
+        raw_args = fn.get("arguments") or "{}"
+        try:
+            args = json.loads(raw_args)
+        except (json.JSONDecodeError, TypeError):
+            logger.warning("[minimax] Failed to parse tool_call arguments for %s: %r",
+                           name, raw_args[:200] if isinstance(raw_args, str) else raw_args)
+            args = {}
+        block = json.dumps({"tool": name, "params": args}, ensure_ascii=False)
+        blocks.append(f"<tool_code>\n{block}\n</tool_code>")
+    return "\n".join(blocks)
+
+
+def _build_payload(model: str, messages: list[dict], **kwargs) -> dict:
+    """Build API payload, injecting tools if provided."""
+    payload: dict = {"model": model, "messages": messages}
+    tools = kwargs.get("tools")
+    if tools:
+        payload["tools"] = [
+            {"type": "function", "function": t} for t in tools
+        ]
+    return payload
+
+
 class MinimaxAdapter:
 
     def __init__(self, api_key: str | None = None, base_url: str | None = None):
@@ -32,11 +70,12 @@ class MinimaxAdapter:
         if not self.api_key:
             logger.warning("MINIMAX_API_KEY not set — LLM calls will fail")
 
-    async def chat(self, messages: list[dict], model: str) -> str:
+    async def chat(self, messages: list[dict], model: str, **kwargs) -> str:
         """Blocking chat — returns full response text."""
         import httpx
 
         try:
+            payload = _build_payload(model, messages, **kwargs)
             async with httpx.AsyncClient(timeout=120.0) as client:
                 resp = await client.post(
                     f"{self.base_url}/chat/completions",
@@ -44,10 +83,7 @@ class MinimaxAdapter:
                         "Authorization": f"Bearer {self.api_key}",
                         "Content-Type": "application/json",
                     },
-                    json={
-                        "model": model,
-                        "messages": messages,
-                    },
+                    json=payload,
                 )
                 resp.raise_for_status()
                 data = resp.json()
@@ -55,7 +91,14 @@ class MinimaxAdapter:
                 if not choices:
                     raise ValueError(
                         f"Empty choices in Minimax response: {list(data.keys())}")
-                return choices[0]["message"]["content"]
+                message = choices[0]["message"]
+                # Native function calling: convert tool_calls to text
+                tool_calls = message.get("tool_calls")
+                if tool_calls:
+                    content = message.get("content") or ""
+                    tc_text = _tool_calls_to_text(tool_calls)
+                    return f"{content}\n{tc_text}" if content else tc_text
+                return message["content"]
         except httpx.HTTPStatusError as e:
             code = e.response.status_code
             body = ""
@@ -77,14 +120,22 @@ class MinimaxAdapter:
         except (KeyError, IndexError, json.JSONDecodeError) as e:
             raise RuntimeError(f"Minimax response parse error: {e}") from e
 
-    async def chat_stream(self, messages: list[dict], model: str):
+    async def chat_stream(self, messages: list[dict], model: str, **kwargs):
         """
         Streaming chat — yields content chunks as they arrive.
         Uses SSE (server-sent events) format, OpenAI-compatible.
+
+        When tools are provided and the model returns tool_calls,
+        the accumulated tool_calls are converted to text and yielded
+        as a final chunk.
         """
         import httpx
 
         try:
+            payload = _build_payload(model, messages, **kwargs)
+            payload["stream"] = True
+            accumulated_tool_calls: list[dict] = []
+
             async with httpx.AsyncClient(timeout=120.0) as client:
                 async with client.stream(
                     "POST",
@@ -93,11 +144,7 @@ class MinimaxAdapter:
                         "Authorization": f"Bearer {self.api_key}",
                         "Content-Type": "application/json",
                     },
-                    json={
-                        "model": model,
-                        "messages": messages,
-                        "stream": True,
-                    },
+                    json=payload,
                 ) as resp:
                     resp.raise_for_status()
                     async for line in resp.aiter_lines():
@@ -105,18 +152,38 @@ class MinimaxAdapter:
                             continue
                         # SSE format: "data: {...}"
                         if line.startswith("data: "):
-                            payload = line[6:]
-                            if payload.strip() == "[DONE]":
-                                return
+                            data_str = line[6:]
+                            if data_str.strip() == "[DONE]":
+                                break
                             try:
-                                chunk = json.loads(payload)
+                                chunk = json.loads(data_str)
                                 delta = chunk.get("choices", [{}])[0].get(
                                     "delta", {})
+                                # Regular content
                                 content = delta.get("content")
                                 if content:
                                     yield content
+                                # Tool call deltas (accumulate)
+                                tc_deltas = delta.get("tool_calls")
+                                if tc_deltas:
+                                    for tcd in tc_deltas:
+                                        idx = tcd.get("index", 0)
+                                        while len(accumulated_tool_calls) <= idx:
+                                            accumulated_tool_calls.append(
+                                                {"function": {"name": "", "arguments": ""}})
+                                        entry = accumulated_tool_calls[idx]
+                                        fn = tcd.get("function", {})
+                                        if fn.get("name"):
+                                            entry["function"]["name"] = fn["name"]
+                                        if fn.get("arguments"):
+                                            entry["function"]["arguments"] += fn["arguments"]
                             except json.JSONDecodeError:
                                 continue
+
+            # Yield accumulated tool_calls as text block
+            if accumulated_tool_calls:
+                yield "\n" + _tool_calls_to_text(accumulated_tool_calls)
+
         except httpx.HTTPStatusError as e:
             code = e.response.status_code
             body = ""
@@ -130,7 +197,7 @@ class MinimaxAdapter:
             raise RuntimeError(f"Minimax stream connection error: {e}") from e
 
     async def chat_with_usage(self, messages: list[dict],
-                              model: str) -> tuple[str, dict]:
+                              model: str, **kwargs) -> tuple[str, dict]:
         """
         Chat that also returns token usage info.
         Returns (content, usage_dict) where usage_dict has:
@@ -141,6 +208,7 @@ class MinimaxAdapter:
         import httpx
 
         try:
+            payload = _build_payload(model, messages, **kwargs)
             async with httpx.AsyncClient(timeout=120.0) as client:
                 resp = await client.post(
                     f"{self.base_url}/chat/completions",
@@ -148,17 +216,22 @@ class MinimaxAdapter:
                         "Authorization": f"Bearer {self.api_key}",
                         "Content-Type": "application/json",
                     },
-                    json={
-                        "model": model,
-                        "messages": messages,
-                    },
+                    json=payload,
                 )
                 resp.raise_for_status()
                 data = resp.json()
                 choices = data.get("choices")
                 if not choices:
                     raise ValueError("Empty choices in Minimax response")
-                content = choices[0]["message"]["content"]
+                message = choices[0]["message"]
+                # Native function calling: convert tool_calls to text
+                tool_calls = message.get("tool_calls")
+                if tool_calls:
+                    content = message.get("content") or ""
+                    tc_text = _tool_calls_to_text(tool_calls)
+                    content = f"{content}\n{tc_text}" if content else tc_text
+                else:
+                    content = message["content"]
                 usage = data.get("usage", {})
                 return content, {
                     "prompt_tokens":     usage.get("prompt_tokens", 0),

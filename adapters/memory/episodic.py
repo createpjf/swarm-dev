@@ -61,9 +61,20 @@ def make_episode(
     score: Optional[int] = None,
     tags: Optional[list[str]] = None,
     context: Optional[dict] = None,
+    outcome: Optional[str] = None,
+    error_type: Optional[str] = None,
 ) -> dict:
-    """Create a structured episode from a completed task."""
+    """Create a structured episode from a completed task.
+
+    Args:
+        outcome: "success", "failure", "partial" — explicit outcome signal
+        error_type: Error category tag for pattern learning (e.g. "timeout",
+                    "tool_error", "format_error", "hallucination")
+    """
     now = time.time()
+    # Determine outcome
+    if outcome is None:
+        outcome = "success" if (score is None or score >= 50) else "needs_improvement"
     # L0: compact index entry (~100 tokens)
     title = task_description[:120]
     l0 = {
@@ -74,6 +85,8 @@ def make_episode(
         "score": score,
         "ts": now,
         "date": _today(),
+        "outcome": outcome,
+        "error_type": error_type,
     }
     # L1: overview (~500 tokens)
     # Truncate result for overview
@@ -82,7 +95,6 @@ def make_episode(
         **l0,
         "description": task_description,
         "result_preview": result_preview,
-        "outcome": "success" if (score is None or score >= 50) else "needs_improvement",
     }
     # L2: full detail
     l2 = {
@@ -212,6 +224,42 @@ class EpisodicMemory:
         ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
         with open(path, "a") as f:
             f.write(f"## [{ts}]\n{entry}\n\n")
+
+    def query_error_patterns(self, keywords: list[str] | None = None,
+                             limit: int = 5) -> list[dict]:
+        """Query recent failure episodes for error pattern learning.
+
+        Returns episodes with outcome='failure' or 'needs_improvement',
+        optionally filtered by keyword overlap with task description.
+        Used to inject "previous failure context" into agent prompts.
+        """
+        failures: list[dict] = []
+        for date_str in sorted(self._list_dates(), reverse=True):
+            day_dir = os.path.join(self.episodes_dir, date_str)
+            for fname in sorted(os.listdir(day_dir), reverse=True):
+                if not fname.endswith(".json") or fname.startswith("."):
+                    continue
+                try:
+                    with open(os.path.join(day_dir, fname)) as f:
+                        ep = json.load(f)
+                except (json.JSONDecodeError, OSError):
+                    continue
+
+                outcome = ep.get("outcome", "")
+                if outcome not in ("failure", "needs_improvement"):
+                    continue
+
+                # Optional keyword filter
+                if keywords:
+                    desc = (ep.get("description", "") + " " +
+                            ep.get("title", "")).lower()
+                    if not any(kw.lower() in desc for kw in keywords):
+                        continue
+
+                failures.append(self._trim_to_level(ep, 1))
+                if len(failures) >= limit:
+                    return failures
+        return failures
 
     def generate_daily_summary(self, date: Optional[str] = None) -> str:
         """

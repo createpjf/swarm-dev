@@ -20,7 +20,7 @@ from enum import Enum
 from typing import Optional
 
 # Timeout thresholds (seconds)
-CLAIMED_TIMEOUT = 600   # 10 min — agent crashed if no progress
+CLAIMED_TIMEOUT = 180   # 3 min — agent crashed if no progress (was 10 min)
 REVIEW_TIMEOUT  = 300   # 5 min — reviewer crashed
 
 # Phase 8: loud warning on missing filelock
@@ -48,6 +48,7 @@ logger = logging.getLogger(__name__)
 
 BOARD_FILE = ".task_board.json"
 BOARD_LOCK = ".task_board.lock"
+TASK_SIGNAL_DIR = ".task_signals"
 
 # ── Role matching ────────────────────────────────────────────────────────────
 # Maps required_role keywords → which agent_id(s) can claim them.
@@ -220,6 +221,9 @@ class TaskBoard:
     def __init__(self, path: str = BOARD_FILE):
         self.path = path
         self.lock = FileLock(BOARD_LOCK)
+        # mtime-guarded cache — avoids redundant json.load() on unchanged file
+        self._cache: dict | None = None
+        self._cache_mtime: float = 0.0
         # Fix TOCTOU: init under lock
         with self.lock:
             if not os.path.exists(path):
@@ -245,7 +249,46 @@ class TaskBoard:
             data = self._read()
             data[task.task_id] = task.to_dict()
             self._write(data)
+        # Emit lightweight signal so agents discover new tasks faster
+        self._emit_task_signal(task.task_id, required_role)
         return task
+
+    # ── Task signal IPC ───────────────────────────────────────────────────
+    def _emit_task_signal(self, task_id: str, required_role: str | None = None):
+        """Write a small signal file so agents can detect new tasks via inotify/poll
+        instead of re-reading the entire board every tick."""
+        try:
+            os.makedirs(TASK_SIGNAL_DIR, exist_ok=True)
+            sig = {"task_id": task_id, "role": required_role, "ts": time.time()}
+            sig_path = os.path.join(TASK_SIGNAL_DIR, f"{task_id[:8]}.signal")
+            with open(sig_path, "w") as f:
+                json.dump(sig, f)
+        except OSError:
+            pass  # Non-critical — agents still poll the board
+
+    @staticmethod
+    def consume_task_signals() -> list[dict]:
+        """Read and delete all pending task signals. Returns list of signal dicts."""
+        signals: list[dict] = []
+        if not os.path.isdir(TASK_SIGNAL_DIR):
+            return signals
+        try:
+            for fname in os.listdir(TASK_SIGNAL_DIR):
+                if not fname.endswith(".signal"):
+                    continue
+                fpath = os.path.join(TASK_SIGNAL_DIR, fname)
+                try:
+                    with open(fpath, "r") as f:
+                        signals.append(json.load(f))
+                    os.remove(fpath)
+                except (json.JSONDecodeError, OSError):
+                    try:
+                        os.remove(fpath)
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+        return signals
 
     # ── Self-claim (Agent Teams pattern) ────────────────────────────────────
 
@@ -291,7 +334,7 @@ class TaskBoard:
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
-    def submit_for_review(self, task_id: str, result: str):
+    def submit_for_review(self, task_id: str, result: str) -> None:
         with self.lock:
             data = self._read()
             t = data.get(task_id)
@@ -575,6 +618,9 @@ class TaskBoard:
     def collect_results(self, root_task_id: str) -> str:
         """Collect all completed results for a task tree (root + all subtasks).
 
+        Scoped to the subtask tree rooted at root_task_id — prevents results
+        from unrelated tasks (e.g., previous sessions) from leaking in.
+
         Gathers results from:
         1. All non-planner completed tasks (executor output) — with attribution
         2. Falls back to planner output if no executor results exist
@@ -582,18 +628,29 @@ class TaskBoard:
         Each result section includes the producing agent for traceability.
         """
         data = self._read()
+
+        # 1. Build the set of task IDs belonging to this tree (BFS via parent_id)
+        tree_ids: set[str] = {root_task_id}
+        changed = True
+        while changed:
+            changed = False
+            for tid, t in data.items():
+                if tid not in tree_ids and t.get("parent_id") in tree_ids:
+                    tree_ids.add(tid)
+                    changed = True
+
+        # 2. Collect results only from tasks within the tree
         planner_result = None
-        planner_agent = ""
         executor_results: list[dict] = []
 
-        for tid, t in data.items():
-            if not t.get("result"):
+        for tid in tree_ids:
+            t = data.get(tid)
+            if not t or not t.get("result"):
                 continue
             agent = t.get("agent_id", "")
             desc  = t.get("description", "")[:80]
             if agent.lower() in ("leo", "planner") or "planner" in agent.lower():
                 planner_result = t["result"]
-                planner_agent = agent
             else:
                 executor_results.append({
                     "agent_id": agent,
@@ -725,15 +782,35 @@ class TaskBoard:
     # ── Internal ─────────────────────────────────────────────────────────────
 
     def _read(self) -> dict:
+        """Read task board JSON with mtime-guarded cache.
+
+        Returns cached data if file mtime hasn't changed, avoiding
+        redundant open() + json.load() calls (idle: 6 reads/sec → stat-only).
+        """
+        try:
+            mtime = os.path.getmtime(self.path)
+        except FileNotFoundError:
+            return {}
+        if self._cache is not None and mtime == self._cache_mtime:
+            return self._cache
         try:
             with open(self.path, "r") as f:
-                return json.load(f)
+                data = json.load(f)
+            self._cache = data
+            self._cache_mtime = mtime
+            return data
         except (FileNotFoundError, json.JSONDecodeError):
             return {}
 
-    def _write(self, data: dict):
+    def _write(self, data: dict) -> None:
         with open(self.path, "w") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+        # Sync cache on write to avoid stale reads
+        self._cache = data
+        try:
+            self._cache_mtime = os.path.getmtime(self.path)
+        except FileNotFoundError:
+            self._cache_mtime = 0.0
 
     @staticmethod
     def _avg_review_score(t: dict) -> float:

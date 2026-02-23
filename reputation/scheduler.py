@@ -103,12 +103,19 @@ class ReputationScheduler:
         self.scorer.update(reviewer_id, "review_accuracy", accuracy_signal)
 
     async def on_critique_result(self, agent_id: str, passed_first_time: bool,
-                                  had_revision: bool):
+                                  had_revision: bool,
+                                  critique_score: int | None = None):
         """
         Called when an executor's task is critiqued.
         Updates the agent's output_quality dimension.
+
+        Uses the actual Alic critique score (1-10 → scaled to 0-100) when available,
+        falling back to heuristic values otherwise.
         """
-        if passed_first_time:
+        if critique_score is not None:
+            # Use real Alic score: scale 1-10 → 10-100
+            quality_signal = float(critique_score) * 10.0
+        elif passed_first_time:
             quality_signal = 90.0
         elif had_revision:
             quality_signal = 70.0

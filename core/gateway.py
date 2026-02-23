@@ -79,6 +79,64 @@ _config: dict = {}
 _SAFE_NAME = re.compile(r'^[a-zA-Z0-9_-]+$')
 _channel_manager = None  # ChannelManager instance (set by start_gateway)
 
+# SSE task-board mtime cache (avoids json.load every 1.5s when idle)
+_sse_tb_cache: dict = {}
+_sse_tb_mtime: float = 0.0
+
+
+# ── Sensitive field redaction ──────────────────────────────────────────────────
+
+# Field name patterns that indicate sensitive values
+_SENSITIVE_KEY_PATTERNS = re.compile(
+    r'(api[_\-]?key|secret|password|token|credential|auth[_\-]?key|'
+    r'private[_\-]?key|access[_\-]?key|signing[_\-]?key)',
+    re.IGNORECASE,
+)
+
+# Env-var reference fields — show status instead of value
+_ENV_REF_PATTERNS = re.compile(
+    r'(api_key_env|token_env|secret_env|key_env)',
+    re.IGNORECASE,
+)
+
+
+def redact_config(cfg: dict | list | Any) -> dict | list | Any:
+    """Recursively redact sensitive fields in configuration data.
+
+    Rules:
+      - Fields matching _SENSITIVE_KEY_PATTERNS → masked as "sk-***…***"
+      - Fields matching _ENV_REF_PATTERNS → show "ENV_NAME (set)" / "(not set)"
+      - Nested dicts/lists are recursively processed
+      - Non-string values for sensitive fields → "***"
+
+    This is used by GET /v1/config, the dashboard config view,
+    and cleo config get (--json mode) when the value is sensitive.
+    """
+    if isinstance(cfg, dict):
+        result = {}
+        for key, val in cfg.items():
+            if _ENV_REF_PATTERNS.search(key):
+                # Show env var name + whether it's set
+                if isinstance(val, str) and val:
+                    is_set = bool(os.environ.get(val, ""))
+                    result[key] = f"{val} ({'set' if is_set else 'not set'})"
+                else:
+                    result[key] = val
+            elif _SENSITIVE_KEY_PATTERNS.search(key):
+                # Mask the actual value
+                if isinstance(val, str) and len(val) > 8:
+                    result[key] = val[:3] + "***…" + val[-3:]
+                elif isinstance(val, str) and val:
+                    result[key] = "***"
+                else:
+                    result[key] = val  # empty/null stays as-is
+            else:
+                result[key] = redact_config(val)
+        return result
+    elif isinstance(cfg, list):
+        return [redact_config(item) for item in cfg]
+    return cfg
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  REQUEST HANDLER
@@ -100,6 +158,24 @@ class _Handler(BaseHTTPRequestHandler):
         self._json_response(401, {"error": "Unauthorized"})
         return False
 
+    def _check_dashboard_auth(self) -> bool:
+        """Check if dashboard request is authenticated via cookie or query param."""
+        if not _token:
+            return True
+        # Check cookie
+        cookie_header = self.headers.get("Cookie", "")
+        for part in cookie_header.split(";"):
+            part = part.strip()
+            if part.startswith("cleo_auth="):
+                if part[len("cleo_auth="):] == _token:
+                    return True
+        # Check ?token= query param (for initial login)
+        parsed = urllib.parse.urlparse(self.path)
+        params = urllib.parse.parse_qs(parsed.query)
+        if params.get("token", [None])[0] == _token:
+            return True
+        return False
+
     # ── Response helpers ──
     def _json_response(self, code: int, data: Any):
         body = json.dumps(data, ensure_ascii=False, default=str).encode()
@@ -114,6 +190,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(content)))
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(content)
@@ -141,9 +218,38 @@ class _Handler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path.rstrip("/")
 
-        # Dashboard — public (no auth required)
+        # Login endpoint — set auth cookie and redirect to dashboard
+        if path == "/login":
+            parsed_url = urllib.parse.urlparse(self.path)
+            params = urllib.parse.parse_qs(parsed_url.query)
+            submitted_token = params.get("token", [None])[0]
+            if submitted_token and submitted_token == _token:
+                # Set cookie and redirect to dashboard
+                self.send_response(302)
+                self.send_header("Set-Cookie",
+                                 f"cleo_auth={_token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400")
+                self.send_header("Location", "/")
+                self.end_headers()
+            else:
+                self._serve_login_page(error="Invalid token." if submitted_token else "")
+            return
+
+        # Dashboard — requires cookie/token auth
         if path == "" or path == "/":
-            self._serve_dashboard()
+            if self._check_dashboard_auth():
+                # Set cookie if accessing via ?token= param (auto-login from onboard)
+                parsed_url = urllib.parse.urlparse(self.path)
+                params = urllib.parse.parse_qs(parsed_url.query)
+                if params.get("token"):
+                    self.send_response(302)
+                    self.send_header("Set-Cookie",
+                                     f"cleo_auth={_token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400")
+                    self.send_header("Location", "/")
+                    self.end_headers()
+                else:
+                    self._serve_dashboard()
+            else:
+                self._serve_login_page()
             return
 
         # /health is public (no auth required)
@@ -338,6 +444,10 @@ class _Handler(BaseHTTPRequestHandler):
         # ── Channel reload ──
         elif path == "/v1/channels/reload":
             self._handle_reload_channels()
+        # ── Webhook inbound (external services: GitHub, Jira, etc.) ──
+        elif path.startswith("/v1/webhook/"):
+            source = path[len("/v1/webhook/"):]
+            self._handle_webhook_inbound(source)
         else:
             self._json_response(404, {"error": "Not found"})
 
@@ -677,6 +787,43 @@ class _Handler(BaseHTTPRequestHandler):
         })
 
     # ── Dashboard ──
+    def _serve_login_page(self, error: str = ""):
+        """Serve a minimal login page for dashboard authentication."""
+        error_html = f'<p style="color:#ff4444;margin-bottom:16px">{error}</p>' if error else ''
+        html = f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cleo — Login</title>
+<style>
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         background: #0a0a0f; color: #e0e0e0; display: flex; align-items: center;
+         justify-content: center; min-height: 100vh; margin: 0; }}
+  .card {{ background: #1a1a2e; border-radius: 12px; padding: 40px;
+           max-width: 380px; width: 100%; box-shadow: 0 4px 24px rgba(0,0,0,.4); }}
+  h1 {{ font-size: 24px; margin: 0 0 8px; color: #c084fc; }}
+  p.sub {{ color: #888; font-size: 14px; margin: 0 0 24px; }}
+  input {{ width: 100%; padding: 12px; border: 1px solid #333; border-radius: 8px;
+           background: #111; color: #eee; font-size: 16px; box-sizing: border-box;
+           margin-bottom: 16px; }}
+  input:focus {{ border-color: #c084fc; outline: none; }}
+  button {{ width: 100%; padding: 12px; border: none; border-radius: 8px;
+            background: #7c3aed; color: #fff; font-size: 16px; cursor: pointer; }}
+  button:hover {{ background: #6d28d9; }}
+</style></head><body>
+<div class="card">
+  <h1>Cleo Dashboard</h1>
+  <p class="sub">Enter your gateway token to continue.</p>
+  {error_html}
+  <form action="/login" method="GET">
+    <input type="password" name="token" placeholder="Gateway token" autofocus required>
+    <button type="submit">Sign in</button>
+  </form>
+  <p style="color:#666;font-size:12px;margin-top:16px;text-align:center">
+    Find your token: <code>echo $CLEO_GATEWAY_TOKEN</code>
+  </p>
+</div></body></html>"""
+        self._html_response(200, html.encode("utf-8"))
+
     def _serve_dashboard(self):
         """Serve the embedded web dashboard with auto-injected auth token."""
         html_path = os.path.join(os.path.dirname(__file__), "dashboard.html")
@@ -804,26 +951,8 @@ class _Handler(BaseHTTPRequestHandler):
             with open("config/agents.yaml") as f:
                 cfg = yaml.safe_load(f) or {}
 
-            # Sanitize — remove api_key_env values, mask any key references
             sanitized = json.loads(json.dumps(cfg, default=str))
-
-            # Remove sensitive fields recursively
-            def _sanitize(obj):
-                if isinstance(obj, dict):
-                    for key in list(obj.keys()):
-                        if "key" in key.lower() and "api" in key.lower():
-                            obj[key] = "***"
-                        elif key == "api_key_env":
-                            obj[key] = (obj[key] + " (set)"
-                                        if os.environ.get(obj[key], "")
-                                        else obj[key] + " (not set)")
-                        else:
-                            _sanitize(obj[key])
-                elif isinstance(obj, list):
-                    for item in obj:
-                        _sanitize(item)
-
-            _sanitize(sanitized)
+            sanitized = redact_config(sanitized)
             self._json_response(200, {"config": sanitized})
         except Exception as e:
             self._json_response(500, {"error": str(e)})
@@ -1091,6 +1220,36 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._validate_name(agent_id):
             return
 
+        # Template support — predefined agent archetypes
+        _TEMPLATES = {
+            "research_agent": {
+                "role": "Research specialist — web search, data analysis, report writing",
+                "skills": ["_base", "research"],
+                "autonomy_level": 2,
+            },
+            "coding_agent": {
+                "role": "Software engineer — code writing, debugging, code review",
+                "skills": ["_base", "coding"],
+                "autonomy_level": 2,
+            },
+            "review_agent": {
+                "role": "Quality reviewer — reviews outputs, provides critique scores",
+                "skills": ["_base"],
+                "autonomy_level": 1,
+            },
+            "assistant_agent": {
+                "role": "General assistant — task planning, scheduling, communication",
+                "skills": ["_base"],
+                "autonomy_level": 1,
+            },
+        }
+        template_name = body.get("template", "")
+        if template_name and template_name in _TEMPLATES:
+            tmpl = _TEMPLATES[template_name]
+            body.setdefault("role", tmpl["role"])
+            body.setdefault("skills", tmpl["skills"])
+            body.setdefault("autonomy_level", tmpl["autonomy_level"])
+
         role = body.get("role", "general assistant").strip()
         model = body.get("model", "").strip()
         provider = body.get("provider", "flock").strip()
@@ -1197,10 +1356,25 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception:
             pass
 
+        # Signal hot-reload: write a marker so the persistent pool
+        # detects the config change and restarts with the new agent.
+        try:
+            signal_path = ".agent_reload_signal"
+            with open(signal_path, "w") as f:
+                import json as _json
+                _json.dump({
+                    "action": "create",
+                    "agent_id": agent_id,
+                    "ts": time.time(),
+                }, f)
+        except OSError:
+            pass
+
         self._json_response(201, {
             "ok": True,
             "agent_id": agent_id,
             "team": [a["id"] for a in cfg["agents"]],
+            "hot_reload": True,
         })
 
     def _handle_delete_agent(self, agent_id: str):
@@ -2261,6 +2435,60 @@ class _Handler(BaseHTTPRequestHandler):
             logger.exception("Channel reload failed: %s", e)
             self._json_response(500, {"error": f"Reload failed: {e}"})
 
+    def _handle_webhook_inbound(self, source: str):
+        """POST /v1/webhook/{source} — receive external webhook events.
+
+        External services (GitHub, Jira, Notion, etc.) push events here.
+        The gateway parses the payload and creates a task for the orchestrator.
+        Supports HMAC-SHA256 signature verification.
+        """
+        # Read raw body for signature verification
+        content_length = int(self.headers.get("Content-Length", 0))
+        raw_body = self.rfile.read(content_length) if content_length else b""
+
+        # Verify signature if configured
+        signature = (self.headers.get("X-Hub-Signature-256", "") or
+                     self.headers.get("X-Signature", ""))
+        if not _verify_webhook_signature(source, raw_body, signature):
+            self._json_response(401, {"error": "Invalid webhook signature"})
+            return
+
+        # Parse JSON body
+        try:
+            body = json.loads(raw_body) if raw_body else {}
+        except json.JSONDecodeError:
+            body = {"raw": raw_body.decode("utf-8", errors="replace")[:2000]}
+
+        # Build task description from webhook
+        event_type = (self.headers.get("X-GitHub-Event", "") or
+                      self.headers.get("X-Event-Type", "") or
+                      body.get("event", "") or
+                      "unknown")
+
+        task_desc = (
+            f"[Webhook: {source}] Event: {event_type}\n\n"
+            f"Payload summary:\n"
+            f"```json\n{json.dumps(body, indent=2, ensure_ascii=False, default=str)[:3000]}\n```\n\n"
+            f"Process this webhook event and take appropriate action."
+        )
+
+        # Submit as task
+        try:
+            from core.task_board import TaskBoard
+            board = TaskBoard()
+            task = board.create(task_desc, required_role="planner")
+            logger.info("[webhook] %s event from %s → task %s",
+                        event_type, source, task.task_id)
+            self._json_response(200, {
+                "ok": True,
+                "task_id": task.task_id,
+                "source": source,
+                "event": event_type,
+            })
+        except Exception as e:
+            logger.error("Webhook task creation failed: %s", e)
+            self._json_response(500, {"error": str(e)})
+
     # ══════════════════════════════════════════════════════════════════════════
     #  CRON HANDLERS
     # ══════════════════════════════════════════════════════════════════════════
@@ -2382,11 +2610,23 @@ class _Handler(BaseHTTPRequestHandler):
         """Build a compact state snapshot for SSE push."""
         snapshot: dict = {"ts": time.time()}
 
-        # Task board
+        # Task board (mtime-guarded to avoid redundant json.load)
         try:
-            if os.path.exists(".task_board.json"):
-                with open(".task_board.json") as f:
-                    tasks = json.load(f)
+            global _sse_tb_cache, _sse_tb_mtime
+            tb_path = ".task_board.json"
+            try:
+                mtime = os.path.getmtime(tb_path)
+            except OSError:
+                mtime = 0
+            if mtime != _sse_tb_mtime:
+                if mtime > 0:
+                    with open(tb_path) as f:
+                        _sse_tb_cache = json.load(f)
+                else:
+                    _sse_tb_cache = {}
+                _sse_tb_mtime = mtime
+            if _sse_tb_cache:
+                tasks = _sse_tb_cache
                 # Compact: only send essential fields
                 compact_tasks = {}
                 for tid, t in tasks.items():
@@ -2615,6 +2855,119 @@ def generate_token() -> str:
     return f"cleo-{secrets.token_urlsafe(24)}"
 
 
+_WEBHOOK_HMAC_SECRETS: dict[str, str] = {}  # source → HMAC secret
+
+
+def _verify_webhook_signature(source: str, payload: bytes,
+                              signature: str) -> bool:
+    """Verify HMAC-SHA256 signature for webhook payloads."""
+    secret = _WEBHOOK_HMAC_SECRETS.get(source)
+    if not secret:
+        return True  # No secret configured → accept all
+    import hmac, hashlib
+    expected = hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
+    # Support "sha256=xxx" prefix (GitHub style)
+    if signature.startswith("sha256="):
+        signature = signature[7:]
+    return hmac.compare_digest(expected, signature)
+
+
+_FILE_DELIVERY_DIR = ".file_delivery"
+_FILE_DELIVERY_DEAD = ".file_delivery/dead"
+_FILE_DELIVERY_MAX_RETRIES = 3
+
+
+def _start_file_delivery_consumer():
+    """Start a background thread that polls .file_delivery/ every 5 seconds.
+
+    Picks up queued file delivery JSONs (written by agent tools when the
+    HTTP proxy is unreachable), sends them via ChannelManager, and cleans up.
+    Failed deliveries are retried up to 3 times before moving to dead/.
+    """
+    import asyncio as _asyncio
+
+    def _consumer_loop():
+        while True:
+            time.sleep(5)
+            if not os.path.isdir(_FILE_DELIVERY_DIR):
+                continue
+            global _channel_manager
+            if not _channel_manager or not _channel_manager._loop:
+                continue
+
+            try:
+                files = sorted(f for f in os.listdir(_FILE_DELIVERY_DIR)
+                               if f.endswith(".json"))
+            except OSError:
+                continue
+
+            for fname in files:
+                fpath = os.path.join(_FILE_DELIVERY_DIR, fname)
+                try:
+                    with open(fpath, "r") as f:
+                        delivery = json.load(f)
+                except (json.JSONDecodeError, OSError):
+                    # Corrupt — remove
+                    try:
+                        os.remove(fpath)
+                    except OSError:
+                        pass
+                    continue
+
+                session_id = delivery.get("session_id", "")
+                file_path = delivery.get("file_path", "")
+                caption = delivery.get("caption", "")
+                retry_count = delivery.get("retry_count", 0)
+
+                if not session_id or not file_path or not os.path.isfile(file_path):
+                    # Invalid or file gone — remove
+                    try:
+                        os.remove(fpath)
+                    except OSError:
+                        pass
+                    continue
+
+                # Try sending via channel manager
+                try:
+                    future = _asyncio.run_coroutine_threadsafe(
+                        _channel_manager.send_file(session_id, file_path, caption),
+                        _channel_manager._loop,
+                    )
+                    msg_id = future.result(timeout=30)
+                    if msg_id:
+                        logger.info("File delivery consumer: sent %s to %s (msg %s)",
+                                    os.path.basename(file_path), session_id, msg_id)
+                        os.remove(fpath)
+                    else:
+                        raise RuntimeError("send_file returned empty msg_id")
+                except Exception as e:
+                    retry_count += 1
+                    if retry_count >= _FILE_DELIVERY_MAX_RETRIES:
+                        logger.error("File delivery failed after %d retries: %s → moving to dead/",
+                                     retry_count, fname)
+                        os.makedirs(_FILE_DELIVERY_DEAD, exist_ok=True)
+                        try:
+                            os.rename(fpath, os.path.join(_FILE_DELIVERY_DEAD, fname))
+                        except OSError:
+                            try:
+                                os.remove(fpath)
+                            except OSError:
+                                pass
+                    else:
+                        logger.warning("File delivery retry %d/%d for %s: %s",
+                                       retry_count, _FILE_DELIVERY_MAX_RETRIES, fname, e)
+                        delivery["retry_count"] = retry_count
+                        try:
+                            with open(fpath, "w") as f:
+                                json.dump(delivery, f)
+                        except OSError:
+                            pass
+
+    thread = Thread(target=_consumer_loop, daemon=True, name="file-delivery-consumer")
+    thread.start()
+    logger.info("File delivery consumer started (polling %s every 5s)", _FILE_DELIVERY_DIR)
+
+
 def start_gateway(port: int = 0, token: str = "",
                    daemon: bool = True) -> HTTPServer | None:
     """
@@ -2631,6 +2984,13 @@ def start_gateway(port: int = 0, token: str = "",
     _start_time = time.time()
     _token = token
     _config = {"port": port, "token": token}
+
+    # Persist token so agent subprocesses can read it for HTTP proxy calls
+    try:
+        with open(".gateway_token", "w") as f:
+            f.write(token)
+    except OSError:
+        pass
 
     try:
         server = HTTPServer(("127.0.0.1", port), _Handler)
@@ -2695,6 +3055,9 @@ def start_gateway(port: int = 0, token: str = "",
             logger.info("WebSocket gateway disabled (websockets not installed)")
     except Exception as e:
         logger.warning("WebSocket gateway failed to start: %s", e)
+
+    # ── File delivery consumer (polls .file_delivery/ for queued sends) ──
+    _start_file_delivery_consumer()
 
     # ── Serve ──
 

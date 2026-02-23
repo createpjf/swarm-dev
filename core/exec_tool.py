@@ -254,6 +254,25 @@ def execute(
                 "elapsed_s": 0,
             }
 
+    # Workspace isolation: force cwd to workspace/ if not explicitly set
+    workspace_dir = os.environ.get("CLEO_WORKSPACE", "workspace")
+    if cwd is None:
+        cwd = workspace_dir
+    os.makedirs(cwd, exist_ok=True)
+
+    # Path traversal check: block commands referencing parent dirs
+    # outside workspace (e.g., `cat ../../../etc/passwd`)
+    _PATH_TRAVERSAL = re.compile(r'\.\./\.\./\.\.')
+    if _PATH_TRAVERSAL.search(command):
+        _log_execution(agent_id, command, False, "PATH_TRAVERSAL", 0)
+        return {
+            "ok": False,
+            "blocked": True,
+            "reason": "Path traversal detected — command references "
+                      "directories outside workspace",
+            "stdout": "", "stderr": "", "exit_code": -1, "elapsed_s": 0,
+        }
+
     # Execute
     start = time.time()
     try:
