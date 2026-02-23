@@ -63,6 +63,7 @@ def make_episode(
     context: Optional[dict] = None,
     outcome: Optional[str] = None,
     error_type: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> dict:
     """Create a structured episode from a completed task.
 
@@ -70,6 +71,7 @@ def make_episode(
         outcome: "success", "failure", "partial" — explicit outcome signal
         error_type: Error category tag for pattern learning (e.g. "timeout",
                     "tool_error", "format_error", "hallucination")
+        model: AI model that generated the output (e.g. "MiniMax-M2.5")
     """
     now = time.time()
     # Determine outcome
@@ -87,6 +89,7 @@ def make_episode(
         "date": _today(),
         "outcome": outcome,
         "error_type": error_type,
+        "model": model,
     }
     # L1: overview (~500 tokens)
     # Truncate result for overview
@@ -167,10 +170,12 @@ class EpisodicMemory:
         """Return episode trimmed to the requested level."""
         if level == 0:
             return {k: episode.get(k) for k in
-                    ["task_id", "agent_id", "title", "tags", "score", "ts", "date"]}
+                    ["task_id", "agent_id", "title", "tags", "score",
+                     "ts", "date", "model"]}
         elif level == 1:
             keys = ["task_id", "agent_id", "title", "tags", "score", "ts",
-                    "date", "description", "result_preview", "outcome"]
+                    "date", "description", "result_preview", "outcome",
+                    "model"]
             return {k: episode.get(k) for k in keys}
         else:
             return episode

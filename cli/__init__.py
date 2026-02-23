@@ -123,7 +123,10 @@ def dispatch_command(args):
 
     elif cmd == "memory":
         from cli.memory_cmd import cmd_memory
-        cmd_memory(action=args.action, query=args.query, agent=args.agent)
+        cmd_memory(action=args.action, query=args.query,
+                   agent=args.agent,
+                   output=getattr(args, "output", None),
+                   fmt=getattr(args, "fmt", "json"))
 
     elif cmd == "evolve":
         if args.action == "confirm":

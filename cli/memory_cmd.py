@@ -83,7 +83,8 @@ def cmd_search(query: str = None, collection: str = None,
 
 
 def cmd_memory(action: str = "status", query: str = None,
-               agent: str = None):
+               agent: str = None, output: str = None,
+               fmt: str = "json"):
     """Memory management CLI."""
     try:
         from rich.console import Console
@@ -106,6 +107,10 @@ def cmd_memory(action: str = "status", query: str = None,
         cmd_search(reindex=True)
     elif action == "cleanup":
         _memory_cleanup(console, agent)
+    elif action == "graph":
+        _memory_graph(console, agent, fmt)
+    elif action == "package":
+        _memory_package(console, agent, output)
 
 
 def _memory_status(console, agent: str = None):
@@ -253,3 +258,148 @@ def _memory_cleanup(console, agent: str = None):
                 console.print(f"[{_theme.error}]{aid}: {e}[/{_theme.error}]")
             else:
                 print(f"{aid}: Error - {e}")
+
+
+def _memory_graph(console, agent: str = None, fmt: str = "json"):
+    """Generate knowledge graph from agent memory."""
+    import json as _json
+
+    agent_id = agent or "alic"
+    try:
+        from adapters.memory.knowledge_graph import KnowledgeGraph
+    except ImportError as e:
+        msg = f"Knowledge graph unavailable: {e}"
+        if console:
+            console.print(f"[{_theme.error}]{msg}[/{_theme.error}]")
+        else:
+            print(msg)
+        return
+
+    kg = KnowledgeGraph(agent_id=agent_id)
+    result = kg.build()
+
+    if not result.get("ok"):
+        msg = f"Graph build failed: {result.get('error', 'unknown')}"
+        if console:
+            console.print(f"[{_theme.error}]{msg}[/{_theme.error}]")
+        else:
+            print(msg)
+        return
+
+    # Save graph
+    agent_dir = os.path.join("memory", "agents", agent_id)
+    os.makedirs(agent_dir, exist_ok=True)
+
+    if fmt == "dot":
+        out_path = os.path.join(agent_dir, "knowledge_graph.dot")
+        with open(out_path, "w") as f:
+            f.write(kg.export_dot())
+    else:
+        out_path = os.path.join(agent_dir, "knowledge_graph.json")
+        with open(out_path, "w") as f:
+            _json.dump(result, f, ensure_ascii=False, indent=2)
+
+    meta = result.get("meta", {})
+    stats = kg.stats()
+
+    if console:
+        console.print(f"\n[{_theme.heading}]Knowledge Graph — {agent_id}[/{_theme.heading}]")
+        console.print(f"  Nodes: {meta.get('node_count', 0)}")
+        console.print(f"  Edges: {meta.get('edge_count', 0)}")
+        console.print(f"  Episodes: {meta.get('episode_count', 0)}")
+        console.print(f"  Cases: {meta.get('case_count', 0)}")
+        if stats.get("overall_avg_score"):
+            console.print(f"  Avg Score: {stats['overall_avg_score']}")
+        dist = stats.get("score_distribution", {})
+        if any(dist.values()):
+            console.print(f"  Score Distribution:")
+            for label, count in dist.items():
+                if count:
+                    console.print(f"    {label}: {count}")
+        per_agent = stats.get("per_agent", {})
+        if per_agent:
+            console.print(f"\n  [{_theme.heading}]Per-Agent Quality[/{_theme.heading}]")
+            for aid, info in per_agent.items():
+                console.print(f"    {aid}: avg={info['avg_score']}, "
+                              f"n={info['count']}, "
+                              f"range={info['min']}-{info['max']}")
+        console.print(f"\n  [{_theme.success}]Saved:[/{_theme.success}] {out_path}")
+    else:
+        print(f"Graph: {meta.get('node_count', 0)} nodes, "
+              f"{meta.get('edge_count', 0)} edges → {out_path}")
+
+
+def _memory_package(console, agent: str = None, output: str = None):
+    """Package agent memory into a ZIP archive."""
+    import json as _json
+    import zipfile
+    from datetime import datetime
+
+    agent_id = agent or "alic"
+    agent_dir = os.path.join("memory", "agents", agent_id)
+
+    if not os.path.isdir(agent_dir):
+        msg = f"Agent memory not found: {agent_dir}"
+        if console:
+            console.print(f"[{_theme.error}]{msg}[/{_theme.error}]")
+        else:
+            print(msg)
+        return
+
+    # Generate latest knowledge graph first
+    graph_stats = {}
+    try:
+        from adapters.memory.knowledge_graph import KnowledgeGraph
+        kg = KnowledgeGraph(agent_id=agent_id)
+        graph_data = kg.build()
+        if graph_data.get("ok"):
+            graph_path = os.path.join(agent_dir, "knowledge_graph.json")
+            with open(graph_path, "w") as f:
+                _json.dump(graph_data, f, ensure_ascii=False, indent=2)
+            graph_stats = kg.stats()
+    except Exception as e:
+        if console:
+            console.print(f"  [{_theme.muted}]Graph generation skipped: {e}[/{_theme.muted}]")
+
+    # Build manifest
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    manifest = {
+        "agent_id": agent_id,
+        "exported_at": datetime.utcnow().isoformat() + "Z",
+        "stats": graph_stats,
+        "files": [],
+    }
+
+    # Create ZIP
+    zip_name = output or f"{agent_id}_memory_{timestamp}.zip"
+    file_count = 0
+    with zipfile.ZipFile(zip_name, "w", zipfile.ZIP_DEFLATED) as zf:
+        for root, dirs, files in os.walk(agent_dir):
+            # Skip chroma/ (vector index — large, can be rebuilt)
+            if "chroma" in root:
+                continue
+            for fname in files:
+                if fname.startswith("."):
+                    continue
+                filepath = os.path.join(root, fname)
+                arcname = os.path.relpath(filepath, agent_dir)
+                zf.write(filepath, arcname)
+                manifest["files"].append(arcname)
+                file_count += 1
+
+        # Write manifest into ZIP
+        zf.writestr("manifest.json",
+                     _json.dumps(manifest, ensure_ascii=False, indent=2))
+
+    size_kb = os.path.getsize(zip_name) / 1024
+
+    if console:
+        console.print(f"\n[{_theme.success}]✓[/{_theme.success}] Packaged [{_theme.heading}]{agent_id}[/{_theme.heading}] memory")
+        console.print(f"  Output: {zip_name}")
+        console.print(f"  Files: {file_count}")
+        console.print(f"  Size: {size_kb:.1f} KB")
+        if graph_stats:
+            console.print(f"  Episodes: {graph_stats.get('total_episodes', 0)}")
+            console.print(f"  Cases: {graph_stats.get('total_cases', 0)}")
+    else:
+        print(f"Packaged to {zip_name} ({file_count} files, {size_kb:.1f} KB)")

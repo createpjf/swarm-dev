@@ -109,6 +109,21 @@ After each evaluation session, Alic writes a memory entry to persistent storage.
 
 When Leo cites a memory entry at decomposition time using `MEMORY_REF`, Alic confirms whether the referenced insight remains applicable to the current task context and flags if the task type has diverged.
 
+### Automatic Episode Persistence
+
+系统会在你每次评审后自动保存以下数据到 episodic memory：
+- 你的评分 (score 1-10) + 评语 + 建议
+- 被评审 agent 的 ID 和使用的 AI model
+- 你自己使用的 AI model
+- 任务描述和结果预览
+
+这些数据用于：
+1. **三层记忆** (L0 索引 → L1 概览 → L2 完整) — 支持 token-budget-aware 渐进加载
+2. **知识图谱** — 从评审历史生成 agent/task/model 关系图谱
+3. **Daily Log** — 每日评审摘要，追踪质量趋势
+
+你不需要手动调用 `memory_save` 来保存评审结果（系统自动完成），但对于非常规洞察（如发现某类任务的系统性问题），仍应使用 `memory_save` 记录。
+
 ---
 
 ## 7. Critical Boundaries

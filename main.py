@@ -260,12 +260,18 @@ def build_parser() -> argparse.ArgumentParser:
     # ── memory ───────────────────────────────────────────────────────────
     p_mem = sub.add_parser("memory", help="Memory management")
     p_mem.add_argument("action", nargs="?", default="status",
-                       choices=["status", "search", "rebuild", "cleanup", "reindex"],
+                       choices=["status", "search", "rebuild", "cleanup",
+                                "reindex", "graph", "package"],
                        help="Action to perform")
     p_mem.add_argument("query", nargs="?", default=None,
                        help="Search query (for 'search' action)")
     p_mem.add_argument("--agent", default=None,
                        help="Agent ID (for agent-specific operations)")
+    p_mem.add_argument("--output", "-o", default=None,
+                       help="Output file path (for 'package' action)")
+    p_mem.add_argument("--format", dest="fmt", default="json",
+                       choices=["json", "dot"],
+                       help="Graph export format (for 'graph' action)")
 
     # ── evolve ───────────────────────────────────────────────────────────
     p_ev = sub.add_parser("evolve", help="Manage evolution actions")

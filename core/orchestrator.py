@@ -135,6 +135,26 @@ def _agent_process(agent_cfg_dict: dict, agent_def: dict, config: dict,
         hb.stop()  # clean up heartbeat file on exit
 
 
+# ── Helper: resolve agent model from config ──────────────────────────────────
+
+_agent_model_cache: dict[str, str] = {}
+
+def _get_agent_model(agent_id: str) -> str:
+    """Look up the model name for a given agent from agents.yaml."""
+    if agent_id in _agent_model_cache:
+        return _agent_model_cache[agent_id]
+    try:
+        with open("config/agents.yaml") as f:
+            cfg = yaml.safe_load(f)
+        for a in cfg.get("agents", []):
+            aid = a.get("id", "")
+            mdl = a.get("model", "unknown")
+            _agent_model_cache[aid] = mdl
+        return _agent_model_cache.get(agent_id, "unknown")
+    except Exception:
+        return "unknown"
+
+
 # ── Critique request handler (replaces review_request) ─────────────────────
 
 async def _handle_critique_request(agent, board: TaskBoard, mail: dict, sched):
@@ -199,6 +219,54 @@ async def _handle_critique_request(agent, board: TaskBoard, mail: dict, sched):
             had_revision=False,
             critique_score=score,      # Use real Alic score instead of heuristic
         )
+
+    # ── Persist critique to Alic's episodic memory ──────────────────────
+    try:
+        from adapters.memory.episodic import make_episode
+        if hasattr(agent, "episodic") and agent.episodic:
+            task_obj_ep = board.get(task_id)
+            evaluated_agent_id = (task_obj_ep.agent_id
+                                  if task_obj_ep else "unknown")
+            evaluated_model = _get_agent_model(evaluated_agent_id)
+
+            episode = make_episode(
+                agent_id=agent.cfg.agent_id,
+                task_id=f"critique_{task_id}",
+                task_description=(
+                    f"评审 [{evaluated_agent_id}] 的任务: "
+                    f"{description[:200]}"),
+                result=json.dumps({
+                    "score": score,
+                    "suggestions": suggestions,
+                    "comment": comment,
+                    "evaluated_agent": evaluated_agent_id,
+                    "evaluated_task_id": task_id,
+                }, ensure_ascii=False),
+                score=score,
+                tags=["critique", evaluated_agent_id],
+                context={
+                    "evaluated_agent": evaluated_agent_id,
+                    "evaluated_model": evaluated_model,
+                    "reviewer_model": agent.cfg.model,
+                    "original_description": description[:500],
+                    "original_result_preview": result[:500],
+                },
+                outcome="success",
+                model=agent.cfg.model,
+            )
+            agent.episodic.save_episode(episode)
+
+            icon = "⭐" if score >= 8 else "⚠️" if score >= 5 else "❌"
+            agent.episodic.append_daily_log(
+                f"{icon} **评审** [{evaluated_agent_id}] "
+                f"(model: {evaluated_model})\n"
+                f"**得分:** {score}/10\n"
+                f"**任务:** {description[:100]}\n"
+                f"**评语:** {comment[:200]}"
+            )
+    except Exception as e:
+        logger.debug("[%s] critique episode save failed: %s",
+                     agent.cfg.agent_id, e)
 
     logger.info("[%s] scored task %s: %d/10%s",
                 agent.cfg.agent_id, task_id, score,

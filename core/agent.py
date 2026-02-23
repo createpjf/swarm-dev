@@ -927,6 +927,7 @@ class BaseAgent:
                     result=result,
                     outcome=outcome,
                     error_type=error_type,
+                    model=getattr(self.cfg, "model", None),
                 )
                 self.episodic.save_episode(episode)
                 # Append to daily log
