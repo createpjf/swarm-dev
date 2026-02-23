@@ -572,8 +572,7 @@ class ChannelManager:
             return
 
         self._sessions.update_task(sid, task_id)
-        await adapter.send_message(
-            msg.chat_id, f"🚀 任务已提交，正在处理...")
+        await adapter.send_typing(msg.chat_id)
 
         # Poll for completion
         result = await self._wait_for_result(
@@ -754,7 +753,7 @@ class ChannelManager:
         from core.task_board import TaskBoard
 
         start = time.time()
-        status_sent = False
+        last_typing = 0.0
 
         while time.time() - start < TASK_TIMEOUT:
             await asyncio.sleep(POLL_INTERVAL)
@@ -786,11 +785,11 @@ class ChannelManager:
                 result = board.collect_results(task_id)
                 return self._clean_result(result) if result else "(无结果)"
 
-            # Send typing indicator after 30s (less noisy)
-            elapsed = time.time() - start
-            if not status_sent and elapsed > STATUS_INTERVAL:
+            # Refresh typing indicator every 4s (Telegram typing lasts 5s)
+            now = time.time()
+            if now - last_typing >= 4:
                 await adapter.send_typing(msg.chat_id)
-                status_sent = True
+                last_typing = now
 
         return None  # timeout
 

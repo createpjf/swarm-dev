@@ -986,11 +986,11 @@ def _handle_generate_doc(**kwargs) -> dict:
 
     try:
         if fmt == "pdf":
-            return _gen_pdf(content, output_path, title)
+            result = _gen_pdf(content, output_path, title)
         elif fmt in ("xlsx", "excel"):
-            return _gen_xlsx(content, output_path, title)
+            result = _gen_xlsx(content, output_path, title)
         elif fmt in ("docx", "word"):
-            return _gen_docx(content, output_path, title)
+            result = _gen_docx(content, output_path, title)
         else:
             return {"ok": False,
                     "error": f"Unsupported format: {fmt}. Use pdf, xlsx, or docx."}
@@ -1000,6 +1000,31 @@ def _handle_generate_doc(**kwargs) -> dict:
     except Exception as e:
         logger.exception("generate_doc failed")
         return {"ok": False, "error": str(e)}
+
+    # ── Auto-send: if channel session is active, deliver file immediately ──
+    if result.get("ok") and result.get("path"):
+        try:
+            from adapters.channels.manager import ChannelManager
+            session = ChannelManager.get_active_session()
+            if session and session.get("session_id"):
+                send_result = _handle_send_file(
+                    file_path=result["path"],
+                    caption=title or f"📄 {os.path.basename(result['path'])}")
+                result["auto_sent"] = send_result.get("ok", False)
+                if send_result.get("ok"):
+                    result["delivery"] = "sent"
+                    result["message"] = (
+                        f"File generated and sent via {session['channel']}")
+                else:
+                    result["delivery"] = "queued"
+                    result["send_error"] = send_result.get("error", "")
+                    logger.warning("generate_doc auto-send failed: %s",
+                                   send_result.get("error"))
+        except Exception as e:
+            logger.warning("generate_doc auto-send error: %s", e)
+            result["delivery"] = "manual"
+
+    return result
 
 
 def _gen_pdf(content: str, output_path: str, title: str) -> dict:
