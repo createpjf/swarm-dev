@@ -429,7 +429,7 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .chat-bubble.assistant-bubble .asst-body p{margin:2px 0}
 .chat-bubble.assistant-bubble .asst-body h1,.chat-bubble.assistant-bubble .asst-body h2,.chat-bubble.assistant-bubble .asst-body h3{color:var(--fg);margin:10px 0 4px;font-size:14px;font-weight:700}
 .chat-bubble.assistant-bubble .asst-body h1{font-size:16px}
-.chat-bubble.assistant-bubble .asst-body ul,.chat-bubble.assistant-bubble .asst-body ol{margin:4px 0 4px 20px;padding:0}
+.chat-bubble.assistant-bubble .asst-body ul,.chat-bubble.assistant-bubble .asst-body ol{margin:4px 0;padding:0 0 0 24px}
 .chat-bubble.assistant-bubble .asst-body li{margin:2px 0;line-height:1.5}
 .chat-bubble.assistant-bubble .asst-body strong{color:var(--fg);font-weight:700}
 .chat-bubble.assistant-bubble .asst-body em{color:var(--fg2);font-style:italic}
@@ -1529,9 +1529,17 @@ function renderMarkdown(src) {
     // Ordered list
     const olMatch = line.match(/^[\s]*(\d+)[.)]\s+(.+)$/);
     if (olMatch) {
-      if (!inList || listType !== 'ol') { closeList(); html += '<ol>'; inList = true; listType = 'ol'; }
+      const num = parseInt(olMatch[1]);
+      if (!inList || listType !== 'ol') {
+        closeList();
+        html += '<ol' + (num !== 1 ? ' start="' + num + '"' : '') + '>';
+        inList = true; listType = 'ol';
+      }
       html += '<li>' + inlineFmt(olMatch[2]) + '</li>'; i++; continue;
     }
+
+    // Empty line: skip without breaking current list (LLMs often add blank lines between items)
+    if (line.trim() === '') { i++; continue; }
 
     // Non-list line closes any open list
     if (inList) closeList();
@@ -1542,9 +1550,6 @@ function renderMarkdown(src) {
     // Blockquote
     const bqMatch = line.match(/^>\s?(.*)$/);
     if (bqMatch) { html += '<blockquote>' + inlineFmt(bqMatch[1]) + '</blockquote>'; i++; continue; }
-
-    // Empty line
-    if (line.trim() === '') { i++; continue; }
 
     // Normal paragraph
     html += '<p>' + inlineFmt(line) + '</p>';

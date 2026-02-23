@@ -991,6 +991,7 @@ def build_tools_prompt(agent_config: dict | None = None) -> str:
         "</tool_code>",
         "",
         "IMPORTANT: Use ONE tool per block. The tool JSON must have a \"tool\" key and a \"params\" key.",
+        "IMPORTANT: Use EXACT parameter names as listed below. For file tools use \"path\" (NOT \"file_path\" or \"file\"). For exec use \"cmd\" (NOT \"command\").",
         "After tool execution, you will receive the results and can continue.",
         "",
         "Available tools:",
@@ -1149,6 +1150,36 @@ def parse_tool_calls(text: str) -> list[dict]:
     return calls
 
 
+# Common parameter name aliases — LLMs often hallucinate wrong param names
+_PARAM_ALIASES: dict[str, str] = {
+    "file_path": "path",
+    "filepath": "path",
+    "file": "path",
+    "filename": "path",
+    "directory": "path",
+    "dir": "path",
+    "command": "cmd",
+    "code": "cmd",
+    "search_query": "q",
+}
+
+
+def _normalize_params(tool: Tool, params: dict) -> dict:
+    """Map common wrong parameter names to correct ones."""
+    expected = set(tool.parameters.keys())
+    normalized = {}
+    for k, v in params.items():
+        if k in expected:
+            normalized[k] = v
+        elif k in _PARAM_ALIASES and _PARAM_ALIASES[k] in expected:
+            correct = _PARAM_ALIASES[k]
+            logger.debug("Param alias: %s → %s (tool=%s)", k, correct, tool.name)
+            normalized[correct] = v
+        else:
+            normalized[k] = v  # pass through — handler's **_ will absorb
+    return normalized
+
+
 def execute_tool_calls(calls: list[dict],
                        agent_config: dict | None = None) -> list[dict]:
     """Execute parsed tool calls and return results.
@@ -1174,9 +1205,10 @@ def execute_tool_calls(calls: list[dict],
             })
             continue
 
+        params = _normalize_params(tool, call.get("params", {}))
         logger.info("Executing tool: %s(%s)", name,
-                     str(call.get("params", {}))[:100])
-        result = tool.execute(**call.get("params", {}))
+                     str(params)[:100])
+        result = tool.execute(**params)
         results.append({"tool": name, "result": result})
 
     return results
