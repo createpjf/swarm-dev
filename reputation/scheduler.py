@@ -38,7 +38,11 @@ class ReputationScheduler:
         Updates task_completion and output_quality dimensions.
         """
         # Task completion: 100 for normal, 70 if this is a rework
-        is_rework = any("review_failed" in f for f in (task.evolution_flags or []))
+        # Match actual flags: "failed:{reason}", "timeout_recovered:{state}"
+        is_rework = any(
+            f.startswith("failed:") or f.startswith("timeout_recovered:")
+            for f in (task.evolution_flags or [])
+        )
         completion_signal = 70.0 if is_rework else 100.0
         self.scorer.update(agent_id, "task_completion", completion_signal)
 
@@ -99,12 +103,19 @@ class ReputationScheduler:
         self.scorer.update(reviewer_id, "review_accuracy", accuracy_signal)
 
     async def on_critique_result(self, agent_id: str, passed_first_time: bool,
-                                  had_revision: bool):
+                                  had_revision: bool,
+                                  critique_score: int | None = None):
         """
         Called when an executor's task is critiqued.
         Updates the agent's output_quality dimension.
+
+        Uses the actual Alic critique score (1-10 → scaled to 0-100) when available,
+        falling back to heuristic values otherwise.
         """
-        if passed_first_time:
+        if critique_score is not None:
+            # Use real Alic score: scale 1-10 → 10-100
+            quality_signal = float(critique_score) * 10.0
+        elif passed_first_time:
             quality_signal = 90.0
         elif had_revision:
             quality_signal = 70.0
@@ -114,11 +125,21 @@ class ReputationScheduler:
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
+    RECOVERY_THRESHOLD = 80.0  # Clear overrides when score recovers above this
+
     async def _check_threshold(self, agent_id: str):
-        """Check reputation threshold and trigger evolution if needed."""
+        """Check reputation threshold and trigger evolution if needed.
+
+        Also clears evolution overrides when agent reputation recovers.
+        """
         status = self.scorer.threshold_status(agent_id)
         if status in ("warning", "evolve"):
             await self.engine.maybe_trigger(agent_id, status)
+        else:
+            # Agent is healthy — clear overrides if score recovered
+            score = self.scorer.get(agent_id)
+            if score >= self.RECOVERY_THRESHOLD:
+                self.engine.clear_overrides(agent_id)
 
     @staticmethod
     def _heuristic_quality(result: str) -> float:

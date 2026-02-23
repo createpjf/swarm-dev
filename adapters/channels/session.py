@@ -2,6 +2,9 @@
 adapters/channels/session.py
 File-backed session store for channel conversations.
 
+This is the **sole conversation persistence layer** for all channel interactions.
+(The former core/conversation_history.py was removed as dead code in Sprint 5.1.)
+
 Tracks per-user/group sessions across channel interactions.
 Stores conversation history per session in separate JSONL files.
 Uses the same FileLock pattern as ContextBus and TaskBoard.
@@ -32,6 +35,7 @@ HISTORY_DIR = "memory/sessions"
 MAX_HISTORY_MESSAGES = 50   # FIFO limit per session
 CHARS_PER_TOKEN = 3         # conservative (English ~4, CJK ~1.5)
 SESSION_EXPIRE_HOURS = 24   # start fresh if idle longer than this
+GROUP_USER_ISOLATION = True  # isolate per-user contexts in group chats
 
 
 @dataclass
@@ -63,9 +67,18 @@ class SessionStore:
             self._write({})
 
     def get_or_create(self, channel: str, chat_id: str,
-                      user_id: str = "", user_name: str = "") -> ChannelSession:
-        """Get existing session or create a new one."""
-        session_id = f"{channel}:{chat_id}"
+                      user_id: str = "", user_name: str = "",
+                      is_group: bool = False) -> ChannelSession:
+        """Get existing session or create a new one.
+
+        When GROUP_USER_ISOLATION is True and is_group is True,
+        sessions are keyed per-user within the group to prevent
+        cross-user context bleeding in group chats.
+        """
+        if is_group and GROUP_USER_ISOLATION and user_id:
+            session_id = f"{channel}:{chat_id}:{user_id}"
+        else:
+            session_id = f"{channel}:{chat_id}"
         with self.lock:
             data = self._read()
             if session_id in data:
@@ -223,6 +236,36 @@ class SessionStore:
         """Return all sessions."""
         data = self._read()
         return [self._from_dict(s) for s in data.values()]
+
+    def cleanup_expired(self, max_idle_hours: float = SESSION_EXPIRE_HOURS) -> int:
+        """Remove sessions idle longer than max_idle_hours.
+
+        Also deletes the associated conversation history JSONL files.
+        Returns the number of sessions removed.
+        """
+        cutoff = time.time() - (max_idle_hours * 3600)
+        removed = 0
+        with self.lock:
+            data = self._read()
+            expired_keys = [
+                k for k, v in data.items()
+                if v.get("last_active", 0) < cutoff
+            ]
+            for key in expired_keys:
+                # Delete history file
+                history_path = self._history_path(key)
+                try:
+                    if os.path.exists(history_path):
+                        os.remove(history_path)
+                except OSError:
+                    pass
+                del data[key]
+                removed += 1
+            if removed:
+                self._write(data)
+                logger.info("[session] cleaned up %d expired sessions "
+                            "(idle > %.1fh)", removed, max_idle_hours)
+        return removed
 
     # ── Internal ──
 

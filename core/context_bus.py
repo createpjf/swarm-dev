@@ -71,8 +71,9 @@ class ContextBus:
             self._write({})
 
     def publish(self, agent_id: str, key: str, value: str,
-                layer: int = LAYER_SHORT, ttl: int | None = None):
-        """Write a value under '{agent_id}:{key}' with layer and TTL.
+                layer: int = LAYER_SHORT, ttl: int | None = None,
+                provenance: dict | None = None):
+        """Write a value under '{agent_id}:{key}' with layer, TTL, and provenance.
 
         Args:
             agent_id: Publishing agent's ID.
@@ -80,6 +81,9 @@ class ContextBus:
             value: Context value (string).
             layer: Context layer (LAYER_TASK..LAYER_LONG). Default: LAYER_SHORT.
             ttl: Optional TTL override in seconds. If None, uses layer default.
+            provenance: Optional origin metadata for message tracing.
+                        Keys: kind ("external_user"|"inter_agent"|"system"),
+                              source_agent, source_channel, source_task_id.
         """
         ns_key = f"{agent_id}:{key}"
         if ttl is None:
@@ -90,6 +94,8 @@ class ContextBus:
             "ttl": ttl,
             "ts": time.time(),
         }
+        if provenance:
+            entry["provenance"] = provenance
         with self.lock:
             data = self._read()
             data[ns_key] = entry

@@ -578,6 +578,21 @@ def build_provider_router(config: dict) -> ProviderRouter | None:
     _router = router
     logger.info("[router] Provider router ready: %s (strategy=%s)",
                 ", ".join(router.provider_names), strategy)
+
+    # Start background health probes if running inside an event loop.
+    # When called from _agent_process (child process), each process has
+    # its own asyncio loop so start_probes() will be picked up on the
+    # next await.  When called at module level before any loop exists,
+    # we skip — probes will be started when the loop is available.
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(router.start_probes())
+        logger.info("[router] Health probes started (interval=%ds)",
+                    probe_interval)
+    except RuntimeError:
+        # No running event loop — caller must start probes manually
+        logger.debug("[router] No event loop yet; call start_probes() later")
+
     return router
 
 

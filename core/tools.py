@@ -8,16 +8,16 @@ Architecture:
   - Agents invoke tools via structured JSON blocks in their output
   - Tool results are fed back to the agent as context
 
-Tool categories (32 tools across 9 groups):
+Tool categories (35 tools across 9 groups):
   - Web:        web_search (Brave + Perplexity), web_fetch (text + markdown)
   - Filesystem: read_file, write_file, edit_file, list_dir
   - Memory:     memory_search, memory_save, kb_search, kb_write
-  - Task:       task_create, task_status
+  - Task:       task_create, task_status, spawn_subagent
   - Automation: exec, cron, process
   - Skill:      check_skill_deps, install_skill_cli, search_skills, install_remote_skill
   - Browser:    browser_navigate, browser_click, browser_fill, browser_get_text,
                 browser_screenshot, browser_evaluate, browser_page_info
-  - Media:      screenshot, notify
+  - Media:      screenshot, notify, analyze_image
   - Messaging:  send_mail, send_file
 
 Access control:
@@ -41,6 +41,7 @@ import logging
 import os
 import re
 import subprocess
+import tempfile
 import time
 import urllib.parse
 import urllib.request
@@ -48,6 +49,38 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
+
+# ── Audit logging for sensitive tool calls ──
+_AUDIT_LOG = ".logs/tool_audit.log"
+
+
+def _audit_log(tool_name: str, agent_id: str = "unknown", **details):
+    """Append an audit entry for sensitive tool invocations."""
+    try:
+        os.makedirs(os.path.dirname(_AUDIT_LOG), exist_ok=True)
+        entry = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "tool": tool_name,
+            "agent": agent_id,
+        }
+        entry.update(details)
+        with open(_AUDIT_LOG, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError:
+        pass
+
+
+def _is_allowed_path(abs_path: str) -> bool:
+    """Check if path is within project directory or a temp directory."""
+    cwd = os.path.abspath(".")
+    real_path = os.path.realpath(abs_path)
+    # System temp dir (macOS: /private/var/folders/.../T, Linux: /tmp)
+    sys_tmp = os.path.realpath(tempfile.gettempdir())
+    # Also allow /tmp/ explicitly (macOS symlinks /tmp → /private/tmp)
+    slash_tmp = os.path.realpath("/tmp")
+    return (real_path.startswith(cwd)
+            or real_path.startswith(sys_tmp + os.sep)
+            or real_path.startswith(slash_tmp + os.sep))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -79,15 +112,21 @@ class Tool:
     def to_prompt(self) -> str:
         """Generate tool description for system prompt injection."""
         params_desc = []
+        example_params = {}
         for pname, pinfo in self.parameters.items():
             req = " (required)" if pinfo.get("required") else ""
             params_desc.append(
                 f"    - {pname}: {pinfo.get('type', 'string')} — "
                 f"{pinfo.get('description', '')}{req}")
+            if pinfo.get("required"):
+                example_params[pname] = f"<{pname}>"
         params_str = "\n".join(params_desc) if params_desc else "    (no parameters)"
+        example_json = json.dumps(
+            {"tool": self.name, "params": example_params}, ensure_ascii=False)
         return (f"### {self.name}\n"
                 f"{self.description}\n"
-                f"  Parameters:\n{params_str}\n")
+                f"  Parameters:\n{params_str}\n"
+                f"  Example: {example_json}\n")
 
     def to_schema(self) -> dict:
         """Generate JSON schema for function-calling LLMs."""
@@ -128,11 +167,12 @@ TOOL_PROFILES = {
                 "check_skill_deps", "install_skill_cli",
                 "search_skills", "install_remote_skill"},
     "coding": {"web_search", "web_fetch", "exec", "read_file", "write_file",
-               "edit_file", "list_dir", "process", "cron_list", "cron_add",
+               "edit_file", "list_dir", "generate_doc",
+               "process", "cron_list", "cron_add",
                "notify", "transcribe", "tts", "list_voices",
                "memory_search", "memory_save",
                "kb_search", "kb_write", "task_create", "task_status",
-               "send_mail", "check_skill_deps", "install_skill_cli",
+               "send_mail", "send_file", "check_skill_deps", "install_skill_cli",
                "search_skills", "install_remote_skill",
                "browser_navigate", "browser_click", "browser_fill",
                "browser_get_text", "browser_screenshot",
@@ -144,13 +184,15 @@ TOOL_PROFILES = {
 TOOL_GROUPS = {
     "group:web": ["web_search", "web_fetch"],
     "group:automation": ["exec", "cron_list", "cron_add", "process"],
-    "group:media": ["screenshot", "notify", "transcribe", "tts", "list_voices"],
-    "group:fs": ["read_file", "write_file", "edit_file", "list_dir"],
+    "group:media": ["screenshot", "notify", "transcribe", "tts", "list_voices",
+                    "analyze_image"],
+    "group:fs": ["read_file", "write_file", "edit_file", "list_dir",
+                 "generate_doc", "workspace_status"],
     "group:memory": ["memory_search", "memory_save", "kb_search", "kb_write"],
-    "group:task": ["task_create", "task_status"],
+    "group:task": ["task_create", "task_status", "spawn_subagent"],
     "group:skill": ["check_skill_deps", "install_skill_cli",
                     "search_skills", "install_remote_skill"],
-    "group:messaging": ["send_mail"],
+    "group:messaging": ["send_mail", "send_file"],
     "group:browser": ["browser_navigate", "browser_click", "browser_fill",
                       "browser_get_text", "browser_screenshot",
                       "browser_evaluate", "browser_page_info"],
@@ -680,11 +722,9 @@ def _handle_list_voices(provider: str = "", **_) -> dict:
 
 def _handle_read_file(path: str, max_lines: int = 200, **_) -> dict:
     """Read a file from the project directory."""
-    # Safety: prevent reading outside project
     abs_path = os.path.abspath(path)
-    cwd = os.path.abspath(".")
-    if not abs_path.startswith(cwd):
-        return {"ok": False, "error": "Cannot read files outside project"}
+    if not _is_allowed_path(abs_path):
+        return {"ok": False, "error": "Cannot read files outside project or temp directory"}
 
     if not os.path.exists(abs_path):
         return {"ok": False, "error": f"File not found: {path}"}
@@ -699,17 +739,32 @@ def _handle_read_file(path: str, max_lines: int = 200, **_) -> dict:
         return {"ok": False, "error": str(e)}
 
 
-def _handle_write_file(path: str, content: str, **_) -> dict:
+def _handle_write_file(path: str, content: str, **kwargs) -> dict:
     """Write content to a file in the project directory."""
     abs_path = os.path.abspath(path)
-    cwd = os.path.abspath(".")
-    if not abs_path.startswith(cwd):
-        return {"ok": False, "error": "Cannot write files outside project"}
+    if not _is_allowed_path(abs_path):
+        return {"ok": False, "error": "Cannot write files outside project or temp directory"}
+
+    agent_id = kwargs.get("_agent_id", "unknown")
+    _audit_log("write_file", agent_id=agent_id, path=path, size=len(content))
 
     try:
         os.makedirs(os.path.dirname(abs_path), exist_ok=True)
         with open(abs_path, "w", encoding="utf-8") as f:
             f.write(content)
+
+        # Save agent metadata for collaboration tracking
+        try:
+            meta_path = abs_path + ".meta"
+            with open(meta_path, "w") as mf:
+                json.dump({
+                    "agent": agent_id,
+                    "task_id": kwargs.get("_task_id", ""),
+                    "ts": time.time(),
+                }, mf)
+        except OSError:
+            pass  # Metadata is optional
+
         return {"ok": True, "path": path, "size": len(content)}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -718,9 +773,8 @@ def _handle_write_file(path: str, content: str, **_) -> dict:
 def _handle_list_dir(path: str = ".", **_) -> dict:
     """List directory contents."""
     abs_path = os.path.abspath(path)
-    cwd = os.path.abspath(".")
-    if not abs_path.startswith(cwd):
-        return {"ok": False, "error": "Cannot list outside project"}
+    if not _is_allowed_path(abs_path):
+        return {"ok": False, "error": "Cannot list outside project or temp directory"}
 
     if not os.path.isdir(abs_path):
         return {"ok": False, "error": f"Not a directory: {path}"}
@@ -740,12 +794,14 @@ def _handle_list_dir(path: str = ".", **_) -> dict:
         return {"ok": False, "error": str(e)}
 
 
-def _handle_edit_file(path: str, old_str: str, new_str: str, **_) -> dict:
+def _handle_edit_file(path: str, old_str: str, new_str: str, **kwargs) -> dict:
     """Find-and-replace edit in a file (safe, project-scoped)."""
     abs_path = os.path.abspath(path)
-    cwd = os.path.abspath(".")
-    if not abs_path.startswith(cwd):
-        return {"ok": False, "error": "Cannot edit files outside project"}
+    if not _is_allowed_path(abs_path):
+        return {"ok": False, "error": "Cannot edit files outside project or temp directory"}
+
+    _audit_log("edit_file", agent_id=kwargs.get("_agent_id", "unknown"),
+               path=path)
 
     if not os.path.exists(abs_path):
         return {"ok": False, "error": f"File not found: {path}"}
@@ -841,7 +897,7 @@ def _handle_task_create(description: str, **_) -> dict:
         from core.task_board import TaskBoard
         board = TaskBoard()
         task = board.create(description)
-        return {"ok": True, "task_id": task.id, "description": task.description,
+        return {"ok": True, "task_id": task.task_id, "description": task.description,
                 "status": task.status}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -898,11 +954,250 @@ def _handle_send_mail(to: str, content: str,
         return {"ok": False, "error": str(e)}
 
 
+def _handle_generate_doc(**kwargs) -> dict:
+    """Generate a document file (PDF, Excel, or Word) from content.
+
+    Supported formats:
+      - pdf:  Renders Markdown-like content into a styled PDF (via fpdf2).
+      - xlsx: Creates a spreadsheet from JSON rows (via openpyxl).
+      - docx: Creates a Word document from Markdown-like content (via python-docx).
+
+    The generated file is written to output_path (defaults to /tmp/).
+    After generation, use send_file to deliver to the user.
+    """
+    fmt = (kwargs.get("format") or "pdf").lower().strip()
+    content = kwargs.get("content", "")
+    output_path = kwargs.get("output_path", "")
+    title = kwargs.get("title", "")
+    agent_id = kwargs.get("_agent_id", "unknown")
+
+    if not content:
+        return {"ok": False, "error": "content parameter is required"}
+
+    # Default output path
+    if not output_path:
+        ts = int(time.time())
+        ext = {"pdf": "pdf", "xlsx": "xlsx", "docx": "docx",
+               "excel": "xlsx", "word": "docx"}.get(fmt, fmt)
+        fmt = {"excel": "xlsx", "word": "docx"}.get(fmt, fmt)
+        output_path = f"/tmp/doc_{ts}.{ext}"
+
+    _audit_log("generate_doc", agent_id=agent_id, format=fmt, path=output_path)
+
+    try:
+        if fmt == "pdf":
+            return _gen_pdf(content, output_path, title)
+        elif fmt in ("xlsx", "excel"):
+            return _gen_xlsx(content, output_path, title)
+        elif fmt in ("docx", "word"):
+            return _gen_docx(content, output_path, title)
+        else:
+            return {"ok": False,
+                    "error": f"Unsupported format: {fmt}. Use pdf, xlsx, or docx."}
+    except ImportError as e:
+        return {"ok": False,
+                "error": f"Missing library for {fmt}: {e}. Install via pip3."}
+    except Exception as e:
+        logger.exception("generate_doc failed")
+        return {"ok": False, "error": str(e)}
+
+
+def _gen_pdf(content: str, output_path: str, title: str) -> dict:
+    """Generate PDF from text/markdown content using fpdf2."""
+    from fpdf import FPDF
+
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=20)
+    pdf.add_page()
+
+    # Try to add a Unicode font for CJK support
+    font_set = False
+    for font_path in [
+        "/System/Library/Fonts/PingFang.ttc",           # macOS CJK
+        "/System/Library/Fonts/STHeiti Light.ttc",       # macOS CJK fallback
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",  # Linux
+    ]:
+        if os.path.exists(font_path):
+            try:
+                pdf.add_font("UniFont", "", font_path, uni=True)
+                pdf.set_font("UniFont", size=11)
+                font_set = True
+                break
+            except Exception:
+                continue
+    if not font_set:
+        pdf.set_font("Helvetica", size=11)
+
+    # Render title
+    if title:
+        pdf.set_font_size(18)
+        pdf.cell(0, 12, title, new_x="LMARGIN", new_y="NEXT", align="C")
+        pdf.ln(6)
+        pdf.set_font_size(11)
+
+    # Render content line by line with basic markdown support
+    for line in content.split("\n"):
+        stripped = line.strip()
+
+        # Headers
+        if stripped.startswith("### "):
+            pdf.ln(4)
+            pdf.set_font_size(13)
+            pdf.cell(0, 8, stripped[4:], new_x="LMARGIN", new_y="NEXT")
+            pdf.set_font_size(11)
+        elif stripped.startswith("## "):
+            pdf.ln(5)
+            pdf.set_font_size(15)
+            pdf.cell(0, 9, stripped[3:], new_x="LMARGIN", new_y="NEXT")
+            pdf.set_font_size(11)
+        elif stripped.startswith("# "):
+            pdf.ln(6)
+            pdf.set_font_size(17)
+            pdf.cell(0, 10, stripped[2:], new_x="LMARGIN", new_y="NEXT")
+            pdf.set_font_size(11)
+        elif stripped.startswith(("- ", "* ", "• ")):
+            bullet_text = stripped.lstrip("-*• ").strip()
+            pdf.cell(8)
+            pdf.cell(0, 7, "•  " + bullet_text, new_x="LMARGIN", new_y="NEXT")
+        elif stripped.startswith(("---", "***", "___")):
+            pdf.ln(3)
+            pdf.line(pdf.get_x(), pdf.get_y(), pdf.get_x() + 170, pdf.get_y())
+            pdf.ln(3)
+        elif stripped == "":
+            pdf.ln(4)
+        else:
+            # Check for numbered list
+            import re as _re
+            num_match = _re.match(r'^(\d+)[.)]\s+(.+)$', stripped)
+            if num_match:
+                pdf.cell(0, 7, f"{num_match.group(1)}. {num_match.group(2)}",
+                         new_x="LMARGIN", new_y="NEXT")
+            else:
+                pdf.multi_cell(0, 7, stripped)
+
+    os.makedirs(os.path.dirname(output_path) or "/tmp", exist_ok=True)
+    pdf.output(output_path)
+    size = os.path.getsize(output_path)
+    return {"ok": True, "path": output_path, "format": "pdf",
+            "size": size, "pages": pdf.pages_count}
+
+
+def _gen_xlsx(content: str, output_path: str, title: str) -> dict:
+    """Generate Excel spreadsheet from JSON content using openpyxl."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = title or "Sheet1"
+
+    # Parse content: accept JSON array of arrays, or line-based tabular data
+    rows = []
+    try:
+        parsed = json.loads(content)
+        if isinstance(parsed, list):
+            rows = parsed
+        elif isinstance(parsed, dict):
+            # {"headers": [...], "rows": [[...], ...]}
+            if "headers" in parsed:
+                rows = [parsed["headers"]] + parsed.get("rows", [])
+            else:
+                # Single dict → one row
+                rows = [list(parsed.keys()), list(parsed.values())]
+    except (json.JSONDecodeError, TypeError):
+        # Fallback: parse as TSV/CSV-like lines
+        for line in content.strip().split("\n"):
+            if "|" in line:
+                cells = [c.strip() for c in line.split("|") if c.strip()]
+                if cells and not all(c.startswith("-") for c in cells):
+                    rows.append(cells)
+            elif "\t" in line:
+                rows.append(line.split("\t"))
+            elif "," in line:
+                rows.append(line.split(","))
+            else:
+                rows.append([line])
+
+    if not rows:
+        return {"ok": False, "error": "No tabular data found in content"}
+
+    # Write rows
+    for r_idx, row in enumerate(rows):
+        if not isinstance(row, (list, tuple)):
+            row = [row]
+        for c_idx, val in enumerate(row):
+            cell = ws.cell(row=r_idx + 1, column=c_idx + 1, value=val)
+            if r_idx == 0:  # Header styling
+                cell.font = Font(bold=True, color="FFFFFF")
+                cell.fill = PatternFill(start_color="4472C4",
+                                        end_color="4472C4",
+                                        fill_type="solid")
+                cell.alignment = Alignment(horizontal="center")
+
+    # Auto-width columns
+    for col in ws.columns:
+        max_len = max((len(str(cell.value or "")) for cell in col), default=8)
+        ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 50)
+
+    os.makedirs(os.path.dirname(output_path) or "/tmp", exist_ok=True)
+    wb.save(output_path)
+    size = os.path.getsize(output_path)
+    return {"ok": True, "path": output_path, "format": "xlsx",
+            "size": size, "rows": len(rows)}
+
+
+def _gen_docx(content: str, output_path: str, title: str) -> dict:
+    """Generate Word document from text/markdown content using python-docx."""
+    from docx import Document
+    from docx.shared import Pt, Inches
+
+    doc = Document()
+
+    # Set default font
+    style = doc.styles["Normal"]
+    font = style.font
+    font.size = Pt(11)
+
+    if title:
+        doc.add_heading(title, level=0)
+
+    for line in content.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("### "):
+            doc.add_heading(stripped[4:], level=3)
+        elif stripped.startswith("## "):
+            doc.add_heading(stripped[3:], level=2)
+        elif stripped.startswith("# "):
+            doc.add_heading(stripped[2:], level=1)
+        elif stripped.startswith(("- ", "* ", "• ")):
+            text = stripped.lstrip("-*• ").strip()
+            doc.add_paragraph(text, style="List Bullet")
+        elif stripped.startswith(("---", "***", "___")):
+            # Horizontal rule approximation
+            doc.add_paragraph("_" * 50)
+        elif stripped == "":
+            doc.add_paragraph("")
+        else:
+            import re as _re
+            num_match = _re.match(r'^(\d+)[.)]\s+(.+)$', stripped)
+            if num_match:
+                doc.add_paragraph(num_match.group(2), style="List Number")
+            else:
+                doc.add_paragraph(stripped)
+
+    os.makedirs(os.path.dirname(output_path) or "/tmp", exist_ok=True)
+    doc.save(output_path)
+    size = os.path.getsize(output_path)
+    return {"ok": True, "path": output_path, "format": "docx", "size": size}
+
+
 def _handle_send_file(**kwargs) -> dict:
     """Send a file to the user via their chat channel.
 
-    Requires the task to have originated from a channel message.
-    The channel adapter will pick up the file and deliver it.
+    Routes through the gateway's /v1/send_file proxy which relays to
+    the ChannelManager (running in the gateway process).  Falls back
+    to the .file_delivery/ queue if the gateway is unreachable.
     """
     file_path = kwargs.get("file_path", "")
     caption = kwargs.get("caption", "")
@@ -910,17 +1205,104 @@ def _handle_send_file(**kwargs) -> dict:
     if not file_path:
         return {"ok": False, "error": "file_path parameter required"}
 
-    if not os.path.exists(file_path):
+    abs_path = os.path.abspath(file_path)
+    if not os.path.exists(abs_path):
         return {"ok": False, "error": f"File not found: {file_path}"}
 
-    # Store file delivery request for the channel adapter to pick up
+    # Get active channel session
+    try:
+        from adapters.channels.manager import ChannelManager
+        session = ChannelManager.get_active_session()
+    except ImportError:
+        session = None
+    if not session:
+        # Fallback: try reading the file directly
+        session_path = ".channel_session.json"
+        if os.path.exists(session_path):
+            try:
+                with open(session_path, "r") as f:
+                    session = json.load(f)
+            except Exception:
+                pass
+
+    # Session staleness check
+    if session:
+        session_age = time.time() - session.get("ts", 0)
+        if session_age > 3600:
+            logger.warning("send_file: channel session is %.0fm old, may be stale. "
+                           "User should send a new message to refresh.",
+                           session_age / 60)
+
+    if not session or not session.get("session_id"):
+        return {"ok": False,
+                "error": "No active channel session. "
+                "Fix: (1) run `cleo gateway start`, "
+                "(2) send a message from Telegram/Discord to establish session, "
+                "(3) retry. File saved at: " + abs_path}
+
+    session_id = session["session_id"]
+
+    # ── Primary path: HTTP proxy to gateway ──
+    gateway_port = int(os.environ.get("CLEO_GATEWAY_PORT", "19789"))
+    gateway_token = os.environ.get("CLEO_GATEWAY_TOKEN", "")
+    # Also try reading token from file
+    if not gateway_token:
+        try:
+            token_path = ".gateway_token"
+            if os.path.exists(token_path):
+                with open(token_path) as f:
+                    gateway_token = f.read().strip()
+        except Exception:
+            pass
+
+    import urllib.request
+
+    # Gateway health pre-check
+    try:
+        health_req = urllib.request.Request(
+            f"http://127.0.0.1:{gateway_port}/health", method="GET")
+        urllib.request.urlopen(health_req, timeout=2)
+    except Exception as e:
+        logger.warning("send_file: gateway unreachable at port %d (%s), "
+                       "will fall back to queue", gateway_port, e)
+
+    try:
+        payload = json.dumps({
+            "session_id": session_id,
+            "file_path": abs_path,
+            "caption": caption,
+        }).encode()
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{gateway_port}/v1/send_file",
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {gateway_token}" if gateway_token else "",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read())
+        if result.get("ok"):
+            return {"ok": True, "message": f"File sent via {session_id}",
+                    "message_id": result.get("message_id", "")}
+        else:
+            return {"ok": False, "error": result.get("error", "Gateway returned error")}
+    except Exception as e:
+        logger.warning("send_file HTTP proxy failed (%s), falling back to queue", e)
+
+    # ── Fallback: write to .file_delivery/ queue (consumed by gateway poller) ──
     try:
         delivery_dir = ".file_delivery"
         os.makedirs(delivery_dir, exist_ok=True)
         delivery = {
-            "file_path": os.path.abspath(file_path),
+            "file_path": abs_path,
             "caption": caption,
+            "session_id": session_id,
+            "channel": session.get("channel", ""),
+            "chat_id": session.get("chat_id", ""),
             "ts": time.time(),
+            "retry_count": 0,
         }
         delivery_file = os.path.join(delivery_dir, f"{int(time.time()*1000)}.json")
         with open(delivery_file, "w") as f:
@@ -1225,6 +1607,186 @@ def _handle_browser_page_info(**kwargs) -> dict:
         return {"ok": False, "error": str(e)}
 
 
+# ── Workspace collaboration handler ──
+
+def _handle_workspace_status(**kwargs) -> dict:
+    """List workspace files with last-modified agent metadata.
+
+    Useful for multi-agent collaboration: see which files are being
+    actively edited and by whom, avoiding conflicts.
+    """
+    workspace = kwargs.get("path", "workspace")
+    if not os.path.isdir(workspace):
+        return {"ok": True, "files": [],
+                "message": f"Workspace dir '{workspace}' does not exist"}
+
+    files = []
+    try:
+        for root, dirs, fnames in os.walk(workspace):
+            # Skip hidden dirs
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            for fname in fnames:
+                if fname.startswith("."):
+                    continue
+                fpath = os.path.join(root, fname)
+                rel = os.path.relpath(fpath, workspace)
+                stat = os.stat(fpath)
+                entry = {
+                    "path": rel,
+                    "size": stat.st_size,
+                    "modified": stat.st_mtime,
+                }
+                # Check for agent metadata (written by write_file)
+                meta_path = fpath + ".meta"
+                if os.path.exists(meta_path):
+                    try:
+                        with open(meta_path) as f:
+                            meta = json.load(f)
+                        entry["last_agent"] = meta.get("agent", "unknown")
+                        entry["task_id"] = meta.get("task_id", "")
+                    except (json.JSONDecodeError, OSError):
+                        pass
+                files.append(entry)
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+
+    # Sort by modification time (most recent first)
+    files.sort(key=lambda f: f["modified"], reverse=True)
+    return {"ok": True, "files": files[:50], "total": len(files)}
+
+
+# ── Image understanding handler ──
+
+def _handle_analyze_image(**kwargs) -> dict:
+    """Analyze an image using a vision-capable LLM.
+
+    Accepts either a URL or a local file path (auto-encoded to base64).
+    Returns the model's description / analysis.
+    """
+    import base64
+    import mimetypes
+
+    image_url = kwargs.get("image_url", "")
+    image_path = kwargs.get("image_path", "")
+    prompt = kwargs.get("prompt", "Describe this image in detail.")
+
+    if not image_url and not image_path:
+        return {"ok": False,
+                "error": "Provide either image_url or image_path"}
+
+    # Build the image content block (OpenAI vision API format)
+    if image_path:
+        abs_path = os.path.abspath(image_path)
+        if not os.path.exists(abs_path):
+            return {"ok": False, "error": f"File not found: {image_path}"}
+        # Read + base64 encode
+        mime, _ = mimetypes.guess_type(abs_path)
+        if not mime:
+            mime = "image/png"
+        try:
+            with open(abs_path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode()
+            image_url = f"data:{mime};base64,{b64}"
+        except Exception as e:
+            return {"ok": False, "error": f"Failed to read image: {e}"}
+
+    # Build multi-modal message
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": image_url},
+                },
+                {
+                    "type": "text",
+                    "text": prompt,
+                },
+            ],
+        }
+    ]
+
+    # Use the resilient LLM adapter to call a vision-capable model
+    try:
+        import asyncio
+        from adapters.llm.resilience import get_llm
+
+        llm = get_llm()
+        # Prefer a vision-capable model; fallback to default
+        vision_model = os.environ.get(
+            "CLEO_VISION_MODEL",
+            os.environ.get("CLEO_DEFAULT_MODEL", "gpt-4o"),
+        )
+
+        loop = None
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+
+        if loop and loop.is_running():
+            # We're inside an async context — schedule a task
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                result = pool.submit(
+                    asyncio.run, llm.chat(messages, vision_model)
+                ).result(timeout=60)
+        else:
+            result = asyncio.run(llm.chat(messages, vision_model))
+
+        return {
+            "ok": True,
+            "model": vision_model,
+            "analysis": result,
+        }
+    except Exception as e:
+        return {"ok": False, "error": f"Vision analysis failed: {e}"}
+
+
+# ── Subagent spawn handler ──
+
+def _handle_spawn_subagent(**kwargs) -> dict:
+    """Spawn a child agent to handle a subtask dynamically."""
+    description = kwargs.get("description", "")
+    parent_id = kwargs.get("parent_id", "")
+
+    if not description:
+        return {"ok": False, "error": "description parameter required"}
+    if not parent_id:
+        return {"ok": False, "error": "parent_id parameter required"}
+
+    try:
+        from core.subagent import SubagentRegistry
+        from core.task_board import TaskBoard
+
+        board = TaskBoard()
+        registry = SubagentRegistry(board)
+
+        child_id = registry.spawn(
+            parent_id=parent_id,
+            description=description,
+            mode=kwargs.get("mode", "run"),
+            config_overrides={
+                k: v for k, v in {
+                    "model": kwargs.get("model"),
+                    "skills": kwargs.get("skills"),
+                }.items() if v is not None
+            },
+        )
+
+        return {
+            "ok": True,
+            "child_task_id": child_id,
+            "parent_id": parent_id,
+            "message": f"Spawned subagent task {child_id[:8]}",
+        }
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": f"Spawn failed: {e}"}
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  REGISTRY
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1494,9 +2056,29 @@ _BUILTIN_TOOLS: list[Tool] = [
           "msg_type": {"type": "string", "description": "Message type (default: message)", "required": False}},
          _handle_send_mail, group="messaging"),
 
+    Tool("generate_doc",
+         "Generate a document file (PDF, Excel/XLSX, or Word/DOCX) from content. "
+         "Supports: pdf (from text/markdown), xlsx (from JSON/tabular data), docx (from text/markdown). "
+         "Chinese and other CJK characters are fully supported in PDF. "
+         "After generating, use send_file to deliver to the user.",
+         {"format": {"type": "string",
+                     "description": "Output format: 'pdf', 'xlsx'/'excel', 'docx'/'word'",
+                     "required": True},
+          "content": {"type": "string",
+                      "description": "Document content: Markdown text for pdf/docx, "
+                                     "or JSON array [[row1],[row2]] / markdown table for xlsx",
+                      "required": True},
+          "title": {"type": "string",
+                    "description": "Document title (optional)",
+                    "required": False},
+          "output_path": {"type": "string",
+                          "description": "Output file path (default: /tmp/doc_<ts>.<ext>)",
+                          "required": False}},
+         _handle_generate_doc, group="fs"),
+
     Tool("send_file",
          "Send a file to the user via their chat channel (Telegram/Discord/Feishu/Slack). "
-         "Use this after creating a file (with write_file or exec) to deliver it to the user. "
+         "Use this after creating a file (with generate_doc or write_file) to deliver it to the user. "
          "Only works when the task originates from a channel message.",
          {"file_path": {"type": "string",
                         "description": "Absolute or relative path to the file to send",
@@ -1505,6 +2087,51 @@ _BUILTIN_TOOLS: list[Tool] = [
                       "description": "Optional caption/message to include with the file",
                       "required": False}},
          _handle_send_file, group="messaging"),
+
+    # ── Collaboration tools ──
+    Tool("workspace_status",
+         "List workspace files with modification info and which agent last touched "
+         "each file. Useful for avoiding edit conflicts in multi-agent collaboration.",
+         {"path": {"type": "string",
+                   "description": "Workspace directory path (default: 'workspace')",
+                   "required": False}},
+         _handle_workspace_status, group="fs"),
+
+    # ── Vision tools ──
+    Tool("analyze_image",
+         "Analyze an image using a vision-capable LLM. Accepts a URL or local file path. "
+         "Use this to understand screenshots, diagrams, photos, or any visual content.",
+         {"image_url": {"type": "string",
+                        "description": "URL of the image to analyze (HTTPS or data: URI)",
+                        "required": False},
+          "image_path": {"type": "string",
+                         "description": "Local file path to the image (auto-encoded to base64)",
+                         "required": False},
+          "prompt": {"type": "string",
+                     "description": "What to analyze or ask about the image (default: 'Describe this image in detail.')",
+                     "required": False}},
+         _handle_analyze_image, group="media"),
+
+    # ── Subagent tools ──
+    Tool("spawn_subagent",
+         "Dynamically spawn a child agent to handle a subtask. The child runs as an "
+         "independent task and notifies you upon completion via mailbox.",
+         {"description": {"type": "string",
+                          "description": "Task description for the child agent",
+                          "required": True},
+          "parent_id": {"type": "string",
+                        "description": "Your agent ID (the parent spawning this child)",
+                        "required": True},
+          "mode": {"type": "string",
+                   "description": "Spawn mode: 'run' (one-shot) or 'session' (persistent)",
+                   "required": False},
+          "model": {"type": "string",
+                    "description": "Override LLM model for the child agent",
+                    "required": False},
+          "skills": {"type": "string",
+                     "description": "Comma-separated skill names for the child",
+                     "required": False}},
+         _handle_spawn_subagent, group="task"),
 ]
 
 # Keyed registry for fast lookup
@@ -1632,6 +2259,16 @@ _JSON_BLOCK_RE = re.compile(
     r'```(?:json)?\s*\n(\{"tool"\s*:\s*[^`]+?\})\s*\n```',
     re.DOTALL)
 
+# Fallback: matches <minimax:tool_call>...</ or <invoke name="tool", ...>
+_MINIMAX_CALL_RE = re.compile(
+    r'<(?:minimax:tool_call|invoke)\b[^>]*>([\s\S]+?)</(?:minimax:tool_call|tool_code|invoke)>',
+    re.DOTALL)
+
+# Fallback: extract from <invoke name="tool_name", "params": {...}>
+_INVOKE_ATTR_RE = re.compile(
+    r'<invoke\s+name\s*=\s*"(\w+)"[^>]*?(?:"params"\s*:\s*(\{[^}]*\}))?',
+    re.DOTALL)
+
 
 def _try_parse_arrow_syntax(raw: str) -> dict | None:
     """Parse Minimax-style arrow syntax to JSON.
@@ -1744,6 +2381,51 @@ def parse_tool_calls(text: str) -> list[dict]:
         except json.JSONDecodeError:
             continue
 
+    if calls:
+        return calls
+
+    # 4. <minimax:tool_call> or <invoke name="..."> blocks
+    for match in _MINIMAX_CALL_RE.finditer(text):
+        raw_content = match.group(1).strip()
+        # Try JSON parse
+        try:
+            data = json.loads(raw_content)
+            if "tool" in data:
+                calls.append({
+                    "tool": data["tool"],
+                    "params": data.get("params", data.get("args", {})),
+                    "raw": match.group(0),
+                })
+                continue
+        except json.JSONDecodeError:
+            pass
+        # Try arrow syntax
+        parsed = _try_parse_arrow_syntax(raw_content)
+        if parsed:
+            calls.append({
+                "tool": parsed["tool"],
+                "params": parsed.get("params", {}),
+                "raw": match.group(0),
+            })
+
+    if calls:
+        return calls
+
+    # 4b. <invoke name="tool_name", "params": {...}> (attribute-style)
+    for match in _INVOKE_ATTR_RE.finditer(text):
+        tool_name = match.group(1)
+        params = {}
+        if match.group(2):
+            try:
+                params = json.loads(match.group(2))
+            except json.JSONDecodeError:
+                pass
+        calls.append({
+            "tool": tool_name,
+            "params": params,
+            "raw": match.group(0),
+        })
+
     if not calls and any(kw in text for kw in
                          ["web_search", "web_fetch", "exec", "read_file",
                           "write_file", "memory_search"]):
@@ -1752,6 +2434,114 @@ def parse_tool_calls(text: str) -> list[dict]:
                        text[:300].replace("\n", "\\n"))
 
     return calls
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  PARAMETER SANITIZATION — defence-in-depth for LLM-generated params
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Sensitive files that tools should never read or write
+_SENSITIVE_FILENAMES = {
+    ".env", ".env.local", ".env.production", ".env.development",
+    "agents.yaml", "exec_approvals.json", "chain_contracts.json",
+    ".git/config", ".netrc", ".npmrc", ".pypirc",
+    "id_rsa", "id_ed25519", "authorized_keys",
+}
+
+# Sensitive path fragments (blocked anywhere in path)
+_SENSITIVE_PATH_FRAGMENTS = {
+    ".ssh", ".gnupg", ".aws", ".config/gcloud",
+}
+
+# Tools whose "path" param must be checked
+_FS_TOOLS = {"read_file", "write_file", "edit_file", "list_dir"}
+
+# Tools whose "url" param must be scheme-checked
+_NET_TOOLS = {"web_fetch", "web_search"}
+
+
+def sanitize_params(tool_name: str, params: dict,
+                    tool: "Tool | None" = None) -> dict | str:
+    """Validate and sanitize LLM-generated tool parameters.
+
+    Returns sanitized params dict on success, or error string on rejection.
+    Checks performed:
+      1. Type coercion — cast to schema-declared types
+      2. Path safety  — block sensitive files, enforce project scope
+      3. URL safety   — enforce https, block private IPs (defence-in-depth)
+    """
+    if not isinstance(params, dict):
+        return "Parameters must be a JSON object"
+
+    # ── 1. Type coercion ──
+    if tool and tool.parameters:
+        for pname, pinfo in tool.parameters.items():
+            if pname not in params:
+                continue
+            expected = pinfo.get("type", "string")
+            val = params[pname]
+            try:
+                if expected == "integer" and not isinstance(val, int):
+                    params[pname] = int(val)
+                elif expected == "number" and not isinstance(val, (int, float)):
+                    params[pname] = float(val)
+                elif expected == "boolean" and not isinstance(val, bool):
+                    params[pname] = str(val).lower() in ("true", "1", "yes")
+                elif expected == "string" and not isinstance(val, str):
+                    params[pname] = str(val)
+            except (ValueError, TypeError):
+                return f"Parameter '{pname}' must be {expected}, got {type(val).__name__}"
+
+    # ── 2. Path safety (filesystem tools) ──
+    if tool_name in _FS_TOOLS:
+        raw_path = params.get("path", "")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            return "Missing or empty 'path' parameter"
+
+        # Normalise to block encoded traversal  (e.g. %2e%2e)
+        decoded_path = urllib.parse.unquote(raw_path)
+
+        # Block null bytes (can bypass os.path checks)
+        if "\x00" in decoded_path:
+            return "Null bytes not allowed in path"
+
+        # Block sensitive filenames
+        basename = os.path.basename(decoded_path)
+        if basename.lower() in _SENSITIVE_FILENAMES:
+            return f"Access to sensitive file '{basename}' is blocked"
+
+        # Block sensitive path fragments
+        norm = os.path.normpath(decoded_path).replace("\\", "/").lower()
+        for frag in _SENSITIVE_PATH_FRAGMENTS:
+            if frag in norm:
+                return f"Path contains blocked segment '{frag}'"
+
+        # Write-specific: block hidden dotfiles at project root
+        if tool_name == "write_file" and basename.startswith("."):
+            return f"Cannot write to hidden file '{basename}' (dotfiles are protected)"
+
+        # Replace raw path with decoded version for consistency
+        params["path"] = decoded_path
+
+    # ── 3. URL safety (network tools) ──
+    if tool_name in _NET_TOOLS and "url" in params:
+        url = params.get("url", "")
+        if not isinstance(url, str):
+            return "URL must be a string"
+
+        # Enforce https (allow http only for localhost dev, but that's
+        # already blocked by _is_private_hostname)
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme not in ("https", "http"):
+            return f"URL scheme '{parsed.scheme}' not allowed — use https://"
+
+        # Defence-in-depth: re-check private hostnames at param level
+        # (web_fetch already checks, but belt-and-suspenders)
+        hostname = parsed.hostname or ""
+        if _is_private_hostname(hostname):
+            return f"Blocked: private/internal hostname '{hostname}'"
+
+    return params
 
 
 def execute_tool_calls(calls: list[dict],
@@ -1779,9 +2569,22 @@ def execute_tool_calls(calls: list[dict],
             })
             continue
 
+        # ── Sanitize parameters before execution ──
+        raw_params = call.get("params", {})
+        sanitized = sanitize_params(name, dict(raw_params), tool)
+        if isinstance(sanitized, str):
+            # sanitize_params returned an error message
+            logger.warning("Tool %s params rejected: %s (raw: %s)",
+                           name, sanitized, str(raw_params)[:200])
+            results.append({
+                "tool": name,
+                "result": {"ok": False, "error": f"Parameter validation: {sanitized}"},
+            })
+            continue
+
         logger.info("Executing tool: %s(%s)", name,
-                     str(call.get("params", {}))[:100])
-        result = tool.execute(**call.get("params", {}))
+                     str(sanitized)[:100])
+        result = tool.execute(**sanitized)
         results.append({"tool": name, "result": result})
 
     return results

@@ -56,6 +56,7 @@ Icon?
 
 # ── Claude Code ──
 .claude/
+.worktrees/
 
 # ── Logs ──
 logs/
@@ -82,3 +83,19 @@ skills/superpowers/
 .clawdhub/
 core/avatars/*.png
 registry.json
+
+# ── Security / personal data ──
+.gateway_token
+memory/pairing_codes.json
+memory/trusted_users.json
+memory/user_profiles/
+memory/evolution_log.jsonl
+memory/transcripts/
+memory/tts_cache/
+.file_delivery/
+config/agents.yaml.lock
+
+# ── Misc generated / personal ──
+cleo-completion.sh
+adapters/voice/sherpa-onnx/
+=3.1.0

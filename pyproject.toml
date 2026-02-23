@@ -29,10 +29,35 @@ cleo = "main:main"
 
 [tool.setuptools]
 py-modules = ["main"]
-packages = ["core", "adapters", "adapters.llm", "adapters.memory", "adapters.chain", "adapters.channels", "reputation"]
+packages = [
+    "core", "core.search",
+    "adapters", "adapters.llm", "adapters.memory",
+    "adapters.chain", "adapters.channels",
+    "adapters.voice", "adapters.browser",
+    "cli", "reputation",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+
+# ── Linting (ruff) ─────────────────────────────────────────────────────────
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["E501"]  # line length not enforced yet
+
+[tool.ruff.lint.isort]
+known-first-party = ["core", "adapters", "cli", "reputation"]
+
+# ── Type checking (mypy) ───────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true

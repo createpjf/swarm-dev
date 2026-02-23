@@ -5,8 +5,6 @@ llm:
 memory:
   backend: hybrid
   long_term: true
-  # Embedding provider for vector search (default: chromadb built-in)
-  # Options: chromadb_default | openai | flock | local
   embedding:
     provider: openai
     model: text-embedding-3-small
@@ -47,20 +45,23 @@ reputation:
 channels:
   telegram:
     enabled: true
+    auth_mode: pairing
     bot_token_env: TELEGRAM_BOT_TOKEN
     allowed_users: []
-    mention_required: true
+    mention_required: false
   discord:
-    enabled: false
+    auth_mode: pairing
     bot_token_env: DISCORD_BOT_TOKEN
     allowed_channels: []
     mention_required: true
   feishu:
     enabled: false
+    auth_mode: pairing
     app_id_env: FEISHU_APP_ID
     app_secret_env: FEISHU_APP_SECRET
   slack:
     enabled: false
+    auth_mode: pairing
     bot_token_env: SLACK_BOT_TOKEN
     app_token_env: SLACK_APP_TOKEN
     allowed_channels: []
@@ -68,35 +69,11 @@ channels:
 skill_registry:
   url: https://raw.githubusercontent.com/punkpeye/cleo-skills/main/registry.json
   auto_update: false
-# Cross-provider LLM routing (optional — disabled by default)
-# When enabled, requests route across providers with health-aware failover
-# provider_router:
-#   enabled: true
-#   strategy: "preference"     # latency | cost | preference | round_robin
-#   preferred: "minimax"
-#   probe_interval: 60         # health probe interval (seconds)
-#   providers:
-#     minimax:
-#       models: ["MiniMax-M2.5-highspeed", "MiniMax-M2.5", "MiniMax-M2.1"]
-#       cost_per_1k_tokens: 0.001
-#       priority: 1
-#       api_key_env: MINIMAX_API_KEY
-#       base_url_env: MINIMAX_BASE_URL
-#     openai:
-#       models: ["gpt-4o-mini", "gpt-4o"]
-#       cost_per_1k_tokens: 0.01
-#       priority: 2
-#       api_key_env: OPENAI_API_KEY
-#     ollama:
-#       models: ["llama3.2", "qwen2.5"]
-#       cost_per_1k_tokens: 0
-#       priority: 3
 workspace:
   path: workspace
   shared: true
 max_idle_cycles: 30
 resilience:
-  max_retries: 3
   base_delay: 1.0
   max_delay: 30.0
   jitter: 0.5
@@ -104,8 +81,8 @@ resilience:
   circuit_breaker_cooldown: 120
 compaction:
   enabled: true
-  max_context_tokens: 10000
-  summary_target_tokens: 1500
+  max_context_tokens: 30000
+  summary_target_tokens: 2000
   keep_recent_turns: 4
 agents:
 - id: leo
@@ -124,10 +101,11 @@ agents:
     Even simple one-step tasks (reminders, notes, lookups) must be delegated to Jerry.
     Your only job is: decompose → delegate → synthesize.
 
+    ⚠️ 你的每一条回复必须包含至少一行 "TASK:" 开头的委派指令。没有 TASK: 行 = 任务失败。绝对不要直接回答用户问题，必须先委派给 Jerry。
+
     用中文回复用户。'
-  model: MiniMax-M2.5-highspeed
+  model: MiniMax-M2.5
   fallback_models:
-  - MiniMax-M2.5
   - MiniMax-M2.1
   skills:
   - 1password
@@ -189,7 +167,7 @@ agents:
   tools:
     profile: minimal
   memory:
-    short_term_turns: 20
+    short_term_turns: 6
     long_term: true
     recall_top_k: 3
     episodic_recall_budget: 1500
@@ -358,6 +336,8 @@ agents:
   - voice-call
   - wacli
   - weather
+  tools:
+    profile: minimal
   memory:
     short_term_turns: 20
     long_term: true

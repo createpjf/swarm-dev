@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Cleo Dashboard</title>
 <style>
+/* ── DejaVu Sans Mono Web Font ───────────────────────────────── */
+@font-face{font-family:'DejaVu Sans Mono';src:url('https://cdn.jsdelivr.net/npm/dejavu-fonts-ttf@2.37/ttf/DejaVuSansMono.ttf') format('truetype');font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:'DejaVu Sans Mono';src:url('https://cdn.jsdelivr.net/npm/dejavu-fonts-ttf@2.37/ttf/DejaVuSansMono-Bold.ttf') format('truetype');font-weight:700;font-style:normal;font-display:swap}
+
 /* ── Reset & Base ─────────────────────────────────────────────── */
 *{margin:0;padding:0;box-sizing:border-box}
 :root{
@@ -14,8 +18,8 @@
   --green:#22c55e;--cyan:#03BFD4;--red:#ef4444;--yellow:#eab308;
   --magenta:#9C59F3;--orange:#FF8B00;
   --radius:10px;--shadow:0 2px 12px rgba(0,0,0,.6);
-  --font:'TWK Everett','Inter','SF Pro Display','Helvetica Neue','Arial',sans-serif;
-  --mono:"SF Mono","Fira Code","JetBrains Mono",Menlo,monospace;
+  --font:"DejaVu Sans Mono","SF Mono","Menlo","Consolas",monospace;
+  --mono:"DejaVu Sans Mono","SF Mono","Fira Code","JetBrains Mono",Menlo,monospace;
   --sidebar-w:220px;
 }
 html,body{background:var(--bg);color:var(--fg);font:14px/1.6 var(--font);height:100%;overflow:hidden}
@@ -26,7 +30,7 @@ a{color:var(--accent2);text-decoration:none}
 
 /* ── Sidebar ──────────────────────────────────────────────────── */
 .sidebar{width:var(--sidebar-w);min-width:var(--sidebar-w);background:var(--bg2);border-right:1px solid var(--bg3);display:flex;flex-direction:column;overflow-y:auto}
-.sidebar-logo{padding:16px 18px;font-size:16px;font-weight:700;letter-spacing:-.3px;border-bottom:1px solid var(--bg3);display:flex;align-items:center;gap:8px}
+.sidebar-logo{padding:16px 18px;font-size:16px;font-weight:700;letter-spacing:-.3px;border-bottom:1px solid var(--bg3);display:flex;align-items:center;justify-content:center;gap:8px}
 .sidebar-logo span{color:var(--accent)}
 .status-dot{width:8px;height:8px;border-radius:50%;background:var(--fg3);display:inline-block}
 .status-dot.online{background:var(--green);box-shadow:0 0 6px var(--green)}
@@ -43,6 +47,21 @@ a{color:var(--accent2);text-decoration:none}
 .key-badge.set{background:rgba(34,197,94,.12);color:var(--green);border:1px solid rgba(34,197,94,.2)}
 .key-badge.unset{background:rgba(239,68,68,.1);color:var(--red);border:1px solid rgba(239,68,68,.2)}
 .key-badge.shared{background:rgba(55,115,255,.1);color:var(--accent2);border:1px solid rgba(55,115,255,.2)}
+/* ── Channel cards ── */
+.ch-card{position:relative;background:var(--bg2);border:1px solid var(--bg3);border-radius:var(--radius);padding:16px 18px;transition:border-color .2s,box-shadow .2s;display:flex;flex-direction:column;gap:10px}
+.ch-card:hover{border-color:color-mix(in srgb,var(--ch-brand,var(--accent)) 50%,transparent);box-shadow:0 0 16px color-mix(in srgb,var(--ch-brand,var(--accent)) 8%,transparent)}
+.ch-status-dot{position:absolute;top:12px;right:14px;width:8px;height:8px;border-radius:50%;border:1.5px solid var(--bg2);box-shadow:0 0 0 1px var(--bg3)}
+.ch-status-dot.running{background:var(--green);box-shadow:0 0 6px rgba(34,197,94,.4)}
+.ch-status-dot.enabled{background:var(--yellow)}
+.ch-status-dot.disabled{background:var(--fg3);opacity:.5}
+.ch-header{display:flex;align-items:center;gap:10px}
+.ch-logo{width:32px;height:32px;border-radius:8px;flex-shrink:0;display:flex;align-items:center;justify-content:center}
+.ch-logo svg{width:20px;height:20px}
+.ch-title{font-size:14px;font-weight:700;color:var(--fg)}
+.ch-meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:11px;color:var(--fg3)}
+.ch-meta code{font-size:10px;color:var(--fg2)}
+.ch-actions{display:flex;gap:6px;padding-top:8px;border-top:1px solid var(--bg3);margin-top:auto}
+.ch-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
 
 .nav-section{padding:12px 0 4px}
 .nav-section-title{padding:0 18px 4px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--fg3)}
@@ -171,7 +190,7 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
 @keyframes scaleIn{from{transform:scale(.95) translateY(10px);opacity:0}to{transform:scale(1) translateY(0);opacity:1}}
 .agent-modal-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}
-.agent-modal-title{font-size:16px;font-weight:700;color:var(--fg)}
+.agent-modal-title{font-size:16px;font-weight:700;color:var(--fg);display:flex;align-items:center;gap:6px}
 .agent-modal-close{background:none;border:none;color:var(--fg3);font-size:18px;cursor:pointer;padding:4px 8px;border-radius:4px}
 .agent-modal-close:hover{background:var(--bg3);color:var(--fg)}
 /* ── Modal tabs ── */
@@ -183,7 +202,23 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .modal-tab-content.active{display:block}
 /* ── Overview tab ── */
 .overview-section{margin-bottom:14px}
+.overview-card{background:var(--bg2);border:1px solid var(--bg4);border-radius:10px;padding:12px 14px;margin-bottom:10px;transition:border-color .2s}
+.overview-card:hover{border-color:color-mix(in srgb,var(--accent,#6c9fff) 40%,transparent)}
 .overview-label{font-size:10px;font-weight:700;color:var(--fg3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+.overview-card .overview-label{margin-bottom:8px}
+.rep-big{font-size:28px;font-weight:800;letter-spacing:-1px;background:linear-gradient(135deg,var(--accent,#6c9fff),var(--green));-webkit-background-clip:text;-webkit-text-fill-color:transparent;line-height:1}
+.rep-sub{font-size:11px;color:var(--fg3);margin-top:2px}
+.rep-header{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:10px}
+.trend-chart{position:relative;height:100px;margin-top:8px;border-radius:8px;overflow:hidden;background:var(--bg1)}
+.trend-chart svg{width:100%;height:100%}
+.trend-chart .axis-label{font-size:9px;fill:var(--fg3);font-family:var(--mono)}
+.trend-chart .grid-line{stroke:var(--bg3);stroke-dasharray:3,3}
+.trend-dot{r:3;fill:var(--accent,#6c9fff);stroke:var(--bg1);stroke-width:1.5;cursor:pointer;transition:r .15s}
+.trend-dot:hover{r:5}
+.trend-tooltip{position:absolute;background:var(--bg3);color:var(--fg);font-size:10px;padding:4px 8px;border-radius:6px;pointer-events:none;white-space:nowrap;opacity:0;transition:opacity .15s;z-index:10;font-family:var(--mono)}
+.config-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 14px;font-size:12px}
+.config-grid .cfg-key{color:var(--fg3);font-size:10px;text-transform:uppercase;font-weight:600}
+.config-grid .cfg-val{color:var(--fg);word-break:break-all}
 .overview-value{font-size:13px;color:var(--fg);line-height:1.5}
 .overview-role{font-size:12px;color:var(--fg2);line-height:1.6;white-space:pre-wrap;max-height:80px;overflow-y:auto}
 .overview-task{background:var(--bg3);border-radius:6px;padding:8px 10px;font-size:12px;color:var(--fg)}
@@ -195,11 +230,34 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .overview-score-bar{flex:1;height:4px;background:var(--bg4);border-radius:2px;overflow:hidden}
 .overview-score-fill{height:100%;border-radius:2px;transition:width .3s}
 .overview-score-num{min-width:28px;text-align:right;font-family:var(--mono)}
+.rep-top{display:flex;align-items:center;justify-content:space-between;padding:0 10px}
+.rep-left{flex:0 0 auto;display:flex;flex-direction:column;align-items:flex-start;gap:5px}
+.radar-wrap{flex:0 0 auto;display:flex;justify-content:center;align-items:center;overflow:visible}
+.radar-wrap svg{overflow:visible}
+.dim-badges{display:flex;flex-direction:column;gap:2px;margin-top:4px}
+.dim-badge{display:flex;align-items:center;gap:5px;font-size:10px;font-weight:600}
+.dim-dot{width:5px;height:5px;border-radius:50%;flex-shrink:0}
 .agent-editor .field{margin-bottom:12px}
 .agent-editor .field label{display:block;font-size:11px;font-weight:600;color:var(--fg2);text-transform:uppercase;margin-bottom:4px}
 .agent-editor .field-row{display:flex;gap:12px}
 .agent-editor .field-row>.field{flex:1}
 .agent-editor .actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px;padding-top:12px;border-top:1px solid var(--bg3)}
+.skills-collapse{border:1px solid var(--bg4);border-radius:8px;overflow:hidden;transition:border-color .2s}
+.skills-collapse:hover{border-color:var(--accent,#6c9fff)}
+.skills-header{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;cursor:pointer;user-select:none;background:var(--bg2);transition:background .2s}
+.skills-header:hover{background:var(--bg3)}
+.skills-header .skills-summary{font-size:12px;color:var(--fg2);display:flex;align-items:center;gap:6px}
+.skills-header .skills-count{background:var(--accent,#6c9fff);color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;min-width:20px;text-align:center}
+.skills-header .skills-chevron{font-size:14px;color:var(--fg3);transition:transform .3s ease}
+.skills-header.open .skills-chevron{transform:rotate(180deg)}
+.skills-body{max-height:0;overflow:hidden;transition:max-height .35s cubic-bezier(.4,0,.2,1),opacity .25s ease;opacity:0;padding:0 12px}
+.skills-body.open{opacity:1;padding:8px 12px}
+.skills-search{width:100%;padding:5px 8px;font-size:12px;border:1px solid var(--bg4);border-radius:6px;background:var(--bg1);color:var(--fg);margin-bottom:8px;outline:none;transition:border-color .2s}
+.skills-search:focus{border-color:var(--accent,#6c9fff)}
+.skills-grid{display:flex;flex-wrap:wrap;gap:5px}
+.skills-grid label{font-size:11px;color:var(--fg2);display:flex;align-items:center;gap:3px;cursor:pointer;padding:2px 6px;border-radius:4px;transition:background .15s,opacity .2s}
+.skills-grid label:hover{background:var(--bg3)}
+.skills-grid label.hidden{display:none}
 .model-dropdown{position:absolute;top:100%;left:0;right:60px;background:var(--bg2);border:1px solid var(--bg4);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.4);z-index:100;max-height:200px;overflow-y:auto;margin-top:4px}
 .model-dropdown .model-option{padding:8px 12px;font-size:13px;color:var(--fg);cursor:pointer;border-bottom:1px solid var(--bg3);transition:background .1s}
 .model-dropdown .model-option:last-child{border-bottom:none}
@@ -319,12 +377,27 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .ov-agent-chip.active.alic .chip-dot{background:var(--magenta)}
 
 /* ── Subtask Tree ─────────────────────────────────────────── */
-.subtask-tree{flex-shrink:0;padding:0 4px;margin-bottom:8px;display:none}
+.subtask-tree{flex-shrink:0;padding:0;margin-bottom:8px;display:none}
 .subtask-tree.has-tree{display:block}
-.st-toggle{font-size:10px;color:var(--fg3);cursor:pointer;padding:4px 8px;user-select:none}
-.st-toggle:hover{color:var(--fg2)}
-.st-container{display:flex;flex-wrap:wrap;gap:6px;padding:6px 0}
-.st-node{display:flex;align-items:center;gap:5px;padding:4px 10px;border-radius:6px;font-size:10px;border:1px solid var(--bg4);background:var(--bg3);max-width:220px;overflow:hidden}
+/* Unified block: header + body share one container */
+.st-block{background:var(--bg2);border:1px solid var(--bg3);border-radius:var(--radius);overflow:hidden}
+/* Collapsible header */
+.st-header{display:flex;align-items:center;gap:8px;padding:7px 12px;cursor:pointer;user-select:none;transition:background .15s}
+.st-header:hover{background:var(--bg3)}
+.st-chevron{font-size:10px;color:var(--fg3);transition:transform .2s;flex-shrink:0}
+.st-chevron.open{transform:rotate(90deg)}
+.st-header-text{font-size:11px;font-weight:600;color:var(--fg2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+.st-progress-wrap{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.st-progress-bar{width:80px;height:4px;background:var(--bg4);border-radius:2px;overflow:hidden;display:flex}
+.st-progress-fill{height:100%;transition:width .3s}
+.st-fill-done{background:var(--green)}
+.st-fill-active{background:var(--cyan)}
+.st-progress-label{font-family:var(--mono);font-size:10px;color:var(--fg3);min-width:28px;text-align:right}
+/* Collapsible body — CSS Grid for smooth animation */
+.st-body{overflow:hidden;border-top:1px solid var(--bg3);padding:6px 12px;display:grid;grid-template-rows:1fr;opacity:1;transition:grid-template-rows .35s cubic-bezier(.4,0,.2,1),opacity .25s,padding .35s cubic-bezier(.4,0,.2,1),border-color .2s}
+.st-body>.st-group{overflow:hidden;min-height:0}
+.st-body.collapsed{grid-template-rows:0fr;opacity:0;padding-top:0;padding-bottom:0;border-top-color:transparent}
+.st-node{display:flex;align-items:center;gap:5px;padding:4px 10px;border-radius:6px;font-size:10px;border:1px solid var(--bg4);background:var(--bg3);max-width:280px;overflow:hidden}
 .st-node .st-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
 .st-node .st-dot.pending{background:var(--fg3)}
 .st-node .st-dot.claimed{background:var(--yellow);animation:livePulse 1.2s infinite}
@@ -335,7 +408,7 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .st-node .st-desc{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--fg2)}
 .st-node .st-agent{font-weight:600;color:var(--fg3);flex-shrink:0;font-size:9px}
 .st-edge{color:var(--fg3);font-size:10px;align-self:center}
-.st-group{display:flex;flex-direction:column;gap:4px;padding:4px 0 4px 16px;border-left:1.5px solid var(--bg4)}
+.st-group{display:flex;flex-direction:column;gap:4px;padding:6px 0 4px 16px;border-left:1.5px solid var(--bg4)}
 .st-parent-label{font-size:10px;font-weight:600;color:var(--fg3);padding:2px 6px}
 
 .ov-bottom{display:flex;flex-direction:column;flex:1;min-height:200px;overflow:hidden}
@@ -373,6 +446,7 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .dispatch-agent.leo-d{color:var(--accent)}
 .dispatch-agent.jerry-d{color:var(--cyan)}
 .dispatch-agent.alic-d{color:var(--magenta)}
+.dispatch-agent.user-d{color:var(--accent2)}
 .dispatch-text{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dispatch-tokens{font-family:var(--mono);font-size:9px;color:var(--fg3);flex-shrink:0}
 .dispatch-tokens .tok-in{color:var(--cyan)}
@@ -400,7 +474,7 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 @keyframes wfReceivePulsePurple{0%{box-shadow:0 0 0 0 rgba(156,89,243,.4)}50%{box-shadow:0 0 0 12px rgba(156,89,243,0)}100%{box-shadow:none}}
 
 /* ── Overview: Chat Messages (bottom panel) ──────────────────── */
-.chat-messages{flex:1;overflow-y:auto;padding:16px 12px;display:flex;flex-direction:column;gap:12px;min-height:0}
+.chat-messages{flex:1;overflow-y:auto;padding:16px 12px;display:flex;flex-direction:column;gap:12px;min-height:0;background:linear-gradient(180deg,var(--bg) 0%,rgba(10,10,18,.95) 40%,rgba(8,8,20,.9) 100%)}
 .chat-messages::-webkit-scrollbar{width:5px}
 .chat-messages::-webkit-scrollbar-track{background:transparent}
 .chat-messages::-webkit-scrollbar-thumb{background:var(--bg4);border-radius:3px}
@@ -429,15 +503,23 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .chat-bubble.agent-bubble.jerry-bubble{border-left:3px solid var(--cyan)}
 .chat-bubble.agent-bubble.alic-bubble{border-left:3px solid var(--magenta)}
 .chat-bubble.system-bubble{background:var(--bg3);color:var(--fg2);font-size:12px;padding:5px 12px;border-radius:14px}
-.chat-bubble.assistant-bubble{background:transparent;border:none;border-radius:0;padding:0 0 0 2px;font-size:14px;line-height:1.75}
+.chat-bubble.assistant-bubble{background:var(--bg2);border:1px solid var(--bg3);border-radius:var(--radius);padding:14px 16px;font-size:14px;line-height:1.75}
 .chat-bubble.assistant-bubble .asst-header{display:flex;align-items:center;gap:6px;margin-bottom:6px;font-size:12px;color:var(--fg3)}
 .chat-bubble.assistant-bubble .asst-header .asst-label{font-weight:700;color:var(--fg);font-size:13px}
+.asst-body-wrap{position:relative;overflow:hidden;transition:max-height .35s ease}
+.asst-body-wrap.collapsed{max-height:260px}
+.asst-body-wrap.collapsed::after{content:'';position:absolute;bottom:0;left:0;right:0;height:60px;background:linear-gradient(transparent,var(--bg2));pointer-events:none}
+.msg-expand-btn{display:none;width:100%;padding:6px 0 2px;border:none;background:transparent;color:var(--accent);font-size:12px;font-weight:600;cursor:pointer;text-align:center;letter-spacing:.3px}
+.msg-expand-btn:hover{text-decoration:underline}
+.asst-body-wrap.collapsed+.msg-expand-btn,.asst-body-wrap.expandable+.msg-expand-btn{display:block}
 .stream-body{max-width:100%;font-size:13px;color:var(--fg);line-height:1.7;word-break:break-word;overflow-y:auto;max-height:60vh;min-height:20px}
 .stream-body p{margin:2px 0}
 .stream-body h1,.stream-body h2,.stream-body h3{color:var(--fg);margin:10px 0 4px;font-size:14px;font-weight:700}
 .stream-body h1{font-size:16px}
 .stream-body ul,.stream-body ol{margin:4px 0 4px 20px;padding:0}
+.stream-body ol.md-ol{list-style:none;margin-left:4px;padding-left:0}
 .stream-body li{margin:2px 0;line-height:1.5}
+.ol-num{color:var(--cyan);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-weight:600;margin-right:2px;min-width:1.4em;display:inline-block}
 .stream-body strong{color:var(--fg);font-weight:700}
 .stream-body code{background:var(--bg);padding:1px 5px;border-radius:3px;font-family:var(--mono);font-size:12px}
 .stream-body pre{background:var(--bg);padding:10px 12px;border-radius:6px;font-family:var(--mono);font-size:11px;line-height:1.5;overflow-x:auto;white-space:pre-wrap;max-height:300px;overflow-y:auto;margin:8px 0}
@@ -474,6 +556,7 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .chat-bubble.assistant-bubble .asst-body h4{font-size:14px;color:var(--fg2)}
 .chat-bubble.assistant-bubble .asst-body h5,.chat-bubble.assistant-bubble .asst-body h6{font-size:12px;color:var(--fg2);text-transform:uppercase;letter-spacing:.3px}
 .chat-bubble.assistant-bubble .asst-body ul,.chat-bubble.assistant-bubble .asst-body ol{margin:6px 0 6px 22px;padding:0}
+.chat-bubble.assistant-bubble .asst-body ol.md-ol{list-style:none;margin-left:4px;padding-left:0}
 .chat-bubble.assistant-bubble .asst-body li{margin:3px 0;line-height:1.65}
 .chat-bubble.assistant-bubble .asst-body strong{color:var(--fg);font-weight:700}
 .chat-bubble.assistant-bubble .asst-body em{color:var(--fg2);font-style:italic}
@@ -538,7 +621,10 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .chat-attach-thumb img{width:100%;height:100%;object-fit:cover}
 .chat-attach-thumb .chat-attach-name{position:absolute;bottom:0;left:0;right:0;font-size:8px;background:rgba(0,0,0,.7);color:var(--fg);padding:1px 3px;text-overflow:ellipsis;overflow:hidden;white-space:nowrap}
 .chat-attach-remove{position:absolute;top:-4px;right:-4px;width:16px;height:16px;border-radius:50%;background:var(--red);color:#fff;font-size:10px;display:flex;align-items:center;justify-content:center;cursor:pointer;border:1.5px solid var(--bg);z-index:1}
-.chat-input-box{display:flex;flex-direction:column;background:var(--bg2);border:1.5px solid var(--bg4);border-radius:16px;transition:border-color .15s,box-shadow .15s;overflow:hidden}
+.chat-input-box{display:grid;grid-template-columns:1fr auto;grid-template-rows:1fr auto;background:var(--bg2);border:1.5px solid var(--bg4);border-radius:16px;transition:border-color .15s,box-shadow .15s;overflow:hidden}
+.chat-input-box .chat-textarea{grid-column:1;grid-row:1}
+.chat-input-box .chat-input-bottom{grid-column:1;grid-row:2}
+.chat-input-box .chat-send{grid-column:2;grid-row:1/3;align-self:center;margin:0 8px}
 .chat-input-box:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px rgba(55,115,255,.08)}
 .chat-textarea{flex:1;background:transparent;border:none;color:var(--fg);padding:12px 16px 4px;font-size:14px;font-family:var(--font);outline:none;resize:none;line-height:1.5;max-height:160px;overflow-y:auto;min-height:24px}
 .chat-textarea::placeholder{color:var(--fg3)}
@@ -560,6 +646,12 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .chat-bubble .chat-images img{max-width:200px;max-height:150px;border-radius:6px;cursor:pointer;border:1px solid var(--bg4)}
 .chat-bubble .chat-images img:hover{border-color:var(--accent)}
 .chat-bubble .chat-file-badge{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:6px;background:var(--bg3);font-size:11px;color:var(--fg2);margin-top:4px}
+.task-decomp{display:flex;flex-direction:column;gap:6px;margin:8px 0}
+.task-decomp-item{display:flex;align-items:flex-start;gap:8px;padding:8px 12px;background:var(--bg);border:1px solid var(--bg3);border-radius:10px;font-size:13px;line-height:1.45;transition:border-color .15s}
+.task-decomp-item:hover{border-color:var(--accent)}
+.task-decomp-num{flex-shrink:0;font-size:14px;margin-top:1px}
+.task-decomp-text{flex:1;color:var(--fg)}
+.task-role-badge{flex-shrink:0;font-size:10px;padding:2px 7px;border-radius:4px;background:rgba(55,115,255,.1);color:var(--accent);font-weight:600;text-transform:uppercase;letter-spacing:.3px;margin-top:1px}
 .chat-file-card{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg3);border:1px solid var(--bg4);border-radius:8px;text-decoration:none;color:var(--fg);transition:.15s;min-width:180px;max-width:280px}
 .chat-file-card:hover{border-color:var(--accent);background:rgba(55,115,255,.05)}
 .chat-file-card .file-icon{font-size:20px;flex-shrink:0}
@@ -590,6 +682,36 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
   .chat-bubble.assistant-bubble .asst-body table{font-size:11px}
   .chat-bubble.assistant-bubble .asst-body th,.chat-bubble.assistant-bubble .asst-body td{padding:4px 6px}
   .chat-msg{max-width:92%}
+}
+
+/* ── Responsive: MacBook 14" (~1440–1512px) ──────────────────── */
+@media(max-width:1600px){
+  :root{--sidebar-w:200px}
+  .content{padding:16px 20px}
+  .chat-bubble.assistant-bubble .asst-body{font-size:13.5px}
+}
+
+/* ── Responsive: MacBook 16" (~1680–1728px) ──────────────────── */
+@media(min-width:1601px) and (max-width:1920px){
+  .content{padding:20px 28px}
+}
+
+/* ── Responsive: 24" monitor (~1920–2560px) ──────────────────── */
+@media(min-width:1921px){
+  .content{padding:24px 48px}
+  .chat-bubble.assistant-bubble .asst-body{font-size:14.5px;line-height:1.8}
+}
+
+/* ── Responsive: 27"+ monitor (2560px+, including 4K) ────────── */
+@media(min-width:2561px){
+  :root{--sidebar-w:260px}
+  .content{padding:28px 64px}
+  html,body{font-size:15px}
+  .chat-textarea{font-size:15px}
+  .chat-bubble{font-size:14px}
+  .chat-bubble.assistant-bubble .asst-body{font-size:15px}
+  .stat-value{font-size:28px}
+  .agent-grid{grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}
 }
 </style>
 </head>
@@ -714,8 +836,8 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
             <button class="chat-action-btn" id="searchToggle" title="Web search (Brave)" onclick="toggleSearchMode()">🔍</button>
             <input type="file" id="chatFileInput" multiple accept="image/*,.pdf,.txt,.md,.json,.csv,.py,.js,.ts" style="display:none" onchange="handleFileSelect(this)">
           </div>
-          <button class="btn chat-send" id="chatSend" onclick="chatSubmit()">Send ↑</button>
         </div>
+        <button class="btn chat-send" id="chatSend" onclick="chatSubmit()">Send ↑</button>
       </div>
     </div>
   </div>
@@ -829,12 +951,13 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
     <div class="page-title">Channels</div>
     <div class="page-actions"><button class="btn btn-sm" onclick="loadChannels()">Refresh</button></div>
   </div>
-  <div class="stats" id="channelStats">
+  <div class="ch-grid" id="channelStats" style="margin-bottom:14px">
     <div class="stat"><div class="stat-value cyan" id="chTotal">0</div><div class="stat-label">Total</div></div>
     <div class="stat"><div class="stat-value green" id="chRunning">0</div><div class="stat-label">Running</div></div>
     <div class="stat"><div class="stat-value" id="chEnabled">0</div><div class="stat-label">Enabled</div></div>
+    <div class="stat"><div class="stat-value red" id="chDisabled">0</div><div class="stat-label">Disabled</div></div>
   </div>
-  <div class="agent-grid" id="channelGrid"><div class="empty">Loading…</div></div>
+  <div class="ch-grid" id="channelGrid"><div class="empty">Loading…</div></div>
 </div>
 
 <!-- ── Panel: Config ── -->
@@ -1080,6 +1203,7 @@ let chatMsgs = [];              // {id, type:'user'|'agent'|'system', agent, tex
 let chatPrevSnapshot = {};      // previous polling snapshot for diff
 let chatTaskMap = {};           // taskId → Set of generated message types (dedup)
 let chatMsgCounter = 0;        // unique msg id counter
+let dashboardUser = 'createpjf';  // default submitter name for dashboard tasks
 
 // ══════════════════════════════════════════════════════════════════
 //  AUTH & API HELPERS
@@ -1299,7 +1423,11 @@ const AGENT_META = {
 
 function agentMeta(agentId) {
   const id = (agentId||'').toLowerCase();
-  const m = AGENT_META[id] || {emoji:'🤖', color:'var(--fg2)', cls:'jerry'};
+  const known = AGENT_META[id];
+  // Non-agent names (users) get a user icon with accent color
+  const m = known
+    ? {...known}
+    : {emoji:'👤', color:'var(--accent2)', cls:'user', label: agentId};
   m.icon = m.emoji;
   return m;
 }
@@ -1329,11 +1457,14 @@ let dispatchLastIdx = 0;
 // ── Add entry to TOP dispatch log ──
 function addDispatch(icon, agentId, text, opts={}) {
   const meta = agentMeta(agentId);
+  const knownAgents = new Set(['leo','jerry','alic','search','system','advisor']);
+  const isUser = !knownAgents.has((agentId||'').toLowerCase());
   dispatchEntries.push({
     id: ++chatMsgCounter,
     icon: icon || '•',
     agent: agentId,
     agentCls: meta.cls,
+    isUser,
     text,
     ts: Date.now(),
     taskId: opts.taskId || null,
@@ -1378,8 +1509,9 @@ function renderDispatchHtml(d) {
   // Expandable result for agent output in dispatch
   if (d.result) {
     const rid = 'dRes' + d.id;
+    const cleanedResult = stripLlmTags(d.result);
     text += ' <span class="chat-result-toggle" onclick="toggleChatResult(\'' + rid + '\',this)" style="font-size:10px">▸ detail</span>'
-      + '<div class="chat-result-content" id="' + rid + '" style="margin-top:3px"><pre style="font-size:10px;max-height:160px;overflow-y:auto;margin:0;padding:4px 6px">' + escHtml(d.result) + '</pre></div>';
+      + '<div class="chat-result-content" id="' + rid + '" style="margin-top:3px"><pre style="font-size:10px;max-height:160px;overflow-y:auto;margin:0;padding:4px 6px">' + escHtml(cleanedResult) + '</pre></div>';
   }
   if (d.score != null) {
     const c = scoreColor(d.score);
@@ -1428,14 +1560,25 @@ function updateHeaderStatuses() {
     el.innerHTML = '<span class="ov-status-empty">Ready — Submit a task to start</span>';
     return;
   }
+  // Sort: user-submitted entries always first
+  const sorted = [...latest].reverse();
+  const knownAgents = new Set(['leo','jerry','alic','search','system','advisor']);
+  sorted.sort((a, b) => {
+    const aIsUser = !knownAgents.has((a.agent||'').toLowerCase());
+    const bIsUser = !knownAgents.has((b.agent||'').toLowerCase());
+    return aIsUser === bIsUser ? 0 : aIsUser ? -1 : 1;
+  });
   let html = '';
-  for (const d of latest.reverse()) {
-    const agentCls = d.agent ? d.agent.toLowerCase().replace(/[^a-z]/g,'') : '';
+  for (const d of sorted) {
+    const aid = (d.agent||'').toLowerCase();
+    const isUser = !knownAgents.has(aid);
+    const agentCls = aid.replace(/[^a-z]/g,'');
     const colorCls = agentCls.includes('leo') ? 'leo-d' : agentCls.includes('jerry') ? 'jerry-d' : agentCls.includes('alic') ? 'alic-d' : '';
     const sMeta = agentMeta(d.agent || '');
-    const sIcon = sMeta.avatar ? '<img src="'+sMeta.avatar+'">' : '▸';
-    const agentName = capitalize(d.agent || 'system');
-    const statusText = titleCase(truncate(d.text || '', 30));
+    const sIcon = sMeta.avatar ? '<img src="'+sMeta.avatar+'">' : (sMeta.emoji || '▸');
+    // User entries: show name as-is (lowercase); agents: capitalize
+    const agentName = isUser ? (d.agent || 'You') : capitalize(d.agent || 'system');
+    const statusText = titleCase(truncate(cleanTaskDesc(d.text || ''), 30));
     html += '<div class="ov-status-item">'
       + '<span class="status-icon">' + sIcon + '</span>'
       + '<span class="status-agent ' + colorCls + '">' + escHtml(agentName) + '</span>'
@@ -1518,11 +1661,16 @@ function renderChatMsgHtml(m) {
     const agentLabel = capitalize(m.agent) || 'Cleo';
     const avatarContent = avatarHtml(aM, 28);
     const avatarBg = m.agent ? aM.color : 'linear-gradient(135deg,var(--accent),var(--cyan))';
+    // Wrap long content in a collapsible container
+    const isLong = (resultText.length > 500);
+    const wrapCls = isLong ? 'asst-body-wrap collapsed expandable' : 'asst-body-wrap';
+    const expandBtn = isLong ? '<button class="msg-expand-btn" onclick="toggleMsgExpand(this)">▼ Show more</button>' : '';
     return '<div class="chat-msg assistant" data-msg-id="' + m.id + '">'
       + '<div class="chat-avatar ' + aM.cls + '">' + avatarContent + '</div>'
       + '<div class="chat-bubble assistant-bubble">'
       + '<div class="asst-header"><span class="asst-label" style="color:' + aM.color + '">' + escHtml(agentLabel) + '</span></div>'
-      + '<div class="asst-body">' + bodyHtml + '</div>'
+      + '<div class="' + wrapCls + '"><div class="asst-body">' + bodyHtml + '</div></div>'
+      + expandBtn
       + scoreHtml + searchHtml + tokenHtml
       + '</div></div>';
   }
@@ -1557,9 +1705,52 @@ function stripLlmTags(text) {
   text = text.replace(/^##\s*Phase\s+\d+.*$/gm, '');
   text = text.replace(/^\*\*TASK:\*\*\s*.+$/gm, '');
   text = text.replace(/^\*\*COMPLEXITY:\*\*\s*.+$/gm, '');
+  // Strip conversation history injection (manager.py injects these into task descriptions)
+  text = text.replace(/^##\s*对话历史\s*\(Conversation History\)[\s\S]*?(?=^##\s*当前消息|^---\s*$)/gm, '');
+  text = text.replace(/^##\s*当前消息\s*\(Current Message\)\s*\n?/gm, '');
+  // Strip session context headers that leak through
+  text = text.replace(/^##\s*对话历史[\s\S]*?^---\s*$/gm, '');
+  text = text.replace(/^\*\*\[助手\]\*\*.*$/gm, '');
+  text = text.replace(/^\*\*\[用户\]\*\*.*$/gm, '');
+  // Strip agent comment markers (<!-- agent:xxx task:xxx -->)
+  text = text.replace(/<!--\s*agent:[\s\S]*?-->/g, '');
+  // Strip task status lines (■ 当前状 — 1/1, ● task description)
+  text = text.replace(/^[■●]\s+.{0,120}$/gm, '');
   // Strip --- separator lines (orchestration artifacts)
   text = text.replace(/^---\s*$/gm, '');
   // Clean up excessive blank lines left after stripping
+  text = text.replace(/\n{3,}/g, '\n\n');
+  return text.trim();
+}
+
+/* Convert HTML formatting tags (from Telegram adapter / LLM output) to Markdown
+   so the downstream renderMarkdown() can process them properly. */
+function htmlToMd(text) {
+  // Code blocks: <pre><code>...</code></pre> → ```...```
+  text = text.replace(/<pre[^>]*><code[^>]*>([\s\S]*?)<\/code><\/pre>/gi, (_,c)=>'```\n'+c+'\n```');
+  text = text.replace(/<pre[^>]*>([\s\S]*?)<\/pre>/gi, (_,c)=>'```\n'+c+'\n```');
+  // Inline code
+  text = text.replace(/<code[^>]*>(.*?)<\/code>/gi, '`$1`');
+  // Bold
+  text = text.replace(/<(?:b|strong)[^>]*>(.*?)<\/(?:b|strong)>/gi, '**$1**');
+  // Italic
+  text = text.replace(/<(?:i|em)[^>]*>(.*?)<\/(?:i|em)>/gi, '*$1*');
+  // Strikethrough
+  text = text.replace(/<(?:s|del)[^>]*>(.*?)<\/(?:s|del)>/gi, '~~$1~~');
+  // Links
+  text = text.replace(/<a\s+href="([^"]*)"[^>]*>(.*?)<\/a>/gi, '[$2]($1)');
+  // Line breaks
+  text = text.replace(/<br\s*\/?>/gi, '\n');
+  // List items → bullet
+  text = text.replace(/<li[^>]*>(.*?)<\/li>/gi, '• $1\n');
+  text = text.replace(/<\/?[uo]l[^>]*>/gi, '\n');
+  // Blockquote
+  text = text.replace(/<blockquote[^>]*>([\s\S]*?)<\/blockquote>/gi, (_,c)=>c.split('\n').map(l=>'> '+l.trim()).join('\n'));
+  // Strip remaining tags (div, span, p, etc.)
+  text = text.replace(/<\/?(?:div|span|p|h[1-6]|section|article|header|footer|nav)[^>]*>/gi, '\n');
+  text = text.replace(/<[^>]+>/g, '');
+  // Decode common HTML entities the model may emit
+  text = text.replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'");
   text = text.replace(/\n{3,}/g, '\n\n');
   return text.trim();
 }
@@ -1602,6 +1793,8 @@ function formatResultBody(text) {
   const rawText = text;
   // Strip LLM artifacts before rendering
   text = stripLlmTags(text);
+  // Convert HTML tags (from Telegram adapter output) to Markdown
+  text = htmlToMd(text);
   const stepsHtml = _buildResultStepsHtml(rawText);
   if (!text) {
     // Entire output was tool calls / thinking — show steps + friendly status
@@ -1609,9 +1802,24 @@ function formatResultBody(text) {
       return stepsHtml + '<span style="color:var(--fg2)">✓ Done — results sent to planner for synthesis.</span>';
     return '<span style="color:var(--fg2)">✓ Completed</span>';
   }
-  // Try JSON pretty-print
+  // Try JSON — render task arrays as cards, other JSON as pretty-print
   try {
     const obj = JSON.parse(text);
+    // Task decomposition array: [{"task": "...", "role": "..."}]
+    if (Array.isArray(obj) && obj.length && obj[0].task) {
+      let html = '<div class="task-decomp">';
+      for (let i = 0; i < obj.length; i++) {
+        const t = obj[i];
+        const roleIcon = t.role === 'implement' ? '⚡' : t.role === 'research' ? '🔍' : t.role === 'review' ? '🧠' : '📋';
+        const roleBadge = t.role ? '<span class="task-role-badge">' + escHtml(t.role) + '</span>' : '';
+        html += '<div class="task-decomp-item">'
+          + '<span class="task-decomp-num">' + roleIcon + '</span>'
+          + '<span class="task-decomp-text">' + escHtml(t.task) + '</span>'
+          + roleBadge + '</div>';
+      }
+      html += '</div>';
+      return stepsHtml + html;
+    }
     return '<pre>' + escHtml(JSON.stringify(obj, null, 2)) + '</pre>';
   } catch(e) {}
   // Render markdown then enhance with file/image detection
@@ -1713,7 +1921,7 @@ function renderMarkdown(src) {
     if (hMatch) { closeList(); const lvl = hMatch[1].length; html += '<h' + lvl + '>' + inlineFmt(hMatch[2]) + '</h' + lvl + '>'; i++; continue; }
 
     // Task list (checkbox)
-    const taskMatch = line.match(/^[\s]*[-*]\s+\[([ xX])\]\s+(.+)$/);
+    const taskMatch = line.match(/^[\s]*[-*\u2022]\s+\[([ xX])\]\s+(.+)$/);
     if (taskMatch) {
       if (!inList || listType !== 'ul') { closeList(); html += '<ul style="list-style:none;padding-left:4px">'; inList = true; listType = 'ul'; }
       const checked = taskMatch[1] !== ' ';
@@ -1723,17 +1931,22 @@ function renderMarkdown(src) {
     }
 
     // Unordered list
-    const ulMatch = line.match(/^[\s]*[-*]\s+(.+)$/);
+    const ulMatch = line.match(/^[\s]*[-*\u2022\u2023\u25E6\u2043\u2219]\s+(.+)$/);
     if (ulMatch) {
       if (!inList || listType !== 'ul') { closeList(); html += '<ul>'; inList = true; listType = 'ul'; }
       html += '<li>' + inlineFmt(ulMatch[1]) + '</li>'; i++; continue;
     }
 
-    // Ordered list
+    // Ordered list — render number manually to avoid monospace font ambiguity (1 vs l)
     const olMatch = line.match(/^[\s]*(\d+)[.)]\s+(.+)$/);
     if (olMatch) {
-      if (!inList || listType !== 'ol') { closeList(); html += '<ol>'; inList = true; listType = 'ol'; }
-      html += '<li>' + inlineFmt(olMatch[2]) + '</li>'; i++; continue;
+      const olNum = parseInt(olMatch[1], 10);
+      if (!inList || listType !== 'ol') {
+        closeList();
+        html += '<ol class="md-ol">';
+        inList = true; listType = 'ol';
+      }
+      html += '<li><span class="ol-num">' + olNum + '.</span> ' + inlineFmt(olMatch[2]) + '</li>'; i++; continue;
     }
 
     // Non-list line closes any open list
@@ -1800,6 +2013,25 @@ function copyCodeBlock(btn, preId) {
   });
 }
 
+function toggleMsgExpand(btn) {
+  const wrap = btn.previousElementSibling;
+  if (!wrap) return;
+  const isCollapsed = wrap.classList.contains('collapsed');
+  if (isCollapsed) {
+    wrap.style.maxHeight = wrap.scrollHeight + 'px';
+    wrap.classList.remove('collapsed');
+    btn.textContent = '▲ Show less';
+    setTimeout(() => { wrap.style.maxHeight = 'none'; }, 360);
+  } else {
+    wrap.style.maxHeight = wrap.scrollHeight + 'px';
+    requestAnimationFrame(() => {
+      wrap.style.maxHeight = '260px';
+      wrap.classList.add('collapsed');
+      btn.textContent = '▼ Show more';
+    });
+  }
+}
+
 // ── Incremental render for chat messages (bottom panel) ──
 function renderChat() {
   const container = document.getElementById('chatMessages');
@@ -1824,7 +2056,8 @@ function renderChat() {
     }
     container.appendChild(frag);
     chatLastRenderedIdx = chatMsgs.length;
-    container.scrollTop = container.scrollHeight;
+    // Use rAF to scroll after DOM paint for reliable positioning
+    requestAnimationFrame(() => { container.scrollTop = container.scrollHeight; });
   }
 }
 
@@ -2119,6 +2352,8 @@ function updateStreamingBubble(taskId, agent, partial) {
       + '<span class="char-count"></span>'
       + '</div></div>';
     container.appendChild(wrapper);
+    // Auto-scroll when a new agent starts responding
+    requestAnimationFrame(() => { container.scrollTop = container.scrollHeight; });
   }
 
   // Throttle render — 60ms interval (~16fps) for smooth streaming
@@ -2194,7 +2429,7 @@ function _renderStreamContent(taskId) {
   const statusEl = bubble.querySelector('.stream-agent-status');
   const partial = _streamingFullText[taskId] || '';
   if (body) {
-    const cleaned = stripLlmTags(partial);
+    const cleaned = htmlToMd(stripLlmTags(partial));
     const steps = _parseStreamSteps(partial);
     let stepsHtml = '';
     if (steps.length) {
@@ -2243,8 +2478,8 @@ function _renderStreamContent(taskId) {
   }
   const container = document.getElementById('chatMessages');
   if (container) {
-    const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
-    if (atBottom) container.scrollTop = container.scrollHeight;
+    const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 300;
+    if (atBottom) requestAnimationFrame(() => { container.scrollTop = container.scrollHeight; });
   }
 }
 
@@ -2283,6 +2518,8 @@ function updateCostBadge(taskId, costUsd) {
 //  SUBTASK TREE — visual decomposition of leo subtasks
 // ══════════════════════════════════════════════════════════════════
 
+let _subtreeCollapsed = false;  // track collapsed state across re-renders
+
 function renderSubtaskTree(tasks) {
   const container = document.getElementById('subtaskTree');
   if (!container) return;
@@ -2311,7 +2548,7 @@ function renderSubtaskTree(tasks) {
   let html = '';
   for (const pid of parentIds) {
     const parent = tasks[pid];
-    const parentDesc = parent ? (parent.description || '').substring(0, 50) : pid.substring(0, 8);
+    const parentDesc = parent ? cleanTaskDesc(parent.description || '').substring(0, 50) : pid.substring(0, 8);
     const children = childrenOf[pid];
 
     // Count statuses
@@ -2322,14 +2559,31 @@ function renderSubtaskTree(tasks) {
     }
     const total = children.length;
     const done = counts.completed;
+    const working = counts.claimed + counts.review;
     const progress = total > 0 ? Math.round((done / total) * 100) : 0;
 
-    html += '<div class="st-parent-label">📋 ' + escHtml(parentDesc) + ' — '
-      + done + '/' + total + ' (' + progress + '%)</div>';
+    // Progress bar color: green for completed, cyan for active, gray for pending
+    const greenW = progress;
+    const cyanW = total > 0 ? Math.round((working / total) * 100) : 0;
+
+    // Unified block: header + collapsible body
+    html += '<div class="st-block">';
+    html += '<div class="st-header" onclick="toggleSubtree()">'
+      + '<span class="st-chevron' + (_subtreeCollapsed ? '' : ' open') + '">▸</span>'
+      + '<span class="st-header-text">' + escHtml(parentDesc) + '</span>'
+      + '<span class="st-progress-wrap">'
+      + '<span class="st-progress-bar">'
+      + '<span class="st-progress-fill st-fill-done" style="width:' + greenW + '%"></span>'
+      + '<span class="st-progress-fill st-fill-active" style="width:' + cyanW + '%"></span>'
+      + '</span>'
+      + '<span class="st-progress-label">' + done + '/' + total + '</span>'
+      + '</span>'
+      + '</div>';
+    html += '<div class="st-body' + (_subtreeCollapsed ? ' collapsed' : '') + '">';
     html += '<div class="st-group">';
     for (const child of children) {
       const st = child.status || 'pending';
-      const desc = (child.description || '').substring(0, 40);
+      const desc = cleanTaskDesc(child.description || '').substring(0, 50);
       const agent = child.agent_id || '';
       html += '<div class="st-node">'
         + '<span class="st-dot ' + st + '"></span>'
@@ -2337,10 +2591,45 @@ function renderSubtaskTree(tasks) {
         + (agent ? '<span class="st-agent">' + escHtml(capitalize(agent)) + '</span>' : '')
         + '</div>';
     }
-    html += '</div>';
+    html += '</div></div></div>';  // close st-group, st-body, st-block
   }
 
   container.innerHTML = html;
+}
+
+function toggleSubtree() {
+  _subtreeCollapsed = !_subtreeCollapsed;
+  const bodies = document.querySelectorAll('.st-body');
+  const chevrons = document.querySelectorAll('.st-chevron');
+  bodies.forEach(b => b.classList.toggle('collapsed', _subtreeCollapsed));
+  chevrons.forEach(c => c.classList.toggle('open', !_subtreeCollapsed));
+}
+
+// ── Clean task description for display (strip injected conversation history) ──
+function cleanTaskDesc(desc) {
+  if (!desc) return '';
+  // 1) Full sweep: strip from "## 对话历史" through "## 当前消息" header in one pass
+  desc = desc.replace(/##\s*对话历史\s*\(Conversation History\)[\s\S]*?##\s*当前消息\s*\(Current Message\)\s*\n?/g, '');
+  // 2) Fallback: partial patterns (history block without 当前消息)
+  desc = desc.replace(/##\s*对话历史[\s\S]*?---\s*\n*/g, '');
+  desc = desc.replace(/##\s*当前消息\s*\(Current Message\)\s*\n?/g, '');
+  // 3) Strip any **[username]** session context lines (matches 助手, 用户, or any name)
+  desc = desc.replace(/^\*\*\[[^\]]+\]\*\*.*$/gm, '');
+  desc = desc.replace(/^[■●]\s+.{0,120}$/gm, '');
+  desc = desc.replace(/\n{2,}/g, '\n');
+  return desc.trim();
+}
+
+// ── Extract submitter username from task description ──
+function extractSubmitter(desc) {
+  if (!desc) return null;
+  // Look for **[username]** patterns — pick the last user entry (not 助手)
+  const re = /\*\*\[([^\]]+)\]\*\*/g;
+  let match, last = null;
+  while ((match = re.exec(desc)) !== null) {
+    if (match[1] !== '助手') last = match[1];
+  }
+  return last;
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -2377,7 +2666,8 @@ function diffAndRoute(prev, current) {
     // ── New task detected → TOP dispatch ──
     if (!oldStatus && !seen.has('created')) {
       seen.add('created');
-      addDispatch('📋', 'system', 'Task: ' + truncate(task.description, 80), {taskId});
+      const submitter = dashboardUser || extractSubmitter(task.description) || 'You';
+      addDispatch('📋', submitter, truncate(cleanTaskDesc(task.description), 80), {taskId});
     }
 
     // ── Agent claimed task → TOP dispatch ──
@@ -2665,6 +2955,157 @@ function buildSparkline(history) {
     + '</svg></div>';
 }
 
+function renderRadarChart(containerId, dims) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  const keys = ['task_completion','output_quality','improvement_rate','consistency','review_accuracy'];
+  const labels = ['Completion','Quality','Improvement','Consistency','Review'];
+  const vals = keys.map(k => dims[k] || 0);
+  const n = 5;
+  const S = 230, cx = S/2, cy = S/2 + 2, R = 72, labelR = R + 22;
+  const ang = [];
+  for (let i = 0; i < n; i++) ang.push(-Math.PI/2 + (2*Math.PI*i)/n);
+  const px = (r,a) => (cx + r*Math.cos(a)).toFixed(1);
+  const py = (r,a) => (cy + r*Math.sin(a)).toFixed(1);
+
+  let svg = '<svg width="'+S+'" height="'+S+'" viewBox="0 0 '+S+' '+S+'">';
+  // grid rings — outer ring brighter
+  for (let lv = 1; lv <= 5; lv++) {
+    const r = R*lv/5;
+    const isOuter = lv === 5;
+    let d = 'M';
+    for (let i = 0; i < n; i++) d += (i?' L':'')+px(r,ang[i])+','+py(r,ang[i]);
+    svg += '<path d="'+d+' Z" fill="none" stroke="var(--fg2)" stroke-width="'+(isOuter?'1':'0.5')+'" opacity="'+(isOuter?'0.4':'0.15')+'"/>';
+  }
+  // axis lines
+  for (let i = 0; i < n; i++)
+    svg += '<line x1="'+cx+'" y1="'+cy+'" x2="'+px(R,ang[i])+'" y2="'+py(R,ang[i])+'" stroke="var(--fg2)" stroke-width="0.4" opacity="0.12"/>';
+  // gradient def
+  svg += '<defs><linearGradient id="radarGrad_'+containerId+'" x1="0" y1="0" x2="0" y2="1">'
+    + '<stop offset="0%" stop-color="var(--accent)" stop-opacity="0.35"/>'
+    + '<stop offset="100%" stop-color="var(--accent)" stop-opacity="0.05"/></linearGradient></defs>';
+  // data polygon
+  let dp = 'M';
+  for (let i = 0; i < n; i++) {
+    const r = R*vals[i]/100;
+    dp += (i?' L':'')+px(r,ang[i])+','+py(r,ang[i]);
+  }
+  svg += '<path d="'+dp+' Z" fill="url(#radarGrad_'+containerId+')" stroke="var(--accent)" stroke-width="1.5" stroke-linejoin="round"/>';
+  // data dots
+  for (let i = 0; i < n; i++) {
+    const r = R*vals[i]/100;
+    svg += '<circle cx="'+px(r,ang[i])+'" cy="'+py(r,ang[i])+'" r="3" fill="var(--accent)" stroke="var(--bg2)" stroke-width="1.5"/>';
+  }
+  // labels + values
+  for (let i = 0; i < n; i++) {
+    const lx = parseFloat(px(labelR,ang[i]));
+    const ly = parseFloat(py(labelR,ang[i]));
+    const anchor = Math.abs(lx-cx)<5?'middle':(lx<cx?'end':'start');
+    const ady = i===0?-4:(i>=2&&i<=3)?6:0;
+    const col = scoreColor(vals[i]);
+    svg += '<text x="'+lx+'" y="'+(ly+ady)+'" text-anchor="'+anchor+'" dominant-baseline="middle" fill="var(--fg2)" font-size="9" font-weight="600">'+labels[i]+'</text>';
+    svg += '<text x="'+lx+'" y="'+(ly+ady+11)+'" text-anchor="'+anchor+'" dominant-baseline="middle" fill="'+col+'" font-size="10" font-weight="700" font-family="var(--mono)">'+vals[i].toFixed(0)+'</text>';
+  }
+  svg += '</svg>';
+  el.innerHTML = svg;
+}
+
+function renderTrendChart(containerId, history) {
+  const el = document.getElementById(containerId);
+  if (!el || !history || history.length < 2) return;
+  // Only show the most recent 10 data points
+  if (history.length > 10) history = history.slice(-10);
+  const W = el.clientWidth || 500;
+  const H = 100;
+  const PAD = {t:8, r:12, b:22, l:34};
+  const cw = W - PAD.l - PAD.r;
+  const ch = H - PAD.t - PAD.b;
+
+  const values = history.map(h => h.composite || 0);
+  const times = history.map(h => h.ts ? new Date(h.ts * 1000) : new Date());
+  const vMin = Math.max(0, Math.min(...values) - 5);
+  const vMax = Math.min(100, Math.max(...values) + 5);
+  const vRange = vMax - vMin || 1;
+
+  const x = (i) => PAD.l + (i / (values.length - 1)) * cw;
+  const y = (v) => PAD.t + ch - ((v - vMin) / vRange) * ch;
+
+  let svg = '<svg width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'">';
+
+  // Horizontal grid lines + Y labels
+  const gridSteps = 4;
+  for (let i = 0; i <= gridSteps; i++) {
+    const gy = PAD.t + (i / gridSteps) * ch;
+    const gv = (vMax - (i / gridSteps) * vRange).toFixed(0);
+    svg += '<line x1="'+PAD.l+'" y1="'+gy+'" x2="'+(W-PAD.r)+'" y2="'+gy+'" class="grid-line"/>';
+    svg += '<text x="'+(PAD.l-4)+'" y="'+(gy+3)+'" text-anchor="end" class="axis-label">'+gv+'</text>';
+  }
+
+  // X axis time labels (show ~4-5 evenly spaced, skip overlaps)
+  const labelCount = Math.min(5, times.length);
+  const labelStep = Math.max(1, Math.floor((times.length - 1) / (labelCount - 1)));
+  const minLabelGap = 70; // minimum px between labels to avoid overlap
+  let lastLabelX = -999;
+  const fmtTime = (d) => (d.getMonth()+1)+'/'+d.getDate()+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+  for (let i = 0; i < times.length; i += labelStep) {
+    const tx = x(i);
+    if (tx - lastLabelX < minLabelGap && lastLabelX > 0) continue;
+    svg += '<text x="'+tx.toFixed(1)+'" y="'+(H-2)+'" text-anchor="middle" class="axis-label">'+fmtTime(times[i])+'</text>';
+    lastLabelX = tx;
+  }
+  // Always show last label if far enough from previous
+  if ((times.length - 1) % labelStep !== 0) {
+    const lastX = x(times.length - 1);
+    if (lastX - lastLabelX >= minLabelGap) {
+      svg += '<text x="'+lastX.toFixed(1)+'" y="'+(H-2)+'" text-anchor="middle" class="axis-label">'+fmtTime(times[times.length-1])+'</text>';
+    }
+  }
+
+  // Area fill
+  const pts = values.map((v, i) => x(i).toFixed(1)+','+y(v).toFixed(1));
+  const areaPath = 'M'+pts[0]+' L'+pts.join(' L')+' L'+x(values.length-1).toFixed(1)+','+(PAD.t+ch)+' L'+PAD.l+','+(PAD.t+ch)+' Z';
+  const trend = values[values.length-1] - values[0];
+  const lineColor = trend >= 0 ? 'var(--green)' : 'var(--red)';
+  svg += '<path d="'+areaPath+'" fill="url(#areaGrad_'+containerId+')" opacity="0.15"/>';
+  svg += '<defs><linearGradient id="areaGrad_'+containerId+'" x1="0" y1="0" x2="0" y2="1">';
+  svg += '<stop offset="0%" stop-color="'+lineColor+'"/>';
+  svg += '<stop offset="100%" stop-color="'+lineColor+'" stop-opacity="0"/>';
+  svg += '</linearGradient></defs>';
+
+  // Line
+  svg += '<polyline fill="none" stroke="'+lineColor+'" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" points="'+pts.join(' ')+'"/>';
+
+  // Dots
+  for (let i = 0; i < values.length; i++) {
+    const d = times[i];
+    const lbl = values[i].toFixed(1) + ' — ' + (d.getMonth()+1)+'/'+d.getDate()+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+    svg += '<circle class="trend-dot" cx="'+x(i).toFixed(1)+'" cy="'+y(values[i]).toFixed(1)+'" '
+      + 'onmouseenter="showTrendTip(this,\''+lbl+'\')" onmouseleave="hideTrendTip()"/>';
+  }
+
+  svg += '</svg>';
+  svg += '<div class="trend-tooltip" id="trendTip"></div>';
+  el.innerHTML = svg;
+}
+
+function showTrendTip(dot, text) {
+  const tip = document.getElementById('trendTip');
+  if (!tip) return;
+  const chart = dot.closest('.trend-chart');
+  const rect = chart.getBoundingClientRect();
+  const cx = parseFloat(dot.getAttribute('cx'));
+  const cy = parseFloat(dot.getAttribute('cy'));
+  tip.textContent = text;
+  tip.style.left = cx + 'px';
+  tip.style.top = (cy - 24) + 'px';
+  tip.style.opacity = '1';
+  tip.style.transform = 'translateX(-50%)';
+}
+function hideTrendTip() {
+  const tip = document.getElementById('trendTip');
+  if (tip) tip.style.opacity = '0';
+}
+
 async function loadAgents() {
   const [agentData, scoreData, skillsResp, chainData, historyData] = await Promise.all([
     api('/v1/agents'), api('/v1/scores'), api('/v1/skills'), api('/v1/chain/status'), api('/v1/scores/history')
@@ -2729,7 +3170,7 @@ async function loadAgents() {
       const addr = chain.pkp_address || '';
       const shortAddr = addr ? addr.slice(0, 6) + '…' + addr.slice(-4) : '';
       const chainId = chain.erc8004_agent_id != null ? '#' + chain.erc8004_agent_id : '';
-      const scanUrl = 'https://sepolia.basescan.org/address/' + addr;
+      const scanUrl = 'https://basescan.org/address/' + addr;
       const balance = chain.usdc_balance != null ? parseFloat(chain.usdc_balance).toFixed(2) : null;
       html += '<div class="agent-card-chain">';
       html += '<div class="agent-card-chain-row">';
@@ -2782,7 +3223,7 @@ async function loadAgents() {
       mhtml += '<span class="agent-modal-title">'
         + avatarHtml(modalMeta, 32) + ' '
         + '<span class="hb-dot ' + (isOnline ? 'online' : 'offline') + '"></span> '
-        + escHtml(a.id) + '</span>';
+        + escHtml(capitalize(a.id)) + '</span>';
       mhtml += '<button class="agent-modal-close" onclick="closeAgentEditor()">✕</button></div>';
 
       // Tabs
@@ -2796,67 +3237,80 @@ async function loadAgents() {
       // ═══ OVERVIEW TAB ═══
       mhtml += '<div class="modal-tab-content' + (activeTab==='overview'?' active':'') + '" data-tab="overview">';
 
-      // Role
-      mhtml += '<div class="overview-section"><div class="overview-label">Role</div>';
-      mhtml += '<div class="overview-role">' + escHtml(a.role||'No role defined') + '</div></div>';
+      // ── Card 1: Reputation + Trend Chart ──
+      if (composite > 0) {
+        const agentHist = scoreHistory[a.id] || [];
+        mhtml += '<div class="overview-card">';
+        const dimNames = {task_completion:'Completion',output_quality:'Quality',improvement_rate:'Improvement',consistency:'Consistency',review_accuracy:'Review'};
+        // Top row: big score left + radar chart right
+        mhtml += '<div class="rep-top">';
+        mhtml += '<div class="rep-left">';
+        mhtml += '<div class="rep-big">' + composite.toFixed(1) + '</div>';
+        mhtml += '<div class="rep-sub">Reputation Score</div>';
+        mhtml += '<div class="dim-badges">';
+        for (const [k,label] of Object.entries(dimNames)) {
+          const v = dims[k] || 0;
+          mhtml += '<div class="dim-badge"><span class="dim-dot" style="background:'+scoreColor(v)+'"></span><span style="color:var(--fg2)">'+label+'</span><span style="color:'+scoreColor(v)+';font-family:var(--mono)">'+v.toFixed(0)+'</span></div>';
+        }
+        mhtml += '</div></div>';
+        mhtml += '<div class="radar-wrap" id="radar_' + a.id + '"></div>';
+        mhtml += '</div>';
+        // Trend chart with time axis
+        if (agentHist.length >= 2) {
+          mhtml += '<div class="trend-chart" id="trendChart_' + a.id + '"></div>';
+        }
+        mhtml += '</div>';
+      }
 
-      // Model + Provider + Skills
-      mhtml += '<div class="overview-section"><div class="overview-label">Configuration</div>';
-      mhtml += '<div class="overview-value" style="font-size:12px">';
-      mhtml += '<strong>Model:</strong> ' + escHtml(a.model||'—') + ' <span style="color:var(--fg3)">(' + escHtml(a.provider||'') + ')</span><br>';
+      // ── Card 2: Configuration ──
+      mhtml += '<div class="overview-card">';
+      mhtml += '<div class="overview-label">Configuration</div>';
+      mhtml += '<div class="config-grid">';
+      mhtml += '<div><div class="cfg-key">Model</div><div class="cfg-val">' + escHtml(a.model||'—') + '</div></div>';
+      mhtml += '<div><div class="cfg-key">Provider</div><div class="cfg-val">' + escHtml(a.provider||'—') + '</div></div>';
       const modalPrivateSkills = (a.skills||[]).filter(s => !sharedSkillNames.has(s));
-      mhtml += '<strong>Skills:</strong> ' + (modalPrivateSkills.length ? modalPrivateSkills : ['(shared only)']).map(s => '<span class="skill-tag">' + escHtml(s) + '</span>').join(' ');
+      mhtml += '<div><div class="cfg-key">Skills</div><div class="cfg-val">' + (a.skills||[]).length + ' active</div></div>';
       if (a.fallback_models && a.fallback_models.length) {
-        mhtml += '<br><strong>Fallbacks:</strong> <span style="color:var(--fg3)">' + escHtml(a.fallback_models.join(', ')) + '</span>';
+        mhtml += '<div><div class="cfg-key">Fallbacks</div><div class="cfg-val">' + escHtml(a.fallback_models.join(', ')) + '</div></div>';
       }
       mhtml += '</div></div>';
 
-      // Wallet / Chain identity
+      // ── Card 3: Role ──
+      mhtml += '<div class="overview-card">';
+      mhtml += '<div class="overview-label">Role</div>';
+      mhtml += '<div class="overview-role">' + escHtml(a.role||'No role defined') + '</div>';
+      mhtml += '</div>';
+
+      // ── Card 4: Wallet (if available) ──
       const chainInfo = chainAgents[a.id];
       if (chainInfo && (chainInfo.registered || chainInfo.pkp_address)) {
         const wa = chainInfo.pkp_address || '';
         const waBal = chainInfo.usdc_balance != null ? parseFloat(chainInfo.usdc_balance).toFixed(2) : '—';
-        const waScan = 'https://sepolia.basescan.org/address/' + wa;
+        const waScan = 'https://basescan.org/address/' + wa;
         const waChainId = chainInfo.erc8004_agent_id != null ? ' #' + chainInfo.erc8004_agent_id : '';
-        mhtml += '<div class="overview-section"><div class="overview-label">Wallet' + (chainInfo.registered ? ' ⛓' + waChainId : '') + '</div>';
-        mhtml += '<div class="overview-value" style="font-size:12px;font-family:var(--mono)">';
-        if (wa) mhtml += '<a href="' + waScan + '" target="_blank" rel="noopener" style="color:var(--accent2)">' + escHtml(wa) + '</a><br>';
-        mhtml += '<span style="color:var(--green);font-size:14px;font-weight:600">' + waBal + ' USDC</span>';
+        mhtml += '<div class="overview-card">';
+        mhtml += '<div class="overview-label">Wallet' + (chainInfo.registered ? ' ⛓' + waChainId : '') + '</div>';
+        mhtml += '<div style="display:flex;align-items:center;justify-content:space-between">';
+        if (wa) mhtml += '<a href="' + waScan + '" target="_blank" rel="noopener" style="color:var(--accent2);font-size:11px;font-family:var(--mono)">' + escHtml(wa.slice(0,6) + '…' + wa.slice(-4)) + '</a>';
+        mhtml += '<span style="color:var(--green);font-size:16px;font-weight:700">' + waBal + ' USDC</span>';
         mhtml += '</div></div>';
       }
 
-      // Current Task
+      // ── Card 5: Current Task ──
       const ct = a.current_task;
       if (ct) {
-        mhtml += '<div class="overview-section"><div class="overview-label">Current Task</div>';
+        mhtml += '<div class="overview-card" style="border-color:var(--accent,#6c9fff)">';
+        mhtml += '<div class="overview-label">Current Task</div>';
         mhtml += '<div class="overview-task"><span class="overview-task-id">#' + escHtml(ct.id) + '</span> ';
         mhtml += escHtml(ct.description);
         mhtml += ' <span style="color:var(--fg3)">(' + escHtml(ct.status) + ')</span></div></div>';
       }
 
-      // Score breakdown
-      if (composite > 0) {
-        const dimNames = {task_completion:'Completion',output_quality:'Quality',improvement_rate:'Improvement',consistency:'Consistency',review_accuracy:'Review'};
-        mhtml += '<div class="overview-section"><div class="overview-label">Reputation — ' + composite.toFixed(1) + '</div>';
-        for (const [k,label] of Object.entries(dimNames)) {
-          const v = dims[k] || 0;
-          mhtml += '<div class="overview-score-row">'
-            + '<span class="overview-score-label">' + label + '</span>'
-            + '<div class="overview-score-bar"><div class="overview-score-fill" style="width:'+v+'%;background:'+scoreColor(v)+'"></div></div>'
-            + '<span class="overview-score-num">' + v.toFixed(0) + '</span></div>';
-        }
-        // Sparkline if history exists
-        const agentHist = scoreHistory[a.id] || [];
-        if (agentHist.length >= 2) {
-          mhtml += '<div style="margin-top:6px">' + buildSparkline(agentHist) + '</div>';
-        }
-        mhtml += '</div>';
-      }
-
-      // Recent Logs
+      // ── Card 6: Recent Activity ──
       const logs = a.recent_logs || [];
       if (logs.length) {
-        mhtml += '<div class="overview-section"><div class="overview-label">Recent Activity</div>';
+        mhtml += '<div class="overview-card">';
+        mhtml += '<div class="overview-label">Recent Activity</div>';
         mhtml += '<ul class="overview-logs">';
         for (const line of logs) mhtml += '<li>' + escHtml(line) + '</li>';
         mhtml += '</ul></div>';
@@ -2886,15 +3340,28 @@ async function loadAgents() {
       mhtml += '</div>';
       mhtml += '<div class="field"><label>Role</label><textarea class="input" id="editRole" rows="3">' + escHtml(a.role||'') + '</textarea></div>';
 
-      // Skills checkboxes
-      mhtml += '<div class="field"><label>Skills</label><div id="editSkillsBox" style="display:flex;flex-wrap:wrap;gap:6px">';
+      // Skills — collapsible section with search
       const agentSkills = new Set(a.skills||[]);
+      const enabledCount = agentSkills.size;
+      const totalCount = allSkills.length;
+      mhtml += '<div class="field"><label>Skills</label>';
+      mhtml += '<div class="skills-collapse">';
+      // Header (click to toggle)
+      mhtml += '<div class="skills-header" onclick="toggleSkills(this)">';
+      mhtml += '<span class="skills-summary"><span class="skills-count" id="skillsCount">' + enabledCount + '/' + totalCount + '</span> skills enabled</span>';
+      mhtml += '<span class="skills-chevron">▼</span>';
+      mhtml += '</div>';
+      // Body (collapsed by default)
+      mhtml += '<div class="skills-body" id="editSkillsBody">';
+      mhtml += '<input class="skills-search" placeholder="Search skills..." oninput="filterEditSkills(this.value)">';
+      mhtml += '<div class="skills-grid" id="editSkillsBox">';
       for (const sk of allSkills) {
         const checked = agentSkills.has(sk.name) ? ' checked' : '';
-        mhtml += '<label style="font-size:12px;color:var(--fg2);display:flex;align-items:center;gap:3px;cursor:pointer">'
-          + '<input type="checkbox" class="edit-skill-cb" value="' + escHtml(sk.name) + '"' + checked + '>' + escHtml(sk.name) + '</label>';
+        mhtml += '<label data-skill="' + escHtml(sk.name) + '">'
+          + '<input type="checkbox" class="edit-skill-cb" value="' + escHtml(sk.name) + '"' + checked
+          + ' onchange="updateSkillCount()">' + escHtml(sk.name) + '</label>';
       }
-      mhtml += '</div></div>';
+      mhtml += '</div></div></div></div>';
 
       // Fallback Models
       mhtml += '<div class="field"><label>Fallback Models (comma-separated)</label><input class="input" id="editFallbacks" value="' + escHtml((a.fallback_models||[]).join(', ')) + '"></div>';
@@ -2932,10 +3399,55 @@ async function loadAgents() {
       mhtml += '</div>'; // .agent-modal
       mhtml += '</div>'; // .agent-modal-overlay
       modalContainer.innerHTML = mhtml;
+      // Render radar charts + trend charts after DOM insertion
+      for (const ag of agents) {
+        const agSc = scores[ag.id] || {};
+        const agDims = agSc.dimensions || {};
+        requestAnimationFrame(() => renderRadarChart('radar_' + ag.id, agDims));
+        const hist = scoreHistory[ag.id] || [];
+        if (hist.length >= 2) {
+          requestAnimationFrame(() => renderTrendChart('trendChart_' + ag.id, hist));
+        }
+      }
     }
   } else {
     modalContainer.innerHTML = '';
   }
+}
+
+/* ── Skills collapse helpers ─────────────────────── */
+function toggleSkills(header) {
+  const body = header.nextElementSibling;
+  const isOpen = header.classList.toggle('open');
+  if (isOpen) {
+    body.classList.add('open');
+    // Measure natural height then animate
+    body.style.maxHeight = body.scrollHeight + 'px';
+    // Re-measure after content may shift
+    setTimeout(() => { if (body.classList.contains('open')) body.style.maxHeight = body.scrollHeight + 'px'; }, 360);
+  } else {
+    body.style.maxHeight = body.scrollHeight + 'px';
+    // Force reflow then collapse
+    body.offsetHeight;
+    body.style.maxHeight = '0';
+    body.classList.remove('open');
+  }
+}
+function filterEditSkills(query) {
+  const q = query.toLowerCase();
+  document.querySelectorAll('#editSkillsBox label').forEach(lbl => {
+    const name = (lbl.dataset.skill || '').toLowerCase();
+    lbl.classList.toggle('hidden', q && !name.includes(q));
+  });
+  // Re-adjust body height
+  const body = document.getElementById('editSkillsBody');
+  if (body && body.classList.contains('open')) body.style.maxHeight = body.scrollHeight + 'px';
+}
+function updateSkillCount() {
+  const total = document.querySelectorAll('.edit-skill-cb').length;
+  const checked = document.querySelectorAll('.edit-skill-cb:checked').length;
+  const el = document.getElementById('skillsCount');
+  if (el) el.textContent = checked + '/' + total;
 }
 
 function switchAgentTab(tab) {
@@ -3708,25 +4220,29 @@ async function loadUsage() {
 
 const CHANNEL_META = {
   telegram: {
-    icon: '💬', label: 'Telegram', sdk: 'python-telegram-bot',
+    label: 'Telegram', sdk: 'python-telegram-bot', brand: '#26A5E4',
+    svg: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12s5.37 12 12 12 12-5.37 12-12S18.63 0 12 0zm5.94 8.13l-1.97 9.28c-.15.67-.54.83-1.09.52l-3.01-2.22-1.45 1.4c-.16.16-.3.3-.61.3l.22-3.05 5.55-5.01c.24-.22-.05-.33-.37-.13L8.7 13.72l-2.97-.93c-.65-.2-.66-.65.14-.96l11.59-4.47c.54-.2 1.01.13.83.96l.04-.19z"/></svg>',
     tokenFields: ['bot_token'],
     guide: 'https://core.telegram.org/bots#how-do-i-create-a-bot',
     guideSteps: ['1. Message @BotFather on Telegram', '2. Send /newbot and follow prompts', '3. Copy the API token and paste below'],
   },
   discord: {
-    icon: '🎮', label: 'Discord', sdk: 'discord.py',
+    label: 'Discord', sdk: 'discord.py', brand: '#5865F2',
+    svg: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.32 4.37a19.8 19.8 0 00-4.89-1.52.07.07 0 00-.08.04c-.21.38-.44.87-.6 1.25a18.27 18.27 0 00-5.49 0 12.64 12.64 0 00-.62-1.25.08.08 0 00-.08-.04 19.74 19.74 0 00-4.89 1.52.07.07 0 00-.03.03C1.11 8.39.34 12.27.72 16.1a.08.08 0 00.03.06 19.9 19.9 0 005.99 3.03.08.08 0 00.09-.03c.46-.63.87-1.3 1.22-2a.08.08 0 00-.04-.11 13.1 13.1 0 01-1.87-.9.08.08 0 01-.01-.13c.13-.09.25-.19.37-.29a.08.08 0 01.08-.01c3.93 1.8 8.18 1.8 12.07 0a.08.08 0 01.08.01c.12.1.25.2.37.29a.08.08 0 01 0 .13c-.6.35-1.22.65-1.88.9a.08.08 0 00-.04.11c.36.7.77 1.37 1.22 2a.08.08 0 00.09.03 19.83 19.83 0 006-3.03.08.08 0 00.03-.05c.44-4.53-.73-8.46-3.1-11.95a.06.06 0 00-.03-.03zM8.02 13.72c-1.03 0-1.89-.95-1.89-2.12s.83-2.12 1.89-2.12c1.06 0 1.9.96 1.89 2.12 0 1.17-.84 2.12-1.89 2.12zm6.97 0c-1.03 0-1.89-.95-1.89-2.12s.83-2.12 1.89-2.12c1.06 0 1.9.96 1.89 2.12 0 1.17-.83 2.12-1.89 2.12z"/></svg>',
     tokenFields: ['bot_token'],
     guide: 'https://discord.com/developers/applications',
     guideSteps: ['1. Create app at Discord Developer Portal', '2. Go to Bot tab, Reset Token', '3. Enable Message Content Intent'],
   },
   feishu: {
-    icon: '🐦', label: 'Feishu', sdk: 'lark-oapi',
+    label: 'Feishu', sdk: 'lark-oapi', brand: '#3370FF',
+    svg: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M5.57 3.67a.5.5 0 01.81-.17l5.56 4.83a3 3 0 01.9 1.7l.93 5.1a.5.5 0 01-.77.51L5.73 11.1a3 3 0 01-1.33-1.98l-.64-4.1a.5.5 0 01.2-.48l1.6-1.28-.01.41zm7.14 5.38l5.66 4.91a.5.5 0 01-.12.82l-7.27 3.78a3 3 0 01-2.37.14l-4.04-1.4a.5.5 0 01-.12-.87l8.26-7.38z"/></svg>',
     tokenFields: ['app_id', 'app_secret'],
     guide: 'https://open.feishu.cn/document/home/introduction-to-custom-app-development/self-built-application-development-process',
     guideSteps: ['1. Create app at Feishu Open Platform', '2. Copy App ID and App Secret', '3. Enable Bot capability under Features'],
   },
   slack: {
-    icon: '💼', label: 'Slack', sdk: 'slack-sdk',
+    label: 'Slack', sdk: 'slack-sdk', brand: '#E01E5A',
+    svg: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M5.04 15.16a2.4 2.4 0 01-2.4 2.4 2.4 2.4 0 01-2.4-2.4 2.4 2.4 0 012.4-2.4h2.4v2.4zm1.2 0a2.4 2.4 0 012.4-2.4 2.4 2.4 0 012.4 2.4v6a2.4 2.4 0 01-2.4 2.4 2.4 2.4 0 01-2.4-2.4v-6zM8.64 5.04a2.4 2.4 0 01-2.4-2.4A2.4 2.4 0 018.64.24a2.4 2.4 0 012.4 2.4v2.4h-2.4zm0 1.2a2.4 2.4 0 012.4 2.4 2.4 2.4 0 01-2.4 2.4h-6a2.4 2.4 0 01-2.4-2.4 2.4 2.4 0 012.4-2.4h6zm10.12 2.4a2.4 2.4 0 012.4-2.4 2.4 2.4 0 012.4 2.4 2.4 2.4 0 01-2.4 2.4h-2.4v-2.4zm-1.2 0a2.4 2.4 0 01-2.4 2.4 2.4 2.4 0 01-2.4-2.4v-6a2.4 2.4 0 012.4-2.4 2.4 2.4 0 012.4 2.4v6zm-2.4 10.12a2.4 2.4 0 012.4 2.4 2.4 2.4 0 01-2.4 2.4 2.4 2.4 0 01-2.4-2.4v-2.4h2.4zm0-1.2a2.4 2.4 0 01-2.4-2.4 2.4 2.4 0 012.4-2.4h6a2.4 2.4 0 012.4 2.4 2.4 2.4 0 01-2.4 2.4h-6z"/></svg>',
     tokenFields: ['bot_token', 'app_token'],
     guide: 'https://api.slack.com/apps',
     guideSteps: ['1. Create app at Slack API portal', '2. Enable Socket Mode, copy App Token (xapp-...)', '3. Install to workspace, copy Bot Token (xoxb-...)'],
@@ -3742,10 +4258,12 @@ async function loadChannels() {
   _channelData = data.channels || [];
   const running = _channelData.filter(c => c.running).length;
   const enabled = _channelData.filter(c => c.enabled).length;
+  const disabled = _channelData.filter(c => !c.enabled).length;
 
   document.getElementById('chTotal').textContent = _channelData.length;
   document.getElementById('chRunning').textContent = running;
   document.getElementById('chEnabled').textContent = enabled;
+  document.getElementById('chDisabled').textContent = disabled;
 
   const grid = document.getElementById('channelGrid');
   if (!_channelData.length) {
@@ -3755,36 +4273,38 @@ async function loadChannels() {
 
   let h = '';
   for (const ch of _channelData) {
-    const meta = CHANNEL_META[ch.channel] || { icon: '📡', label: ch.channel, sdk: '?', tokenFields: [] };
+    const meta = CHANNEL_META[ch.channel] || { label: ch.channel, sdk: '?', tokenFields: [], brand: 'var(--accent)', svg: '' };
+    const dotCls = ch.running ? 'running' : ch.enabled ? 'enabled' : 'disabled';
     const statusColor = ch.running ? 'var(--green)' : ch.enabled ? 'var(--yellow)' : 'var(--fg3)';
-    const statusText = ch.running ? 'Running' : ch.enabled ? 'Enabled (not running)' : 'Disabled';
+    const statusText = ch.running ? 'Running' : ch.enabled ? 'Enabled' : 'Disabled';
     const tokenOk = ch.token_configured;
+    const brandColor = meta.brand || 'var(--accent)';
 
-    h += '<div class="agent-card" style="cursor:default">'
-      + '<div class="agent-card-header">'
-      + '<span style="font-size:22px">' + meta.icon + '</span>'
-      + '<span class="agent-name">' + meta.label + '</span>'
-      + '<span class="hb-dot ' + (ch.running ? 'online' : 'offline') + '"></span>'
-      + '</div>'
-      + '<div style="display:flex;gap:8px;align-items:center;margin:4px 0">'
-      + '<span style="color:' + statusColor + ';font-size:12px;font-weight:600">' + statusText + '</span>'
-      + '</div>'
-      + '<div style="display:flex;gap:8px;align-items:center;font-size:11px;color:var(--fg2)">'
+    h += '<div class="ch-card" style="--ch-brand:' + brandColor + '">'
+      + '<div class="ch-status-dot ' + dotCls + '"></div>'
+      // Header: logo + name
+      + '<div class="ch-header">'
+      + '<div class="ch-logo" style="background:color-mix(in srgb,' + brandColor + ' 14%,transparent);color:' + brandColor + '">'
+      + (meta.svg || '') + '</div>'
+      + '<div><div class="ch-title">' + escHtml(meta.label) + '</div>'
+      + '<div style="font-size:11px;color:' + statusColor + ';font-weight:600">' + statusText + '</div>'
+      + '</div></div>'
+      // Meta row
+      + '<div class="ch-meta">'
       + '<span class="key-badge ' + (tokenOk ? 'set' : 'unset') + '">'
       + (tokenOk ? 'Token Set' : 'Token Not Set') + '</span>'
-      + '<span>SDK: <code style="font-size:10px">' + meta.sdk + '</code></span>'
+      + '<span>SDK: <code>' + escHtml(meta.sdk) + '</code></span>'
       + '</div>';
 
     // Config details
     if (ch.config) {
       const mention = ch.mention_required !== undefined ? ch.mention_required : true;
-      h += '<div style="font-size:11px;color:var(--fg3);margin-top:4px">'
-        + 'Mention required: ' + (mention ? 'Yes' : 'No')
-        + '</div>';
+      h += '<div style="font-size:11px;color:var(--fg3)">'
+        + 'Mention required: ' + (mention ? 'Yes' : 'No') + '</div>';
     }
 
     // Action buttons
-    h += '<div style="display:flex;gap:6px;margin-top:8px;padding-top:8px;border-top:1px solid var(--bg3)">';
+    h += '<div class="ch-actions">';
     if (ch.enabled) {
       h += '<button class="btn btn-sm btn-danger" onclick="toggleChannel(\'' + ch.channel + '\',false)">Disable</button>';
     } else {
@@ -3805,12 +4325,15 @@ async function toggleChannel(name, enabled) {
 
 function showChannelConfig(name) {
   const ch = _channelData.find(c => c.channel === name);
-  const meta = CHANNEL_META[name] || { icon: '📡', label: name, tokenFields: [], guideSteps: [] };
+  const meta = CHANNEL_META[name] || { label: name, tokenFields: [], guideSteps: [], brand: 'var(--accent)', svg: '' };
 
   let h = '<div class="agent-modal-overlay" onclick="if(event.target===this)this.remove()">';
   h += '<div class="agent-modal">';
   h += '<div class="agent-modal-header">';
-  h += '<div class="agent-modal-title">' + meta.icon + ' Configure ' + meta.label + '</div>';
+  h += '<div class="agent-modal-title">'
+    + '<span class="ch-logo" style="width:24px;height:24px;background:color-mix(in srgb,' + (meta.brand||'var(--accent)') + ' 14%,transparent);color:' + (meta.brand||'var(--accent)') + '">'
+    + (meta.svg || '') + '</span>'
+    + ' Configure ' + escHtml(meta.label) + '</div>';
   h += '<button class="agent-modal-close" onclick="this.closest(\'.agent-modal-overlay\').remove()">&times;</button>';
   h += '</div>';
 
@@ -4179,7 +4702,7 @@ async function loadChain() {
   x402El.className = 'stat-value ' + (data.x402_enabled ? 'green' : '');
 
   // Agent table
-  const scanBase = 'https://sepolia.basescan.org/address/';
+  const scanBase = 'https://basescan.org/address/';
   const tbody = document.getElementById('chainAgentsBody');
   if (total === 0) {
     tbody.innerHTML = '<tr><td colspan="6" class="empty">No agents initialized on-chain</td></tr>';
@@ -4235,7 +4758,7 @@ async function loadChain() {
       const isError = rawHash.startsWith('0x_error') || rawHash.startsWith('0x_err');
       const hashDisplay = rawHash ? rawHash.slice(0, 10) + '…' : '—';
       const hashEl = !isError && rawHash.length === 66
-        ? '<a href="https://sepolia.basescan.org/tx/' + escHtml(rawHash) + '" target="_blank" rel="noopener" '
+        ? '<a href="https://basescan.org/tx/' + escHtml(rawHash) + '" target="_blank" rel="noopener" '
           + 'style="font-family:var(--mono);color:var(--accent2);text-decoration:none">' + hashDisplay + '</a>'
         : '<span style="font-family:var(--mono);color:' + (isError ? 'var(--red)' : 'var(--fg3)') + '">' + hashDisplay + '</span>';
       const agentName = CHAIN_NAME_MAP[tx.agent_id] || tx.agent_id || '';

@@ -90,6 +90,8 @@ class AgentConfig:
     kb_recall_budget:       int  = 800    # token budget for knowledge base recall
     cognition_file:         str  = ""     # path to cognition.md (legacy, optional)
     soul_file:              str  = ""     # path to soul.md (OpenClaw pattern, optional)
+    # System prompt budget (prevents exceeding model context window)
+    max_system_prompt_tokens: int = 12000  # ~48K chars; 0 = no limit
     # Tool configuration (OpenClaw-inspired)
     tools_config:           dict = field(default_factory=dict)  # {profile, allow, deny}
 
@@ -122,6 +124,9 @@ class BaseAgent:
         self._tools_md: str = ""           # cached TOOLS.md (per-agent tool spec)
         self._user_md: str = ""            # cached USER.md (user identity)
         os.makedirs(MAILBOX_DIR, exist_ok=True)
+        # Session transcript persistence
+        self._transcript_dir = os.path.join("memory", "transcripts")
+        os.makedirs(self._transcript_dir, exist_ok=True)
         # Load soul + cognition + tools + user profiles
         self._load_soul()
         self._load_tools_md()
@@ -145,6 +150,7 @@ class BaseAgent:
         # Try soul.md first (OpenClaw pattern)
         soul_paths = [
             self.cfg.soul_file,
+            os.path.join("skills", "agents", self.cfg.agent_id, "soul.md"),
             os.path.join("docs", self.cfg.agent_id, "soul.md"),
             os.path.join("docs", "shared", "soul.md"),
         ]
@@ -162,6 +168,7 @@ class BaseAgent:
         # Fallback: cognition.md (legacy)
         cognition_paths = [
             self.cfg.cognition_file,
+            os.path.join("skills", "agents", self.cfg.agent_id, "cognition.md"),
             os.path.join("docs", self.cfg.agent_id, "cognition.md"),
             os.path.join("docs", "shared", "cognition.md"),
         ]
@@ -304,13 +311,19 @@ class BaseAgent:
 
         # 5b. Tools prompt (OpenClaw-inspired tool system)
         tools_section = ""
+        tools_schemas = None
         tools_cfg = self.cfg.tools_config
         if tools_cfg:
             try:
-                from core.tools import build_tools_prompt
+                from core.tools import build_tools_prompt, build_tools_schemas
                 tools_prompt = build_tools_prompt({"tools": tools_cfg})
                 if tools_prompt:
                     tools_section = f"\n\n{tools_prompt}"
+                # Native function calling only for executor agents (coding/full)
+                # Planners (minimal profile) must generate TASK: lines, not tool_calls
+                tools_profile = tools_cfg.get("profile", "minimal")
+                if tools_profile in ("coding", "full"):
+                    tools_schemas = build_tools_schemas({"tools": tools_cfg})
             except Exception as e:
                 logger.warning("[%s] tools prompt build failed: %s",
                                self.cfg.agent_id, e)
@@ -357,22 +370,21 @@ class BaseAgent:
                         f"Use read_file/write_file with workspace/ prefix "
                         f"to collaborate with other agents.\n"
                     )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Workspace listing failed: %s", e)
 
-        system_prompt = (
-            f"You are {self.cfg.agent_id}.\n\n"
-            f"## Role\n{self.cfg.role}"
-            f"{soul_section}"
-            f"{tools_md_section}"
-            f"{user_section}\n\n"
-            f"## Skills\n{skills_text}"
-            f"{tools_section}"
-            f"{docs_section}"
-            f"{memory_block}"
-            f"{history_section}"
-            f"{workspace_section}\n\n"
-            f"## Shared Context\n{context_snap}\n"
+        system_prompt = self._budget_system_prompt(
+            role_section=self.cfg.role,
+            soul_section=soul_section,
+            tools_md_section=tools_md_section,
+            user_section=user_section,
+            skills_text=skills_text,
+            tools_section=tools_section,
+            docs_section=docs_section,
+            memory_block=memory_block,
+            history_section=history_section,
+            workspace_section=workspace_section,
+            context_snap=context_snap,
         )
 
         messages = [
@@ -399,19 +411,23 @@ class BaseAgent:
                     )
                     logger.info("[%s] context compacted to %d messages",
                                 self.cfg.agent_id, len(messages))
+                    self.log_transcript("context_compacted", task.task_id,
+                                        f"Compacted to {len(messages)} messages")
             except Exception as e:
                 logger.warning("[%s] compaction failed, using full history: %s",
                                self.cfg.agent_id, e)
 
         # 6. Call LLM (streaming if available, with partial result updates)
-        result = await self._call_llm_streaming(messages, task)
+        result = await self._call_llm_streaming(messages, task,
+                                                 tools_schemas=tools_schemas)
 
         # 6b. Strip <think>...</think> blocks from model output
         result = _strip_think(result)
 
         # 7. Tool execution loop — parse tool calls, execute, feed back results
         if tools_cfg:
-            result = await self._tool_loop(messages, task, result)
+            result = await self._tool_loop(messages, task, result,
+                                           tools_schemas=tools_schemas)
 
         # Update short-term memory
         self._short_term.append({"role": "user", "content": task.description})
@@ -450,20 +466,27 @@ class BaseAgent:
 
         # Inject tools section so agent has tool access
         tools_cfg = self.cfg.tools_config
+        tools_schemas = None
         if tools_cfg:
             try:
-                from core.tools import build_tools_prompt
+                from core.tools import build_tools_prompt, build_tools_schemas
                 tools_prompt = build_tools_prompt({"tools": tools_cfg})
                 if tools_prompt:
                     system_prompt += f"\n{tools_prompt}\n"
-            except Exception:
-                pass
+                tools_schemas = build_tools_schemas({"tools": tools_cfg})
+            except Exception as e:
+                logger.error("[%s] Failed to load tools: %s",
+                             self.cfg.agent_id, e)
+
+        llm_kwargs: dict = {}
+        if tools_schemas:
+            llm_kwargs["tools"] = tools_schemas
 
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt},
         ]
-        result = await self.llm.chat(messages, self.cfg.model)
+        result = await self.llm.chat(messages, self.cfg.model, **llm_kwargs)
 
         # Mini tool loop (max 3 rounds)
         if tools_cfg:
@@ -487,17 +510,27 @@ class BaseAgent:
                         "## Tool Execution Results\n\n"
                         + "\n\n".join(feedback)
                         + "\n\nContinue with your task."})
-                    result = await self.llm.chat(messages, self.cfg.model)
-            except Exception:
-                pass
+                    result = await self.llm.chat(messages, self.cfg.model,
+                                                 **llm_kwargs)
+            except Exception as e:
+                logger.error("[%s] Tool execution loop failed: %s",
+                             self.cfg.agent_id, e)
 
         return result
 
-    async def _call_llm_streaming(self, messages: list[dict], task: "Task") -> str:
+    async def _call_llm_streaming(self, messages: list[dict], task: "Task",
+                                    tools_schemas: list[dict] | None = None) -> str:
         """
         Call LLM with streaming if available, writing partial results to task board.
         Falls back to non-streaming chat() if chat_stream() is not available.
+
+        When tools_schemas is provided, passes them to the adapter for
+        native function calling (MiniMax, OpenAI, etc.).
         """
+        llm_kwargs: dict = {}
+        if tools_schemas:
+            llm_kwargs["tools"] = tools_schemas
+
         # Try streaming first
         if hasattr(self.llm, "chat_stream"):
             try:
@@ -505,7 +538,9 @@ class BaseAgent:
                 board = TaskBoard()
                 chunks: list[str] = []
                 update_interval = 0
-                async for chunk in self.llm.chat_stream(messages, self.cfg.model):
+                async for chunk in self.llm.chat_stream(
+                    messages, self.cfg.model, **llm_kwargs
+                ):
                     chunks.append(chunk)
                     update_interval += 1
                     # Write partial result every 5 chunks to avoid excessive I/O
@@ -527,11 +562,12 @@ class BaseAgent:
                         circuit.is_open = False
 
         # Fallback: non-streaming
-        return await self.llm.chat(messages, self.cfg.model)
+        return await self.llm.chat(messages, self.cfg.model, **llm_kwargs)
 
     async def _tool_loop(self, messages: list[dict], task: "Task",
                          initial_result: str,
-                         max_rounds: int = 5) -> str:
+                         max_rounds: int = 5,
+                         tools_schemas: list[dict] | None = None) -> str:
         """
         Tool execution loop — parse tool calls from LLM output, execute them,
         feed results back to the LLM for a follow-up response.
@@ -587,20 +623,191 @@ class BaseAgent:
             messages.append({"role": "user", "content": tool_feedback})
 
             # Call LLM again with tool results
-            result = await self._call_llm_streaming(messages, task)
+            result = await self._call_llm_streaming(messages, task,
+                                                     tools_schemas=tools_schemas)
             result = _strip_think(result)
 
         return result
 
-    def _recall_long_term(self, query: str) -> str:
-        """
-        Recall from all long-term memory layers.
-        Returns formatted text for system prompt injection.
+    @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        """Rough token count — ~4 chars per token for English/mixed-lang text."""
+        return len(text) // 4 if text else 0
 
-        Progressive loading (OpenViking L0→L1→L2):
-        - Episodic: recent episodes, cases, patterns
-        - Knowledge base: shared notes, cross-agent insights
-        - Vector: hybrid BM25+ChromaDB results
+    def _budget_system_prompt(
+        self,
+        *,
+        role_section: str,
+        soul_section: str,
+        tools_md_section: str,
+        user_section: str,
+        skills_text: str,
+        tools_section: str,
+        docs_section: str,
+        memory_block: str,
+        history_section: str,
+        workspace_section: str,
+        context_snap: str,
+    ) -> str:
+        """Assemble system prompt and trim to fit within token budget.
+
+        Priority (highest → lowest):
+          P0: role identity + soul (never trimmed)
+          P1: tools_md + tools_section + user_section (rarely trimmed)
+          P2: skills_text (trimmed first — can be very large)
+          P3: docs_section, memory_block, history_section
+          P4: workspace_section, context_snap (trimmed last)
+
+        If max_system_prompt_tokens <= 0, no budget is applied.
+        """
+        budget = self.cfg.max_system_prompt_tokens
+        if budget <= 0:
+            # No budget — assemble as-is
+            return (
+                f"You are {self.cfg.agent_id}.\n\n"
+                f"## Role\n{role_section}"
+                f"{soul_section}"
+                f"{tools_md_section}"
+                f"{user_section}\n\n"
+                f"## Skills\n{skills_text}"
+                f"{tools_section}"
+                f"{docs_section}"
+                f"{memory_block}"
+                f"{history_section}"
+                f"{workspace_section}\n\n"
+                f"## Shared Context\n{context_snap}\n"
+            )
+
+        # ── Build in priority order, track running total ──
+        # P0 — identity (never trimmed)
+        header = f"You are {self.cfg.agent_id}.\n\n## Role\n{role_section}{soul_section}"
+        used = self._estimate_tokens(header)
+
+        # P1 — tools + user
+        p1_parts = [tools_md_section, user_section, tools_section]
+        for part in p1_parts:
+            used += self._estimate_tokens(part)
+
+        # Remaining budget for P2–P4
+        remaining = max(budget - used, 200)  # always keep at least 200 tokens
+
+        # P2 — skills (biggest contributor, trim if needed)
+        skills_tokens = self._estimate_tokens(skills_text)
+        if skills_tokens > remaining * 0.6:
+            # Trim skills to 60% of remaining budget
+            max_chars = int(remaining * 0.6 * 4)
+            if len(skills_text) > max_chars:
+                skills_text = skills_text[:max_chars] + "\n\n[... skills truncated for context budget ...]\n"
+                logger.warning(
+                    "[%s] system prompt budget: skills trimmed from %d to %d tokens",
+                    self.cfg.agent_id, skills_tokens, max_chars // 4)
+
+        # Recalculate remaining after skills
+        used += self._estimate_tokens(skills_text)
+        remaining = max(budget - used, 100)
+
+        # P3 — docs, memory, history (trim proportionally if over budget)
+        p3_sections = [
+            ("docs", docs_section),
+            ("memory", memory_block),
+            ("history", history_section),
+        ]
+        p3_total = sum(self._estimate_tokens(s) for _, s in p3_sections)
+        if p3_total > remaining * 0.8:
+            # Trim each proportionally to fit 80% of remaining
+            max_p3_chars = int(remaining * 0.8 * 4)
+            trimmed_p3 = []
+            for label, section in p3_sections:
+                if not section:
+                    trimmed_p3.append(("", label))
+                    continue
+                share = max(len(section) * max_p3_chars // max(p3_total * 4, 1), 100)
+                if len(section) > share:
+                    section = section[:share] + f"\n[... {label} truncated ...]\n"
+                    logger.warning(
+                        "[%s] system prompt budget: %s trimmed to %d chars",
+                        self.cfg.agent_id, label, share)
+                trimmed_p3.append((section, label))
+            docs_section = trimmed_p3[0][0]
+            memory_block = trimmed_p3[1][0]
+            history_section = trimmed_p3[2][0]
+
+        # P4 — workspace, context (lowest priority, hard cap)
+        used += sum(self._estimate_tokens(s) for s in [docs_section, memory_block, history_section])
+        remaining = max(budget - used, 50)
+        p4_budget_chars = remaining * 4
+
+        if len(workspace_section) + len(context_snap) > p4_budget_chars:
+            # Trim context first (it's the least critical)
+            ctx_limit = max(p4_budget_chars - len(workspace_section), 200)
+            if len(context_snap) > ctx_limit:
+                context_snap = context_snap[:ctx_limit] + "\n[... context truncated ...]\n"
+                logger.warning("[%s] system prompt budget: context_snap trimmed to %d chars",
+                               self.cfg.agent_id, ctx_limit)
+            if len(workspace_section) > p4_budget_chars // 2:
+                workspace_section = workspace_section[:p4_budget_chars // 2] + "\n[... truncated ...]\n"
+
+        prompt = (
+            f"{header}"
+            f"{tools_md_section}"
+            f"{user_section}\n\n"
+            f"## Skills\n{skills_text}"
+            f"{tools_section}"
+            f"{docs_section}"
+            f"{memory_block}"
+            f"{history_section}"
+            f"{workspace_section}\n\n"
+            f"## Shared Context\n{context_snap}\n"
+        )
+
+        final_tokens = self._estimate_tokens(prompt)
+        if final_tokens > budget:
+            logger.warning(
+                "[%s] system prompt (%d est. tokens) still exceeds budget (%d) after trimming",
+                self.cfg.agent_id, final_tokens, budget)
+
+        return prompt
+
+    def _recall_long_term(self, query: str) -> str:
+        """Recall from all long-term memory layers for system prompt injection.
+
+        Assembles contextual memory from five independent sources, each
+        failure-tolerant (a failing source is skipped, never fatal).
+        Results are concatenated and injected into the system prompt
+        before the LLM call in ``BaseAgent.run()``.
+
+        **Source priority (highest → lowest):**
+
+        1. **Hot Memory (MEMORY.md)** — hand-curated P0/P1/P2
+           crystallised knowledge per agent.  Loaded from
+           ``memory/agents/{agent_id}/MEMORY.md``, truncated to 1500
+           chars.  Always included when the file exists.
+        2. **Episodic Memory** — recent task episodes, failure cases,
+           and behavioural patterns from ``EpisodicMemory.recall()``.
+           Budget-controlled via ``cfg.episodic_recall_budget`` tokens.
+        3. **Knowledge Base** — shared cross-agent notes and insights
+           from ``KnowledgeBase.recall()``.  Budget-controlled via
+           ``cfg.kb_recall_budget`` tokens.
+        4. **Vector / BM25 Hybrid** — semantic search via ChromaDB +
+           BM25 reranking from ``HybridMemory.query()``.  Returns
+           ``cfg.recall_top_k`` results (default 5), each truncated
+           to 300 chars.
+        5. **FTS5 Search (QMD)** — full-text SQLite search as an
+           optional augmentation.  Returns up to 3 results with
+           title + 200-char snippets.
+
+        The total recall output is bounded by ``_budget_system_prompt()``
+        which trims low-priority sections when the system prompt
+        approaches the configured token budget.
+
+        Args:
+            query: The user's task description or message, used as the
+                   search query across all memory layers.
+
+        Returns:
+            Concatenated markdown sections (``## Persistent Memory``,
+            ``## Vector Memory Recall``, etc.) ready for system prompt
+            injection.  Empty string if all sources return nothing.
         """
         parts = []
 
@@ -627,6 +834,25 @@ class BaseAgent:
                     parts.append(ep_recall)
             except Exception as e:
                 logger.debug("[%s] episodic recall failed: %s",
+                             self.cfg.agent_id, e)
+
+        # Error pattern recall: inject failure history for similar tasks
+        if self.episodic:
+            try:
+                keywords = [w for w in query.split()[:10] if len(w) > 2]
+                error_episodes = self.episodic.query_error_patterns(
+                    keywords=keywords, limit=3)
+                if error_episodes:
+                    err_lines = ["## Past Failures (similar tasks)"]
+                    for ep in error_episodes:
+                        err_type = ep.get("error_type", "unknown")
+                        err_lines.append(
+                            f"- **{ep.get('title', '?')}** [{ep.get('outcome','?')}]"
+                            f" error_type={err_type}\n"
+                            f"  Preview: {(ep.get('result_preview', '') or '')[:200]}")
+                    parts.append("\n".join(err_lines))
+            except Exception as e:
+                logger.debug("[%s] error pattern recall failed: %s",
                              self.cfg.agent_id, e)
 
         # Knowledge base recall (shared)
@@ -679,10 +905,16 @@ class BaseAgent:
 
         return "\n".join(parts)
 
-    def _store_to_memory(self, task: "Task", result: str):
+    def _store_to_memory(self, task: "Task", result: str,
+                         outcome: str = "success",
+                         error_type: str | None = None):
         """
         Store completed task to long-term memory layers.
         Non-blocking, failure-tolerant.
+
+        Args:
+            outcome: "success", "failure", or "partial"
+            error_type: Error category for pattern learning
         """
         # Store to episodic memory
         if self.episodic:
@@ -693,12 +925,17 @@ class BaseAgent:
                     task_id=task.task_id,
                     task_description=task.description,
                     result=result,
+                    outcome=outcome,
+                    error_type=error_type,
                 )
                 self.episodic.save_episode(episode)
                 # Append to daily log
+                status_icon = "✓" if outcome == "success" else "✗"
                 self.episodic.append_daily_log(
-                    f"**Task:** {task.description[:100]}\n"
-                    f"**Result:** {result[:200]}..."
+                    f"{status_icon} **Task:** {task.description[:100]}\n"
+                    f"**Outcome:** {outcome}"
+                    + (f" (error: {error_type})" if error_type else "") +
+                    f"\n**Result:** {result[:200]}..."
                 )
             except Exception as e:
                 logger.debug("[%s] episodic store failed: %s",
@@ -722,37 +959,70 @@ class BaseAgent:
 
     def read_mail(self) -> list[dict]:
         """
-        Read and drain mailbox (file-locked).
-        Returns list of message dicts. Clears the mailbox file after reading.
+        Read and drain mailbox using move-then-delete for crash safety.
+
+        Instead of read-then-truncate (which loses messages on crash),
+        we: rename → parse → delete.  If the process crashes after rename
+        but before delete, the .processing file survives and is recovered
+        on the next call.
         """
         path = os.path.join(MAILBOX_DIR, f"{self.cfg.agent_id}.jsonl")
+        processing_path = path + ".processing"
         lock = FileLock(path + ".lock")
 
+        messages: list[dict] = []
+
         with lock:
-            if not os.path.exists(path):
-                return []
+            # ── Phase 1: recover any previously interrupted read ──
+            if os.path.exists(processing_path):
+                logger.warning("[%s] recovering unprocessed mailbox from previous crash",
+                               self.cfg.agent_id)
+                messages.extend(self._parse_mailbox_file(processing_path))
+                try:
+                    os.remove(processing_path)
+                except OSError:
+                    pass
 
-            messages = []
-            try:
-                with open(path, "r") as f:
-                    for line in f:
-                        line = line.strip()
-                        if line:
-                            try:
-                                messages.append(json.loads(line))
-                            except json.JSONDecodeError:
-                                logger.warning("[%s] corrupt mailbox line: %s",
-                                               self.cfg.agent_id, line[:80])
-            except Exception as e:
-                logger.error("[%s] failed to read mailbox: %s",
-                             self.cfg.agent_id, e)
-                return []
+            # ── Phase 2: atomically move current mailbox to .processing ──
+            if os.path.exists(path):
+                try:
+                    os.rename(path, processing_path)
+                except OSError as e:
+                    logger.error("[%s] failed to rename mailbox for safe read: %s",
+                                 self.cfg.agent_id, e)
+                    # Fallback: read in-place (old behaviour)
+                    messages.extend(self._parse_mailbox_file(path))
+                    with open(path, "w") as f:
+                        pass
+                    return messages
 
-            # Drain: truncate file
-            with open(path, "w") as f:
-                pass
+                messages.extend(self._parse_mailbox_file(processing_path))
+
+                # ── Phase 3: delete .processing (all messages now in memory) ──
+                try:
+                    os.remove(processing_path)
+                except OSError:
+                    pass
 
         return messages
+
+    def _parse_mailbox_file(self, filepath: str) -> list[dict]:
+        """Parse a JSONL mailbox file, skipping corrupt lines."""
+        results: list[dict] = []
+        try:
+            with open(filepath, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            results.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            logger.warning("[%s] corrupt mailbox line: %s",
+                                           self.cfg.agent_id, line[:80])
+        except Exception as e:
+            logger.error("[%s] failed to read mailbox file %s: %s",
+                         self.cfg.agent_id, filepath, e)
+        return results
 
     def send_mail(self, to_agent_id: str, content: str,
                   msg_type: str = "message"):
@@ -775,3 +1045,56 @@ class BaseAgent:
 
         logger.debug("[%s] sent %s mail to %s",
                      self.cfg.agent_id, msg_type, to_agent_id)
+
+    # ── Session Transcript ─────────────────────────────────────────────────
+
+    def log_transcript(self, event: str, task_id: str = "",
+                       content: str = "", metadata: dict | None = None):
+        """Append a structured event to the session transcript.
+
+        Records the full chain: user → planner → executor → reviewer.
+        Stored as JSONL for easy parsing and dashboard display.
+
+        Args:
+            event: Event type ("task_received", "task_claimed", "task_completed",
+                   "mail_sent", "mail_received", "critique", "closeout")
+            task_id: Related task ID
+            content: Event content (truncated for space)
+            metadata: Optional additional data (provenance, scores, etc.)
+        """
+        entry = {
+            "agent_id": self.cfg.agent_id,
+            "event": event,
+            "task_id": task_id,
+            "content": content[:500] if content else "",
+            "ts": time.time(),
+        }
+        if metadata:
+            entry["metadata"] = metadata
+        try:
+            path = os.path.join(self._transcript_dir, "session_transcript.jsonl")
+            with open(path, "a") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+
+    @staticmethod
+    def read_transcript(limit: int = 50) -> list[dict]:
+        """Read the most recent transcript entries."""
+        path = os.path.join("memory", "transcripts", "session_transcript.jsonl")
+        if not os.path.exists(path):
+            return []
+        entries: list[dict] = []
+        try:
+            with open(path) as f:
+                lines = f.readlines()
+            for line in lines[-limit:]:
+                line = line.strip()
+                if line:
+                    try:
+                        entries.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
+        except OSError:
+            pass
+        return entries

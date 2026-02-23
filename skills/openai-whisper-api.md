@@ -45,7 +45,7 @@ Set `OPENAI_API_KEY`, or configure it in `~/.Cleo/Cleo.json`:
 {
   skills: {
     "openai-whisper-api": {
-      apiKey: "OPENAI_KEY_HERE",
+      apiKey: "sk-proj-xxxx...your-openai-api-key-here",
     },
   },
 }
