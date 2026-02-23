@@ -97,9 +97,12 @@ def setup_logging(level: str = "INFO", structured: bool = False,
     console.setLevel(logging.WARNING)  # Only warnings+ on console
     root.addHandler(console)
 
-    # File handler (structured or not)
+    # File handler with rotation (10 MB per file, keep 5 backups)
+    from logging.handlers import RotatingFileHandler
     log_path = os.path.join(log_dir, "cleo.log")
-    file_handler = logging.FileHandler(log_path, encoding="utf-8")
+    file_handler = RotatingFileHandler(
+        log_path, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8",
+    )
     file_handler.setFormatter(formatter)
     file_handler.setLevel(getattr(logging, level.upper(), logging.INFO))
     root.addHandler(file_handler)

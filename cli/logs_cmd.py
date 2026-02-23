@@ -1,12 +1,16 @@
 """Log viewer CLI commands."""
 from __future__ import annotations
 
+import json
+import sys
+
 from core.theme import theme as _theme
 
 
 def cmd_logs(follow: bool = False, agent: str = "",
-             level: str = "", since: str = "", lines: int = 50):
-    """View aggregated agent logs."""
+             level: str = "", since: str = "", lines: int = 50,
+             export: str = ""):
+    """View aggregated agent logs. Supports --export json/jsonl for structured output."""
     try:
         from rich.console import Console
         console = Console()
@@ -16,6 +20,26 @@ def cmd_logs(follow: bool = False, agent: str = "",
     from core.log_viewer import LogViewer
     viewer = LogViewer()
 
+    # ── Export mode: output structured JSON/JSONL to stdout ────────────
+    if export in ("json", "jsonl"):
+        entries = viewer.tail(n=lines, agent=agent,
+                              level=level, since=since)
+        if export == "json":
+            # Single JSON array
+            out = []
+            for entry in entries:
+                out.append(_entry_to_dict(entry))
+            json.dump(out, sys.stdout, ensure_ascii=False, indent=2, default=str)
+            sys.stdout.write("\n")
+        else:
+            # JSONL: one JSON object per line
+            for entry in entries:
+                json.dump(_entry_to_dict(entry), sys.stdout,
+                          ensure_ascii=False, default=str)
+                sys.stdout.write("\n")
+        return
+
+    # ── Follow mode ───────────────────────────────────────────────────
     if follow:
         if console:
             console.print(f"[{_theme.muted}]Following logs (Ctrl+C to stop)...[/{_theme.muted}]\n")
@@ -48,3 +72,16 @@ def cmd_logs(follow: bool = False, agent: str = "",
                 console.print(line)
             else:
                 print(line)
+
+
+def _entry_to_dict(entry) -> dict:
+    """Convert a log entry (dict or object) to a plain dict for JSON export."""
+    if isinstance(entry, dict):
+        return entry
+    # LogViewer entries are typically dicts, but handle object-like entries
+    result = {}
+    for key in ("ts", "level", "logger", "msg", "agent", "cid", "extra"):
+        val = entry.get(key) if isinstance(entry, dict) else getattr(entry, key, None)
+        if val is not None:
+            result[key] = val
+    return result

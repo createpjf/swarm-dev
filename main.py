@@ -86,6 +86,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     _docs_base = "https://github.com/user/cleo-dev/wiki/cli"
 
+    # ── version (extended info) ──────────────────────────────────────────
+    sub.add_parser("version", help="Show extended version info (git, Python, deps)")
+
     # ── onboard / init / configure ───────────────────────────────────────
     p_onboard = sub.add_parser("onboard", help="Interactive setup wizard",
                                epilog=f"Docs: {_docs_base}#onboard")
@@ -246,6 +249,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_update = sub.add_parser("update", help="Pull latest from GitHub and reinstall")
     p_update.add_argument("--branch", default="",
                           help="Branch to update from (default: current branch)")
+    p_update.add_argument("--check", action="store_true",
+                          help="Check for updates without pulling (non-destructive)")
 
     # ── search ───────────────────────────────────────────────────────────
     p_search = sub.add_parser("search", help="Search documents and memory (FTS5)")
@@ -291,6 +296,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Time range filter (e.g., 1h, 30m, 2d)")
     p_logs.add_argument("-n", "--lines", type=int, default=50,
                         help="Number of lines to show (default: 50)")
+    p_logs.add_argument("--export", default="",
+                        choices=["json", "jsonl", ""],
+                        help="Export logs in structured format (json or jsonl)")
 
     # ── plugins ──────────────────────────────────────────────────────────
     p_plugins = sub.add_parser("plugins", help="Plugin management")

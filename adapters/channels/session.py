@@ -212,9 +212,9 @@ class SessionStore:
             if len(content) > 800:
                 content = content[:750] + "…(truncated)"
             if role == "user":
-                prefix = f"**[{user}]**" if user else "**[用户]**"
+                prefix = f"**[{user}]**" if user else "**[User]**"
             else:
-                prefix = "**[助手]**"
+                prefix = "**[Assistant]**"
             lines.append(f"{prefix} {content}\n")
 
         return "\n".join(lines)

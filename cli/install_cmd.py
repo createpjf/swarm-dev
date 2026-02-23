@@ -169,7 +169,7 @@ def cmd_uninstall(console=None):
         _print(f"  [{_theme.muted}]Nothing to uninstall.[/{_theme.muted}]")
 
 
-def cmd_update(branch: str = "", console=None):
+def cmd_update(branch: str = "", check_only: bool = False, console=None):
     """Pull latest code from GitHub and reinstall dependencies."""
     import subprocess
     if console is None:
@@ -251,6 +251,11 @@ def cmd_update(branch: str = "", console=None):
     if result.stdout.strip():
         for line in result.stdout.strip().split("\n")[-3:]:
             _print(f"  [{_theme.muted}]{line.strip()}[/{_theme.muted}]")
+
+    # --check mode: just report availability, don't pull
+    if check_only:
+        _print(f"  [{_theme.muted}]Run 'cleo update' to apply these changes.[/{_theme.muted}]")
+        return
 
     result = subprocess.run(
         ["git", "status", "--porcelain"],

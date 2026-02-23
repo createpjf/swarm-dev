@@ -231,14 +231,14 @@ class MiniMaxTTS(TTSProvider):
     name = "minimax"
 
     VOICES = [
-        "male-qn-qingse",       # 青涩青年
-        "female-shaonv",        # 少女
-        "male-qn-jingying",     # 精英青年
-        "female-yujie",         # 御姐
-        "presenter_male",       # 主持人男
-        "presenter_female",     # 主持人女
-        "audiobook_male_1",     # 有声书男1
-        "audiobook_female_1",   # 有声书女1
+        "male-qn-qingse",       # youthful male
+        "female-shaonv",        # young girl
+        "male-qn-jingying",     # elite young male
+        "female-yujie",         # mature female
+        "presenter_male",       # male presenter
+        "presenter_female",     # female presenter
+        "audiobook_male_1",     # audiobook male 1
+        "audiobook_female_1",   # audiobook female 1
     ]
 
     def __init__(self, api_key: str = "", group_id: str = ""):

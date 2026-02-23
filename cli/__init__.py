@@ -11,6 +11,10 @@ def dispatch_command(args):
         from cli.chat import interactive_main
         interactive_main()
 
+    elif cmd == "version":
+        from cli.version_cmd import cmd_version
+        cmd_version(json_output=json_output)
+
     elif cmd in ("onboard", "init", "configure"):
         from cli.chat import cmd_init
         cmd_init(
@@ -114,7 +118,8 @@ def dispatch_command(args):
 
     elif cmd == "update":
         from cli.install_cmd import cmd_update
-        cmd_update(branch=args.branch)
+        cmd_update(branch=args.branch,
+                   check_only=getattr(args, "check", False))
 
     elif cmd == "search":
         from cli.memory_cmd import cmd_search
@@ -136,7 +141,8 @@ def dispatch_command(args):
     elif cmd == "logs":
         from cli.logs_cmd import cmd_logs
         cmd_logs(follow=args.follow, agent=args.agent,
-                 level=args.level, since=args.since, lines=args.lines)
+                 level=args.level, since=args.since, lines=args.lines,
+                 export=getattr(args, "export", ""))
 
     elif cmd == "plugins":
         from cli.plugins_cmd import cmd_plugins

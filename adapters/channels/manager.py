@@ -578,7 +578,7 @@ class ChannelManager:
         result = await self._wait_for_result(
             task_id, msg, adapter)
 
-        if result:
+        if result is not None:
             # Save assistant response to session conversation history
             self._sessions.add_message(sid, "assistant", result[:2000])
 
@@ -795,9 +795,9 @@ class ChannelManager:
                         # If still has TASK: lines after extra wait,
                         # fall through to collect executor results instead
                         if _re.search(r'^TASK:', result_text, _re.MULTILINE):
-                            result = board.collect_results(task_id)
-                            if result:
-                                return self._clean_result(result)
+                            collected = board.collect_results(task_id)
+                            if collected:
+                                return self._clean_result(collected)
                             # Last resort: clean the raw planner output
                     return self._clean_result(result_text)
                 # Maybe closeout hasn't written yet, wait briefly
@@ -808,7 +808,7 @@ class ChannelManager:
                     return self._clean_result(root["result"])
                 # Fallback to collected executor results
                 result = board.collect_results(task_id)
-                return self._clean_result(result) if result else "(无结果)"
+                return self._clean_result(result) if result else "(No result produced)"
 
             # Refresh typing indicator every 4s (Telegram typing lasts 5s)
             now = time.time()
@@ -852,7 +852,10 @@ class ChannelManager:
         text = re.sub(r'\n---\n', '\n\n', text)
         # Collapse excessive blank lines
         text = re.sub(r'\n{3,}', '\n\n', text)
-        return text.strip()
+        cleaned = text.strip()
+        if not cleaned:
+            return "(Task completed — no displayable output)"
+        return cleaned
 
     async def _health_monitor(self):
         """Periodically check adapter health and auto-reconnect dead ones."""
