@@ -14,9 +14,14 @@ logger = logging.getLogger(__name__)
 try:
     import chromadb
     _HAS_CHROMA = True
-except (ImportError, Exception):
+    _CHROMA_ERROR = ""
+except ImportError:
+    _HAS_CHROMA = False
+    _CHROMA_ERROR = "not_installed"
+except Exception as _exc:
     # chromadb may fail on Python 3.14+ (pydantic v1 incompatibility)
     _HAS_CHROMA = False
+    _CHROMA_ERROR = str(_exc)
 
 
 def ChromaAdapter(persist_dir: str = "memory/chroma",
@@ -34,10 +39,17 @@ def ChromaAdapter(persist_dir: str = "memory/chroma",
     if _HAS_CHROMA:
         return _ChromaAdapterImpl(persist_dir, embedding_fn=embedding_fn)
     else:
-        logger.warning(
-            "chromadb not installed — falling back to MockMemory. "
-            "Install with: pip install chromadb"
-        )
+        if _CHROMA_ERROR and _CHROMA_ERROR != "not_installed":
+            logger.warning(
+                "chromadb installed but failed to load: %s — "
+                "falling back to MockMemory. Try Python <=3.13.",
+                _CHROMA_ERROR,
+            )
+        else:
+            logger.warning(
+                "chromadb not installed — falling back to MockMemory. "
+                "Install with: pip install chromadb"
+            )
         from adapters.memory.mock import MockMemory
         return MockMemory()
 

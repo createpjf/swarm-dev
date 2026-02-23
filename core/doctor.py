@@ -249,6 +249,8 @@ def check_dependencies() -> tuple[bool, str, str]:
             opt_status.append(f"{label} ok")
         except ImportError:
             opt_status.append(f"{label} missing")
+        except Exception as e:
+            opt_status.append(f"{label} broken ({e.__class__.__name__})")
 
     return True, "Dependencies", f"All required OK  ({', '.join(opt_status)})"
 
@@ -272,15 +274,25 @@ def check_memory_backend() -> tuple[bool, str, str]:
         try:
             import chromadb  # noqa: F401
             return True, "Memory", "ChromaDB [ok]"
-        except (ImportError, Exception):
-            return False, "Memory", "ChromaDB configured but not loadable -- pip3 install chromadb"
+        except ImportError:
+            return False, "Memory", "ChromaDB not installed -- pip3 install chromadb"
+        except Exception as e:
+            return False, "Memory", (
+                f"ChromaDB installed but broken ({e.__class__.__name__}: {e}) "
+                f"-- try Python <=3.13"
+            )
 
     if backend == "hybrid":
         try:
             import chromadb  # noqa: F401
             return True, "Memory", "Hybrid (Vector + BM25) [ok]"
-        except (ImportError, Exception):
+        except ImportError:
             return True, "Memory", "Hybrid (BM25 only -- install chromadb for vector search)"
+        except Exception as e:
+            return True, "Memory", (
+                f"Hybrid (BM25 only -- chromadb broken: {e.__class__.__name__}; "
+                f"try Python <=3.13)"
+            )
 
     return True, "Memory", f"{backend}"
 

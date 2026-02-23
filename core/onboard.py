@@ -1266,16 +1266,22 @@ def _section_memory(cfg: dict):
     current = cfg.get("memory", {}).get("backend", "mock")
     console.print(f"  [{C_DIM}]Current: {current}[/{C_DIM}]\n")
 
-    has_chroma = _check_chromadb()
+    has_chroma, chroma_detail = _check_chromadb()
+    if has_chroma:
+        _ctag = "  [ok]"
+    elif chroma_detail == "not_installed":
+        _ctag = "  [not installed]"
+    else:
+        _ctag = f"  [incompatible: {chroma_detail}]"
 
     choices = [
         questionary.Choice("Mock (in-memory, no persistence)", value="mock"),
         questionary.Choice(
-            "ChromaDB (vector store)" + ("  [ok]" if has_chroma else "  [not installed]"),
+            "ChromaDB (vector store)" + _ctag,
             value="chroma",
         ),
         questionary.Choice(
-            "Hybrid (Vector + BM25 keyword search)" + ("  [ok]" if has_chroma else "  [BM25 only]"),
+            "Hybrid (Vector + BM25 keyword search)" + (_ctag if not has_chroma else "  [ok]"),
             value="hybrid",
         ),
     ]
@@ -2760,22 +2766,29 @@ def _ask_model(provider: str, api_key: str) -> str | None:
 #  MEMORY CHECK
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _check_chromadb() -> bool:
-    """Check if chromadb is installed and loadable."""
+def _check_chromadb() -> tuple[bool, str]:
+    """Check if chromadb is installed and loadable. Returns (ok, detail)."""
     import importlib
     importlib.invalidate_caches()
     try:
         import chromadb  # noqa: F401
-        return True
-    except (ImportError, Exception):
-        return False
+        return True, "ok"
+    except ImportError:
+        return False, "not_installed"
+    except Exception as e:
+        return False, f"broken: {e.__class__.__name__}"
 
 
 def _ask_memory() -> str | None:
     """Ask for memory backend, check chromadb availability."""
-    has_chroma = _check_chromadb()
+    has_chroma, chroma_detail = _check_chromadb()
 
-    chroma_tag = "  [ok]" if has_chroma else "  [not installed]"
+    if has_chroma:
+        chroma_tag = "  [ok]"
+    elif chroma_detail == "not_installed":
+        chroma_tag = "  [not installed]"
+    else:
+        chroma_tag = f"  [incompatible: {chroma_detail}]"
 
     choice = questionary.select(
         "Memory backend:",
