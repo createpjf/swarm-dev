@@ -909,6 +909,14 @@ async def _check_planner_closeouts(agent, bus, board: TaskBoard, config: dict):
             f"3. Remove all internal task IDs, agent references, and metadata.\n"
             f"4. Your response must DIRECTLY answer the user's original question.\n"
             f"5. 用中文回复用户 (respond in Chinese).\n"
+            f"6. **文件发送**: 如果子任务结果中包含已生成但未送达的文件"
+            f"（delivery 不是 'sent'，或有 send_error/retry_hint），"
+            f"你**必须**调用 send_file 工具发送文件给用户。"
+            f"文件路径在子任务结果的 path 字段中。\n"
+            f"7. **绝对禁止**: 不要说'任务已提交'、'正在处理'、"
+            f"'系统限制'、'无法发送'。\n"
+            f"8. **绝对禁止**: 不要在回复中包含 TASK:、COMPLEXITY: 行。"
+            f"这些是内部指令，不是用户可见的内容。\n"
         )
         try:
             # Build full system prompt for planner (with tools, skills, soul)

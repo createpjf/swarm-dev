@@ -1016,13 +1016,25 @@ def _handle_generate_doc(**kwargs) -> dict:
                     result["message"] = (
                         f"File generated and sent via {session['channel']}")
                 else:
-                    result["delivery"] = "queued"
+                    result["delivery"] = "failed"
                     result["send_error"] = send_result.get("error", "")
+                    result["retry_hint"] = (
+                        f"文件已生成在 {result['path']}，但自动发送失败"
+                        f"（错误: {send_result.get('error', 'unknown')}）。"
+                        f"请调用 send_file(file_path='{result['path']}') 重试发送。")
                     logger.warning("generate_doc auto-send failed: %s",
                                    send_result.get("error"))
+            else:
+                result["delivery"] = "no_session"
+                result["retry_hint"] = (
+                    f"文件已生成在 {result['path']}，但没有活跃的频道会话。"
+                    f"请调用 send_file(file_path='{result['path']}') 发送给用户。")
         except Exception as e:
             logger.warning("generate_doc auto-send error: %s", e)
             result["delivery"] = "manual"
+            result["retry_hint"] = (
+                f"文件已生成在 {result['path']}，自动发送异常: {e}。"
+                f"请调用 send_file(file_path='{result['path']}') 重试。")
 
     return result
 
@@ -1314,9 +1326,33 @@ def _handle_send_file(**kwargs) -> dict:
         else:
             return {"ok": False, "error": result.get("error", "Gateway returned error")}
     except Exception as e:
-        logger.warning("send_file HTTP proxy failed (%s), falling back to queue", e)
+        logger.warning("send_file HTTP proxy failed (%s), trying direct path", e)
 
-    # ── Fallback: write to .file_delivery/ queue (consumed by gateway poller) ──
+    # ── Fallback 1: Direct ChannelManager call (if running in same process) ──
+    try:
+        from adapters.channels.manager import ChannelManager
+        cm = getattr(ChannelManager, '_instance', None)
+        if cm is None:
+            # Try the module-level global in gateway
+            import sys
+            gw_mod = sys.modules.get("core.gateway")
+            if gw_mod:
+                cm = getattr(gw_mod, '_channel_manager', None)
+        if cm and hasattr(cm, '_loop') and cm._loop and cm._loop.is_running():
+            import asyncio as _asyncio
+            future = _asyncio.run_coroutine_threadsafe(
+                cm.send_file(session_id, abs_path, caption),
+                cm._loop)
+            msg_id = future.result(timeout=30)
+            if msg_id:
+                return {"ok": True, "message": f"File sent directly via {session_id}",
+                        "message_id": msg_id, "method": "direct"}
+            else:
+                logger.warning("send_file direct path: send_file returned empty msg_id")
+    except Exception as direct_err:
+        logger.debug("send_file direct path failed: %s", direct_err)
+
+    # ── Fallback 2: write to .file_delivery/ queue (consumed by gateway poller) ──
     try:
         delivery_dir = ".file_delivery"
         os.makedirs(delivery_dir, exist_ok=True)

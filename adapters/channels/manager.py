@@ -749,7 +749,15 @@ class ChannelManager:
     async def _wait_for_result(self, task_id: str,
                                 msg: ChannelMessage,
                                 adapter: ChannelAdapter) -> Optional[str]:
-        """Poll TaskBoard until the task completes or times out."""
+        """Poll TaskBoard until the task completes or times out.
+
+        Handles the full Leo→Jerry→Alic→Leo lifecycle:
+        - While any task is in an active state, keep waiting.
+        - When all tasks are done, return the root task result.
+        - Guard against returning raw planner output (TASK: lines)
+          before closeout has synthesized the final answer.
+        """
+        import re as _re
         from core.task_board import TaskBoard
 
         start = time.time()
@@ -774,7 +782,24 @@ class ChannelManager:
                 # All done — prefer root task result (Leo's synthesis)
                 root = data.get(task_id)
                 if root and root.get("result"):
-                    return self._clean_result(root["result"])
+                    result_text = root["result"]
+                    # Guard: if result still contains TASK: lines, closeout
+                    # hasn't overwritten the planner decomposition yet.
+                    # Wait a bit longer for the synthesis to complete.
+                    if _re.search(r'^TASK:', result_text, _re.MULTILINE):
+                        await asyncio.sleep(3)
+                        data = board._read()
+                        root = data.get(task_id)
+                        if root and root.get("result"):
+                            result_text = root["result"]
+                        # If still has TASK: lines after extra wait,
+                        # fall through to collect executor results instead
+                        if _re.search(r'^TASK:', result_text, _re.MULTILINE):
+                            result = board.collect_results(task_id)
+                            if result:
+                                return self._clean_result(result)
+                            # Last resort: clean the raw planner output
+                    return self._clean_result(result_text)
                 # Maybe closeout hasn't written yet, wait briefly
                 await asyncio.sleep(2)
                 data = board._read()
@@ -798,7 +823,8 @@ class ChannelManager:
         """Strip internal metadata from result before sending to user.
 
         Removes: agent/task HTML comments, thinking tags, raw JSON task
-        delegations, separator lines, and excessive blank lines.
+        delegations, TASK:/COMPLEXITY: planner lines, progress status
+        messages, separator lines, and excessive blank lines.
         """
         import re
 
@@ -814,6 +840,14 @@ class ChannelManager:
         text = re.sub(
             r'^\s*\[\s*\{[^}]*"(?:task|role)"[^}]*\}\s*\]\s*$',
             '', text, flags=re.MULTILINE)
+        # Remove TASK: and COMPLEXITY: lines (planner delegation artifacts)
+        text = re.sub(r'^(?:\*\*)?TASK:(?:\*\*)?\s*.+$', '',
+                       text, flags=re.MULTILINE)
+        text = re.sub(r'^(?:\*\*)?COMPLEXITY:(?:\*\*)?\s*.+$', '',
+                       text, flags=re.MULTILINE)
+        # Remove progress status messages leaked from model output
+        text = re.sub(r'^.*任务已提交.*正在处理.*$', '',
+                       text, flags=re.MULTILINE)
         # Remove separator lines between merged results
         text = re.sub(r'\n---\n', '\n\n', text)
         # Collapse excessive blank lines
