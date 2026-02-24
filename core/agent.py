@@ -319,10 +319,12 @@ class BaseAgent:
                 tools_prompt = build_tools_prompt({"tools": tools_cfg})
                 if tools_prompt:
                     tools_section = f"\n\n{tools_prompt}"
-                # Native function calling only for executor agents (coding/full)
-                # Planners (minimal profile) must generate TASK: lines, not tool_calls
+                # Native function calling for executor agents (coding/full),
+                # OR for planners that have explicitly allowed tools (e.g.
+                # Leo with send_file — doesn't produce content but needs to
+                # deliver files to users).
                 tools_profile = tools_cfg.get("profile", "minimal")
-                if tools_profile in ("coding", "full"):
+                if tools_profile in ("coding", "full") or tools_cfg.get("allow"):
                     tools_schemas = build_tools_schemas({"tools": tools_cfg})
             except Exception as e:
                 logger.warning("[%s] tools prompt build failed: %s",

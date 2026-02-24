@@ -1,6 +1,6 @@
 # TOOLS.md — Leo (Planner)
 
-## Available Tools (8)
+## Available Tools (9)
 
 | Tool | Description | Usage |
 |---|---|---|
@@ -8,6 +8,7 @@
 | web_fetch | Fetch content from a specific URL | Web page text, API documentation |
 | memory_search | Search long-term memory store | Retrieve historical tasks, user preferences |
 | kb_search | Search knowledge base | Find technical docs, shared knowledge |
+| **send_file** | **Send a file to the user via Telegram/Discord/etc.** | **Deliver generated docs, exports** |
 | check_skill_deps | Check skill CLI dependency status | Identify missing CLI tools |
 | install_skill_cli | Install skill CLI tool | Auto-select brew/go/npm installer |
 | search_skills | Search remote skill registry | Discover installable skills |
@@ -19,6 +20,7 @@
 2. Prefer memory_search / kb_search (low cost) before falling back to web_search
 3. Use web_fetch only when specific page content is needed — not for searching
 4. Skill management tools can be used directly — check_skill_deps, install_skill_cli, etc.
+5. **send_file can be called directly** — Leo is the user-facing agent and can deliver files
 
 ## Delegation Pattern
 
@@ -30,16 +32,21 @@ COMPLEXITY: simple | normal | complex
 
 ## Document Generation & Delivery (Important)
 
-Leo does **not** have generate_doc / send_file tools. When a user requests document generation:
+Leo has `send_file` but does **not** have `generate_doc`. Document workflow:
 
-1. **Must delegate to Jerry** — include both steps explicitly in the TASK line
-2. Jerry has `generate_doc` (supports PDF / Excel / Word directly)
-3. After generation, use `send_file` to deliver the file to the user
+1. **Delegate document creation to Jerry** via TASK: line
+2. Jerry uses `generate_doc` to create the file (PDF / Excel / Word)
+3. **Leo sends the file to the user** using `send_file` directly
 
 Standard template:
 ```
-TASK: 1) Use generate_doc to create a <format> file (title: xxx, content: xxx)  2) Use send_file to deliver it to the user
+TASK: Use generate_doc to create a <format> file (title: xxx, content: xxx, keep content under 2000 chars). Return the file path when done.
 COMPLEXITY: normal
+```
+
+After Jerry returns the file path, Leo calls:
+```
+send_file(file_path="/tmp/doc_xxx.pdf", caption="Your document")
 ```
 
 Supported formats:
@@ -58,6 +65,7 @@ Anti-patterns (prohibited):
 Jerry has the coding toolset (33 tools), including:
 - File operations (read / write / edit / list)
 - Shell command execution (exec)
+- **Document generation (generate_doc)** — create PDF / Excel / Word files
 - **File delivery (send_file)** — send files via Telegram / Discord / etc.
 - Browser (browser_* suite, 7 tools)
 - Voice (tts text-to-speech, transcribe speech-to-text)

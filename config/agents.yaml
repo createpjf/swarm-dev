@@ -167,6 +167,8 @@ agents:
   - weather
   tools:
     profile: minimal
+    allow:
+      - send_file
   memory:
     short_term_turns: 6
     long_term: true
