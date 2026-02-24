@@ -115,6 +115,57 @@ def _repair_truncated_json(raw: str) -> str | None:
         return None
 
 
+def _extract_params_from_truncated(raw_args: str) -> dict:
+    """Extract key-value params from truncated/unparseable JSON via regex.
+
+    When _repair_truncated_json() and json.loads() both fail, this function
+    uses regex to pull out whatever complete key-value pairs exist in the raw
+    string.  This avoids the brittle _raw_args round-trip through json.dumps →
+    parse_tool_calls → json.loads, which can silently lose data.
+
+    Returns a dict with extracted params (may be partial).
+    """
+    if not isinstance(raw_args, str) or len(raw_args) < 10:
+        return {}
+
+    extracted: dict = {}
+
+    # Extract simple string fields (format, title, output_path, etc.)
+    for key in ("format", "title", "output_path", "file_path", "caption",
+                "command", "path", "url", "query", "topic"):
+        m = re.search(rf'"{key}"\s*:\s*"((?:[^"\\]|\\.)*)"', raw_args)
+        if m:
+            extracted[key] = m.group(1)
+
+    # Extract "content" — may be truncated (no closing quote), so use greedy
+    mc = re.search(r'"content"\s*:\s*"((?:[^"\\]|\\.)*)', raw_args, re.DOTALL)
+    if mc:
+        raw_content = mc.group(1)
+        # Strip trailing incomplete JSON delimiters
+        raw_content = raw_content.rstrip('} \t\n\r')
+        if raw_content.endswith('\\'):
+            raw_content = raw_content[:-1]
+        raw_content = raw_content.rstrip('"')
+        # Unescape JSON string escapes (\\n → \n, etc.)
+        try:
+            extracted["content"] = raw_content.encode().decode(
+                'unicode_escape', errors='replace')
+        except Exception:
+            extracted["content"] = (raw_content
+                                    .replace('\\n', '\n')
+                                    .replace('\\t', '\t')
+                                    .replace('\\"', '"'))
+
+    if extracted:
+        extracted["_recovered_from_truncation"] = True
+        logger.info("[minimax] Recovered %d params from truncated args via regex: %s",
+                    len(extracted) - 1, list(k for k in extracted if k[0] != '_'))
+        return extracted
+
+    # Nothing recoverable — fall back to legacy _raw_args propagation
+    return {"_parse_error": "regex extraction failed", "_raw_args": raw_args}
+
+
 def _tool_calls_to_text(tool_calls: list[dict]) -> str:
     """Convert OpenAI-format tool_calls to <tool_code> text blocks.
 
@@ -146,8 +197,11 @@ def _tool_calls_to_text(tool_calls: list[dict]) -> str:
         except (json.JSONDecodeError, TypeError) as exc:
             logger.warning("[minimax] Failed to parse tool_call arguments for %s: %r",
                            name, raw_args[:300] if isinstance(raw_args, str) else raw_args)
-            # Propagate raw string so downstream handlers can attempt recovery
-            args = {"_parse_error": str(exc), "_raw_args": raw_args}
+            # Attempt regex extraction of key params directly from truncated JSON.
+            # This is more reliable than passing _raw_args through the
+            # json.dumps → parse_tool_calls → json.loads round-trip, which can
+            # fail on control characters or unescaped sequences.
+            args = _extract_params_from_truncated(raw_args)
         block = json.dumps({"tool": name, "params": args}, ensure_ascii=False)
         blocks.append(f"<tool_code>\n{block}\n</tool_code>")
     return "\n".join(blocks)
@@ -161,6 +215,11 @@ def _build_payload(model: str, messages: list[dict], **kwargs) -> dict:
         payload["tools"] = [
             {"type": "function", "function": t} for t in tools
         ]
+    # Ensure adequate output space for long tool arguments (e.g. generate_doc
+    # with long markdown content).  MiniMax default may be too low, causing
+    # tool_call argument truncation.
+    if "max_tokens" not in payload:
+        payload["max_tokens"] = 16384
     return payload
 
 

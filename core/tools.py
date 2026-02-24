@@ -971,6 +971,11 @@ def _handle_generate_doc(**kwargs) -> dict:
     title = kwargs.get("title", "")
     agent_id = kwargs.get("_agent_id", "unknown")
 
+    # If minimax adapter recovered params from truncated JSON, log it
+    if kwargs.get("_recovered_from_truncation"):
+        logger.info("[generate_doc] Using params recovered from truncated tool args "
+                    "(format=%s, content_len=%d)", fmt, len(content))
+
     # Fallback: if LLM adapter couldn't parse JSON (e.g. MiniMax Unicode issue
     # or truncated arguments), attempt to extract content from raw string.
     if not content and "_raw_args" in kwargs:

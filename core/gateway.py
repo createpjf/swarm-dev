@@ -2538,10 +2538,15 @@ class _Handler(BaseHTTPRequestHandler):
         )
         try:
             msg_id = future.result(timeout=30)
-            self._json_response(200, {"ok": True, "message_id": msg_id or ""})
+            if msg_id:
+                self._json_response(200, {"ok": True, "message_id": msg_id})
+            else:
+                self._json_response(500, {
+                    "ok": False,
+                    "error": "Adapter returned empty msg_id — file may not have been delivered"})
         except Exception as e:
             logger.error("send_file proxy failed: %s", e)
-            self._json_response(500, {"error": str(e)})
+            self._json_response(500, {"ok": False, "error": str(e)})
 
     def _handle_send_message_proxy(self):
         """POST /v1/send_message — proxy text message to channel manager.
@@ -2570,10 +2575,15 @@ class _Handler(BaseHTTPRequestHandler):
         )
         try:
             msg_id = future.result(timeout=30)
-            self._json_response(200, {"ok": True, "message_id": msg_id or ""})
+            if msg_id:
+                self._json_response(200, {"ok": True, "message_id": msg_id})
+            else:
+                self._json_response(500, {
+                    "ok": False,
+                    "error": "Adapter returned empty msg_id — message may not have been delivered"})
         except Exception as e:
             logger.error("send_message proxy failed: %s", e)
-            self._json_response(500, {"error": str(e)})
+            self._json_response(500, {"ok": False, "error": str(e)})
 
     def _handle_reload_channels(self):
         """POST /v1/channels/reload — hot-reload all channel adapters."""
