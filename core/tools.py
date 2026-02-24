@@ -971,15 +971,40 @@ def _handle_generate_doc(**kwargs) -> dict:
     title = kwargs.get("title", "")
     agent_id = kwargs.get("_agent_id", "unknown")
 
-    # Fallback: if LLM adapter couldn't parse JSON (e.g. MiniMax Unicode issue),
-    # attempt to extract content from the raw arguments string.
+    # Fallback: if LLM adapter couldn't parse JSON (e.g. MiniMax Unicode issue
+    # or truncated arguments), attempt to extract content from raw string.
     if not content and "_raw_args" in kwargs:
         try:
             import re as _re
             raw = kwargs["_raw_args"]
+
+            # Strategy 1: regex for complete "content": "..." value
             m = _re.search(r'"content"\s*:\s*"((?:[^"\\]|\\.)*)"', raw, _re.DOTALL)
             if m:
                 content = m.group(1).encode().decode('unicode_escape', errors='replace')
+
+            # Strategy 2: if content regex failed (e.g. truncated string),
+            # grab everything after "content": " up to the end of the string.
+            if not content:
+                m2 = _re.search(r'"content"\s*:\s*"(.*)', raw, _re.DOTALL)
+                if m2:
+                    raw_content = m2.group(1)
+                    # Strip trailing incomplete JSON delimiters
+                    raw_content = raw_content.rstrip('} \t\n\r')
+                    # Remove trailing incomplete escape sequence
+                    if raw_content.endswith('\\'):
+                        raw_content = raw_content[:-1]
+                    # Remove trailing unmatched quote
+                    raw_content = raw_content.rstrip('"')
+                    # Unescape JSON string escapes (\\n → \n, etc.)
+                    try:
+                        content = raw_content.encode().decode('unicode_escape', errors='replace')
+                    except Exception:
+                        content = raw_content.replace('\\n', '\n').replace('\\t', '\t')
+                    if content:
+                        logger.info("[generate_doc] Recovered truncated content (%d chars)",
+                                    len(content))
+
             # Also try to recover format/title from raw args
             if not fmt or fmt == "pdf":
                 mf = _re.search(r'"format"\s*:\s*"([^"]+)"', raw)
@@ -989,8 +1014,9 @@ def _handle_generate_doc(**kwargs) -> dict:
                 mt = _re.search(r'"title"\s*:\s*"((?:[^"\\]|\\.)*)"', raw)
                 if mt:
                     title = mt.group(1)
-            logger.info("[generate_doc] Recovered params from raw args (parse_error: %s)",
-                        kwargs.get("_parse_error", "?"))
+            if content:
+                logger.info("[generate_doc] Recovered params from raw args (parse_error: %s)",
+                            kwargs.get("_parse_error", "?"))
         except Exception as exc:
             logger.warning("[generate_doc] Failed to recover from raw args: %s", exc)
 
@@ -2149,7 +2175,8 @@ _BUILTIN_TOOLS: list[Tool] = [
                      "description": "Output format: 'pdf', 'xlsx'/'excel', 'docx'/'word'",
                      "required": True},
           "content": {"type": "string",
-                      "description": "Document content: Markdown text for pdf/docx, "
+                      "description": "Document content (IMPORTANT: keep under 2000 chars to avoid truncation; "
+                                     "use concise formatting). Markdown text for pdf/docx, "
                                      "or JSON array [[row1],[row2]] / markdown table for xlsx",
                       "required": True},
           "title": {"type": "string",

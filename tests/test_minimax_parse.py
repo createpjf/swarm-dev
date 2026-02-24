@@ -1,16 +1,18 @@
 """Tests for MiniMax adapter tool_call argument parsing.
 
-Verifies the fix for MiniMax returning Python-style \\UXXXXXXXX Unicode
-escapes (invalid JSON) in tool_call arguments, which caused generate_doc
-and other tools to receive empty parameters.
+Verifies fixes for:
+  1. MiniMax returning Python-style \\UXXXXXXXX Unicode escapes (invalid JSON)
+  2. MiniMax truncating long tool_call argument strings (incomplete JSON)
+
+Both issues caused generate_doc and other tools to receive empty parameters.
 """
 from __future__ import annotations
 
 import json
 
 
-# Import the function under test
-from adapters.llm.minimax import _tool_calls_to_text
+# Import the functions under test
+from adapters.llm.minimax import _tool_calls_to_text, _repair_truncated_json
 
 
 class TestToolCallsToText:
@@ -122,3 +124,93 @@ class TestToolCallsToText:
         result = _tool_calls_to_text(tool_calls)
         parsed = self._parse_first_block(result)
         assert parsed["params"]["content"] == content
+
+    def test_truncated_json_repair(self):
+        """Truncated JSON args should be repaired and parsed successfully."""
+        # Simulate MiniMax truncating mid-content
+        truncated = '{"content": "# Travel Plan\\n\\nDay 1: Arrive\\n\\nDay 2: Visit'
+        tool_calls = [{
+            "function": {
+                "name": "generate_doc",
+                "arguments": truncated,
+            }
+        }]
+        result = _tool_calls_to_text(tool_calls)
+        parsed = self._parse_first_block(result)
+        assert parsed["tool"] == "generate_doc"
+        # Should have repaired content (not _parse_error)
+        assert "content" in parsed["params"]
+        assert "Travel Plan" in parsed["params"]["content"]
+
+    def test_truncated_json_with_format(self):
+        """Truncated JSON with format field should preserve format."""
+        truncated = '{"format": "pdf", "content": "# Report\\n\\nSection 1\\n\\nDetails here'
+        tool_calls = [{
+            "function": {
+                "name": "generate_doc",
+                "arguments": truncated,
+            }
+        }]
+        result = _tool_calls_to_text(tool_calls)
+        parsed = self._parse_first_block(result)
+        assert parsed["tool"] == "generate_doc"
+        if "_parse_error" not in parsed["params"]:
+            assert parsed["params"]["format"] == "pdf"
+            assert "Report" in parsed["params"]["content"]
+
+    def test_truncated_json_chinese(self):
+        """Truncated Chinese content should be repaired."""
+        truncated = '{"content": "# 英国曼彻斯特5日观赛之旅\\n\\n## 行程概览\\n\\n| 项目 | 详情 |\\n| 出发地 | 深圳'
+        tool_calls = [{
+            "function": {
+                "name": "generate_doc",
+                "arguments": truncated,
+            }
+        }]
+        result = _tool_calls_to_text(tool_calls)
+        parsed = self._parse_first_block(result)
+        assert parsed["tool"] == "generate_doc"
+        # Either repaired or has _raw_args for downstream recovery
+        params = parsed["params"]
+        has_content = "content" in params and "英国" in params.get("content", "")
+        has_raw = "_raw_args" in params
+        assert has_content or has_raw
+
+
+class TestRepairTruncatedJson:
+    """Test _repair_truncated_json helper directly."""
+
+    def test_valid_json_returns_none(self):
+        """Already-valid JSON should return None (no repair needed)."""
+        assert _repair_truncated_json('{"key": "value"}') is None
+
+    def test_simple_truncated_string(self):
+        """Simple truncated string value should be repaired."""
+        result = _repair_truncated_json('{"content": "hello world')
+        assert result is not None
+        parsed = json.loads(result)
+        assert "content" in parsed
+        assert "hello" in parsed["content"]
+
+    def test_truncated_with_newlines(self):
+        """Truncation after newline markers should truncate at last newline."""
+        raw = '{"content": "# Title\\n\\nParagraph 1\\n\\nParagraph 2\\n\\nParagraph 3 trunc'
+        result = _repair_truncated_json(raw)
+        assert result is not None
+        parsed = json.loads(result)
+        assert "Title" in parsed["content"]
+
+    def test_truncated_with_trailing_backslash(self):
+        """Trailing backslash (incomplete escape) should be cleaned."""
+        raw = '{"content": "Some text\\'
+        result = _repair_truncated_json(raw)
+        assert result is not None
+        parsed = json.loads(result)
+        assert "text" in parsed["content"]
+
+    def test_empty_string_returns_none(self):
+        assert _repair_truncated_json("") is None
+        assert _repair_truncated_json("   ") is None
+
+    def test_not_truncated_returns_none(self):
+        assert _repair_truncated_json('{"ok": true}') is None

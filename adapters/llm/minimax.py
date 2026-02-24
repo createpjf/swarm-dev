@@ -30,6 +30,91 @@ logger = logging.getLogger(__name__)
 MINIMAX_BASE_URL = "https://api.minimax.io/v1"
 
 
+def _repair_truncated_json(raw: str) -> str | None:
+    """Attempt to repair a truncated JSON tool-call arguments string.
+
+    MiniMax sometimes truncates long tool_call argument strings mid-content,
+    producing malformed JSON like: ``{"content": "# Title\\n\\nsome text...``
+    (missing closing ``"}``)
+
+    Strategy:
+      1. Find the last complete sentence boundary (newline, period, etc.)
+      2. Truncate the value there
+      3. Close all open JSON string / object delimiters
+
+    Returns the repaired JSON string, or None if repair is not feasible.
+    """
+    s = raw.rstrip()
+    if not s or s.endswith("}"):
+        return None  # not truncated
+
+    # Count open braces to decide how many closing braces we need
+    open_braces = 0
+    in_string = False
+    escape_next = False
+    last_string_open = -1
+
+    for i, ch in enumerate(s):
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == '\\':
+            escape_next = True
+            continue
+        if ch == '"' and not escape_next:
+            in_string = not in_string
+            if in_string:
+                last_string_open = i
+            continue
+        if not in_string:
+            if ch == '{':
+                open_braces += 1
+            elif ch == '}':
+                open_braces -= 1
+
+    if open_braces <= 0 and not in_string:
+        return None  # doesn't look truncated
+
+    # We're inside an unclosed string or object.
+    # Find a good truncation point: last \\n, 。, ., or |
+    # (common in markdown tables and CJK text)
+    truncate_at = -1
+    search_region = s[last_string_open:] if last_string_open >= 0 else s
+    # Look for the last clean line break (literal \\n in JSON string)
+    for marker in ['\\n', '。', '\\n|', '. ']:
+        idx = search_region.rfind(marker)
+        if idx > 0:
+            truncate_at = (last_string_open if last_string_open >= 0 else 0) + idx
+            break
+
+    if truncate_at <= 0:
+        # No good truncation point — just truncate at current position
+        truncate_at = len(s)
+
+    repaired = s[:truncate_at]
+
+    # Close the string if we're inside one
+    if in_string:
+        # Remove any trailing incomplete escape sequence
+        if repaired.endswith('\\'):
+            repaired = repaired[:-1]
+        repaired += '"'
+
+    # Close open braces
+    for _ in range(open_braces):
+        repaired += '}'
+
+    # Verify the repair produces valid JSON
+    try:
+        json.loads(repaired)
+        logger.info("[minimax] Repaired truncated JSON args (%d→%d chars)",
+                    len(raw), len(repaired))
+        return repaired
+    except (json.JSONDecodeError, TypeError):
+        # Repair failed — let caller handle via _raw_args fallback
+        return None
+
+
 def _tool_calls_to_text(tool_calls: list[dict]) -> str:
     """Convert OpenAI-format tool_calls to <tool_code> text blocks.
 
@@ -50,6 +135,12 @@ def _tool_calls_to_text(tool_calls: list[dict]) -> str:
                 lambda m: chr(int(m.group(1), 16)),
                 raw_args,
             )
+        # MiniMax sometimes truncates long arguments, producing incomplete JSON.
+        # Try to repair before parsing.
+        if isinstance(raw_args, str) and raw_args.strip() and not raw_args.rstrip().endswith('}'):
+            repaired = _repair_truncated_json(raw_args)
+            if repaired:
+                raw_args = repaired
         try:
             args = json.loads(raw_args)
         except (json.JSONDecodeError, TypeError) as exc:
