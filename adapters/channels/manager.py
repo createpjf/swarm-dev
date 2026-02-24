@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import os
+import re as _re
 import threading
 import time
 from dataclasses import dataclass
@@ -37,6 +38,13 @@ PLATFORM_LIMITS = {
 
 TASK_TIMEOUT = 600  # 10 minutes
 POLL_INTERVAL = 2   # seconds between TaskBoard polls
+
+# Regex to extract generated-but-unsent file paths from subtask results.
+# Matches JSON "path" fields and bare /tmp/doc_* patterns.
+_FILE_PATH_RE = _re.compile(
+    r'"path"\s*:\s*"([^"]+\.(?:pdf|xlsx|docx|doc|xls|csv))"'
+    r'|(/tmp/doc_\w+\.(?:pdf|xlsx|docx|doc|xls|csv))'
+)
 STATUS_INTERVAL = 30  # seconds before sending "still processing" message
 HEALTH_CHECK_INTERVAL = 60  # seconds between health checks
 
@@ -308,6 +316,58 @@ class ChannelManager:
             logger.error("No adapter for channel '%s' in send_file", channel)
             return ""
         return await adapter.send_file(chat_id, file_path, caption, reply_to)
+
+    # ── Native file delivery (OpenClaw-style) ──
+
+    def _extract_unsent_files(self, task_id: str) -> list[str]:
+        """Scan task tree for generated-but-unsent files.
+
+        Traverses the full subtask tree via parent_id links.  For each
+        subtask result, extracts document paths that were NOT already
+        delivered (``"delivery": "sent"``).
+
+        Returns a deduplicated list of absolute file paths that still
+        exist on disk.
+        """
+        try:
+            from core.task_board import TaskBoard
+        except ImportError:
+            return []
+
+        board = TaskBoard()
+        data = board._read()
+
+        # BFS to collect all task IDs in this tree
+        tree_ids: set[str] = {task_id}
+        changed = True
+        while changed:
+            changed = False
+            for tid, t in data.items():
+                if tid not in tree_ids and t.get("parent_id") in tree_ids:
+                    tree_ids.add(tid)
+                    changed = True
+
+        file_paths: list[str] = []
+        for tid in tree_ids:
+            result_text = data.get(tid, {}).get("result", "")
+            if not result_text:
+                continue
+            # Skip results where delivery already succeeded
+            if '"delivery": "sent"' in result_text:
+                continue
+            for m in _FILE_PATH_RE.finditer(result_text):
+                p = m.group(1) or m.group(2)
+                if p and os.path.isfile(p):
+                    file_paths.append(p)
+
+        # Deduplicate while preserving order
+        seen: set[str] = set()
+        unique: list[str] = []
+        for p in file_paths:
+            if p not in seen:
+                seen.add(p)
+                unique.append(p)
+        return unique
 
     # ── Internal ──
 
@@ -582,7 +642,28 @@ class ChannelManager:
             # Save assistant response to session conversation history
             self._sessions.add_message(sid, "assistant", result[:2000])
 
-            # Chunk and send result
+            # ── Native file delivery (OpenClaw-style) ──
+            # Scan subtask tree for generated-but-unsent files and
+            # deliver them BEFORE the text response, so the user sees
+            # the file followed by the summary.
+            try:
+                unsent_files = self._extract_unsent_files(task_id)
+                for fpath in unsent_files:
+                    try:
+                        await adapter.send_file(
+                            msg.chat_id, fpath,
+                            caption=f"📄 {os.path.basename(fpath)}")
+                        logger.info(
+                            "native-delivery: sent %s → %s:%s",
+                            os.path.basename(fpath),
+                            msg.channel, msg.chat_id)
+                    except Exception as e:
+                        logger.warning(
+                            "native-delivery failed %s: %s", fpath, e)
+            except Exception as e:
+                logger.warning("native-delivery scan error: %s", e)
+
+            # Chunk and send text result
             chunks = self._chunk_message(
                 result, PLATFORM_LIMITS.get(msg.channel, 4096))
             for chunk in chunks:
@@ -848,6 +929,16 @@ class ChannelManager:
         # Remove progress status messages leaked from model output
         text = re.sub(r'^.*任务已提交.*正在处理.*$', '',
                        text, flags=re.MULTILINE)
+        # Remove file delivery internal metadata (handled by native delivery)
+        text = re.sub(r'"delivery"\s*:\s*"(?:failed|manual|no_session)"',
+                       '', text)
+        text = re.sub(r'"retry_hint"\s*:\s*"[^"]*"', '', text)
+        text = re.sub(r'"send_error"\s*:\s*"[^"]*"', '', text)
+        # Remove "无法发送文件" apologies (files are auto-delivered)
+        text = re.sub(
+            r'^.*(?:无法.*(?:直接|通过).*发送|系统限制.*发送|'
+            r'无法直接通过.*发送文件).*$',
+            '', text, flags=re.MULTILINE)
         # Remove separator lines between merged results
         text = re.sub(r'\n---\n', '\n\n', text)
         # Collapse excessive blank lines

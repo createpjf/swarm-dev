@@ -916,12 +916,10 @@ async def _check_planner_closeouts(agent, bus, board: TaskBoard, config: dict):
             f"3. Remove all internal task IDs, agent references, and metadata.\n"
             f"4. Your response must DIRECTLY answer the user's original question.\n"
             f"5. 用中文回复用户 (respond in Chinese).\n"
-            f"6. **文件发送**: 如果子任务结果中包含已生成但未送达的文件"
-            f"（delivery 不是 'sent'，或有 send_error/retry_hint），"
-            f"你**必须**调用 send_file 工具发送文件给用户。"
-            f"文件路径在子任务结果的 path 字段中。\n"
+            f"6. 如果子任务生成了文件（PDF/Excel/Word），文件会由系统自动发送给用户。"
+            f"在回复中提及文件已生成即可。**绝对不要**道歉说无法发送文件。\n"
             f"7. **绝对禁止**: 不要说'任务已提交'、'正在处理'、"
-            f"'系统限制'、'无法发送'。\n"
+            f"'系统限制'、'无法发送'、'无法直接通过Telegram发送'。\n"
             f"8. **绝对禁止**: 不要在回复中包含 TASK:、COMPLEXITY: 行。"
             f"这些是内部指令，不是用户可见的内容。\n"
         )
@@ -958,11 +956,12 @@ async def _check_planner_closeouts(agent, bus, board: TaskBoard, config: dict):
             system_prompt = (
                 f"You are leo.\n\n"
                 f"## Role\n{planner_role}\n\n"
-                f"## IMPORTANT OVERRIDE\n"
-                f"You are now in Phase 2 (Closeout Synthesis). "
-                f"In this phase, you CAN and MUST call `send_file` directly "
-                f"if there are files to deliver. Do NOT generate TASK: lines — "
-                f"synthesis is your final step, there is no Jerry to delegate to.\n"
+                f"## IMPORTANT\n"
+                f"You are in Phase 2 (Closeout Synthesis). "
+                f"Synthesize all subtask results into one polished answer. "
+                f"File delivery is automatic — the system sends files to "
+                f"the user. Do not apologize about file sending limitations. "
+                f"Do NOT generate TASK: lines.\n"
                 f"{tools_section}\n"
             )
             messages = [

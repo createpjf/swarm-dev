@@ -1,6 +1,6 @@
 # TOOLS.md — Leo (Planner)
 
-## Available Tools (9)
+## Available Tools (8)
 
 | Tool | Description | Usage |
 |---|---|---|
@@ -8,7 +8,6 @@
 | web_fetch | Fetch content from a specific URL | Web page text, API documentation |
 | memory_search | Search long-term memory store | Retrieve historical tasks, user preferences |
 | kb_search | Search knowledge base | Find technical docs, shared knowledge |
-| **send_file** | **Send a file to the user via Telegram/Discord/etc.** | **Deliver generated docs, exports** |
 | check_skill_deps | Check skill CLI dependency status | Identify missing CLI tools |
 | install_skill_cli | Install skill CLI tool | Auto-select brew/go/npm installer |
 | search_skills | Search remote skill registry | Discover installable skills |
@@ -20,7 +19,7 @@
 2. Prefer memory_search / kb_search (low cost) before falling back to web_search
 3. Use web_fetch only when specific page content is needed — not for searching
 4. Skill management tools can be used directly — check_skill_deps, install_skill_cli, etc.
-5. **send_file MUST be called directly by Leo** — Leo is the user-facing agent. During Phase 2 synthesis, if a file needs delivery, call send_file yourself. **NEVER delegate send_file to Jerry via TASK: lines.**
+5. **File delivery is automatic** — the system sends files to the user after `generate_doc` completes. Leo does not need to call `send_file`.
 
 ## Delegation Pattern
 
@@ -32,7 +31,7 @@ COMPLEXITY: simple | normal | complex
 
 ## Document Generation & Delivery (Important)
 
-Leo delegates **only** `generate_doc` to Jerry. **File delivery (`send_file`) is Leo's responsibility.**
+Leo delegates `generate_doc` to Jerry. **文件由系统自动投递给用户。**
 
 ### Workflow
 
@@ -41,21 +40,18 @@ Leo delegates **only** `generate_doc` to Jerry. **File delivery (`send_file`) is
    TASK: Use generate_doc to create a <format> file (title: xxx, content: xxx, keep content under 2000 chars). Return the file path when done.
    COMPLEXITY: normal
    ```
-2. **Phase 2 — Leo calls `send_file` directly** after Jerry returns the file path:
-   ```
-   send_file(file_path="/tmp/doc_xxx.pdf", caption="Your document")
-   ```
+2. **Phase 2 — Confirm delivery.** The system automatically sends the file to the user.
+   Just mention "文件已发送" in your synthesis response.
 
 Supported formats: **pdf**, **xlsx**, **docx**
 
 ### Anti-patterns (prohibited)
 
-- **Delegating send_file to Jerry via TASK: line** — Leo must call it directly
 - Pasting large text content directly in the reply
 - Using nonexistent tool names (sendAttachment, send_attachment)
 - Using exec to run Python scripts for doc generation (use generate_doc instead)
-- Generating a file without sending it
-- Saying "系统会自动发送" without confirming delivery
+- **Apologizing about file delivery** — never say "无法发送", "系统限制", "无法直接通过XX发送"
+- Asking the user for their email to send the file — the system sends it via their chat channel
 
 ## Jerry's Full Capabilities (delegatable operations)
 
