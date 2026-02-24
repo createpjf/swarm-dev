@@ -912,10 +912,25 @@ async def _check_planner_closeouts(agent, bus, board: TaskBoard, config: dict):
             parent_id, subtask_ids=subtask_ids)
         parent_desc = parent.get("description", "")
 
+        # ── Check if file generation tasks actually produced files ──
+        file_gen_warning = ""
+        _file_keywords = ("文件", "文档", "pdf", "docx", "excel",
+                          "word", "generate_doc")
+        if any(kw in parent_desc.lower() for kw in _file_keywords):
+            import re as _re
+            _fp_re = _re.compile(
+                r'/tmp/doc_\w+\.\w+|"path"\s*:\s*"([^"]+)"')
+            if not _fp_re.search(results_text):
+                file_gen_warning = (
+                    "\n⚠️ WARNING: 子任务结果中没有找到文件路径。"
+                    "这意味着文件可能没有成功生成。"
+                    "不要告诉用户文件已发送。如实报告遇到的问题。\n")
+
         close_prompt = (
             f"You are synthesizing the FINAL answer for the user.\n\n"
             f"## Original User Request\n{parent_desc}\n\n"
             f"## Subtask Results (from executor)\n{results_text}\n\n"
+            f"{file_gen_warning}"
             f"## Reviewer Feedback (scores & suggestions)\n{critique_text}\n\n"
             f"## Instructions\n"
             f"1. Synthesize ALL subtask results into ONE coherent, polished response.\n"
@@ -923,10 +938,10 @@ async def _check_planner_closeouts(agent, bus, board: TaskBoard, config: dict):
             f"3. Remove all internal task IDs, agent references, and metadata.\n"
             f"4. Your response must DIRECTLY answer the user's original question.\n"
             f"5. 用中文回复用户 (respond in Chinese).\n"
-            f"6. 如果子任务生成了文件（PDF/Excel/Word），文件会由系统自动发送给用户。"
-            f"在回复中提及文件已生成即可。**绝对不要**道歉说无法发送文件。\n"
-            f"7. **绝对禁止**: 不要说'任务已提交'、'正在处理'、"
-            f"'系统限制'、'无法发送'、'无法直接通过Telegram发送'。\n"
+            f"6. 如果子任务结果包含文件路径（如 /tmp/doc_*.pdf），文件会由系统自动发送给用户，"
+            f"只需确认文件已发送。如果结果中没有文件路径或报告了错误，如实告知用户。\n"
+            f"7. **禁止**: 不要说'系统限制'、'无法直接通过Telegram发送'。"
+            f"如果文件确实没有生成，可以说'文件生成遇到问题'并建议重试。\n"
             f"8. **绝对禁止**: 不要在回复中包含 TASK:、COMPLEXITY: 行。"
             f"这些是内部指令，不是用户可见的内容。\n"
         )
@@ -972,9 +987,9 @@ async def _check_planner_closeouts(agent, bus, board: TaskBoard, config: dict):
                 f"## IMPORTANT\n"
                 f"You are in Phase 2 (Closeout Synthesis). "
                 f"Synthesize all subtask results into one polished answer. "
-                f"File delivery is automatic — the system sends files to "
-                f"the user. Do not apologize about file sending limitations. "
-                f"Do NOT generate TASK: lines.\n"
+                f"File delivery is automatic ONLY when the executor's result "
+                f"contains a valid file path. Check the subtask results before "
+                f"claiming a file was sent. Do NOT generate TASK: lines.\n"
                 f"{tools_section}\n"
             )
             messages = [
