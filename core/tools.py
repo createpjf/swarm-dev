@@ -8,7 +8,7 @@ Architecture:
   - Agents invoke tools via structured JSON blocks in their output
   - Tool results are fed back to the agent as context
 
-Tool categories (35 tools across 9 groups):
+Tool categories (36 tools across 9 groups):
   - Web:        web_search (Brave + Perplexity), web_fetch (text + markdown)
   - Filesystem: read_file, write_file, edit_file, list_dir
   - Memory:     memory_search, memory_save, kb_search, kb_write
@@ -18,7 +18,7 @@ Tool categories (35 tools across 9 groups):
   - Browser:    browser_navigate, browser_click, browser_fill, browser_get_text,
                 browser_screenshot, browser_evaluate, browser_page_info
   - Media:      screenshot, notify, analyze_image
-  - Messaging:  send_mail, send_file
+  - Messaging:  send_mail, send_file, message
 
 Access control:
   - Tool profiles: "minimal", "coding", "full"
@@ -172,7 +172,7 @@ TOOL_PROFILES = {
                "notify", "transcribe", "tts", "list_voices",
                "memory_search", "memory_save",
                "kb_search", "kb_write", "task_create", "task_status",
-               "send_mail", "send_file", "check_skill_deps", "install_skill_cli",
+               "send_mail", "send_file", "message", "check_skill_deps", "install_skill_cli",
                "search_skills", "install_remote_skill",
                "browser_navigate", "browser_click", "browser_fill",
                "browser_get_text", "browser_screenshot",
@@ -192,7 +192,7 @@ TOOL_GROUPS = {
     "group:task": ["task_create", "task_status", "spawn_subagent"],
     "group:skill": ["check_skill_deps", "install_skill_cli",
                     "search_skills", "install_remote_skill"],
-    "group:messaging": ["send_mail", "send_file"],
+    "group:messaging": ["send_mail", "send_file", "message"],
     "group:browser": ["browser_navigate", "browser_click", "browser_fill",
                       "browser_get_text", "browser_screenshot",
                       "browser_evaluate", "browser_page_info"],
@@ -1423,6 +1423,174 @@ def _handle_send_file(**kwargs) -> dict:
         return {"ok": False, "error": str(e)}
 
 
+def _handle_message(**kwargs) -> dict:
+    """Send a message (text, file, or both) to the user via their chat channel.
+
+    Unified messaging tool inspired by OpenClaw's message() pattern.
+    Three delivery tiers:
+      1. HTTP proxy → /v1/send_message  (text) + /v1/send_file (file)
+      2. Direct ChannelManager call
+      3. .file_delivery/ queue fallback
+    """
+    text = kwargs.get("text", "")
+    file_path = kwargs.get("file_path", "")
+    caption = kwargs.get("caption", "")
+
+    if not text and not file_path:
+        return {"ok": False, "error": "At least one of 'text' or 'file_path' is required"}
+
+    # Validate file exists (if provided)
+    abs_file_path = ""
+    if file_path:
+        abs_file_path = os.path.abspath(file_path)
+        if not os.path.exists(abs_file_path):
+            return {"ok": False, "error": f"File not found: {file_path}"}
+
+    # ── Resolve active channel session (same as send_file) ──
+    try:
+        from adapters.channels.manager import ChannelManager
+        session = ChannelManager.get_active_session()
+    except ImportError:
+        session = None
+    if not session:
+        session_path = ".channel_session.json"
+        if os.path.exists(session_path):
+            try:
+                with open(session_path, "r") as f:
+                    session = json.load(f)
+            except Exception:
+                pass
+
+    if session:
+        session_age = time.time() - session.get("ts", 0)
+        if session_age > 3600:
+            logger.warning("message: channel session is %.0fm old, may be stale.",
+                           session_age / 60)
+
+    if not session or not session.get("session_id"):
+        return {"ok": False,
+                "error": "No active channel session. "
+                "Fix: (1) run `cleo gateway start`, "
+                "(2) send a message from Telegram/Discord to establish session, "
+                "(3) retry."}
+
+    session_id = session["session_id"]
+    results = {}
+
+    # ── Step 1: Send text (if provided) ──
+    if text:
+        text_result = _send_text_message(session_id, text, session)
+        results["text"] = text_result
+        if not text_result.get("ok"):
+            logger.warning("message: text send failed: %s", text_result.get("error"))
+
+    # ── Step 2: Send file (if provided) — delegate to _handle_send_file ──
+    if file_path:
+        file_result = _handle_send_file(file_path=file_path, caption=caption)
+        results["file"] = file_result
+        if not file_result.get("ok"):
+            logger.warning("message: file send failed: %s", file_result.get("error"))
+
+    # Summarize
+    text_ok = results.get("text", {}).get("ok", True)  # True if text not sent
+    file_ok = results.get("file", {}).get("ok", True)   # True if file not sent
+    if text_ok and file_ok:
+        parts = []
+        if text:
+            parts.append("text")
+        if file_path:
+            parts.append("file")
+        return {"ok": True,
+                "message": f"Sent {' + '.join(parts)} via {session_id}",
+                "details": results}
+    else:
+        return {"ok": False,
+                "error": "Partial failure",
+                "details": results}
+
+
+def _send_text_message(session_id: str, text: str, session: dict) -> dict:
+    """Send text via 3-tier delivery: HTTP proxy → direct → queue."""
+    gateway_port = int(os.environ.get("CLEO_GATEWAY_PORT", "19789"))
+    gateway_token = os.environ.get("CLEO_GATEWAY_TOKEN", "")
+    if not gateway_token:
+        try:
+            token_path = ".gateway_token"
+            if os.path.exists(token_path):
+                with open(token_path) as f:
+                    gateway_token = f.read().strip()
+        except Exception:
+            pass
+
+    import urllib.request
+
+    # ── Tier 1: HTTP proxy to gateway ──
+    try:
+        payload = json.dumps({
+            "session_id": session_id,
+            "text": text,
+        }).encode()
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{gateway_port}/v1/send_message",
+            data=payload,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {gateway_token}" if gateway_token else "",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read())
+        if result.get("ok"):
+            return {"ok": True, "message": f"Text sent via {session_id}",
+                    "message_id": result.get("message_id", "")}
+        else:
+            return {"ok": False, "error": result.get("error", "Gateway returned error")}
+    except Exception as e:
+        logger.warning("message text HTTP proxy failed (%s), trying direct path", e)
+
+    # ── Tier 2: Direct ChannelManager call ──
+    try:
+        from adapters.channels.manager import ChannelManager
+        cm = getattr(ChannelManager, '_instance', None)
+        if cm is None:
+            import sys
+            gw_mod = sys.modules.get("core.gateway")
+            if gw_mod:
+                cm = getattr(gw_mod, '_channel_manager', None)
+        if cm and hasattr(cm, '_loop') and cm._loop and cm._loop.is_running():
+            import asyncio as _asyncio
+            future = _asyncio.run_coroutine_threadsafe(
+                cm.send_message(session_id, text),
+                cm._loop)
+            msg_id = future.result(timeout=30)
+            if msg_id:
+                return {"ok": True, "message": f"Text sent directly via {session_id}",
+                        "message_id": msg_id, "method": "direct"}
+    except Exception as direct_err:
+        logger.debug("message text direct path failed: %s", direct_err)
+
+    # ── Tier 3: .file_delivery/ queue (now supports text) ──
+    try:
+        delivery_dir = ".file_delivery"
+        os.makedirs(delivery_dir, exist_ok=True)
+        delivery = {
+            "text": text,
+            "session_id": session_id,
+            "channel": session.get("channel", ""),
+            "chat_id": session.get("chat_id", ""),
+            "ts": time.time(),
+            "retry_count": 0,
+        }
+        delivery_file = os.path.join(delivery_dir, f"{int(time.time()*1000)}.json")
+        with open(delivery_file, "w") as f:
+            json.dump(delivery, f)
+        return {"ok": True, "message": "Text queued for delivery",
+                "delivery_id": os.path.basename(delivery_file)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 # ── Skill CLI install/check handlers ──
 
 def _handle_check_skill_deps(**kwargs) -> dict:
@@ -2198,6 +2366,22 @@ _BUILTIN_TOOLS: list[Tool] = [
                       "description": "Optional caption/message to include with the file",
                       "required": False}},
          _handle_send_file, group="messaging"),
+
+    Tool("message",
+         "Send a message to the user via their chat channel. "
+         "Can send text, a file, or both. Use for proactive communication "
+         "(progress updates, questions, delivering results). "
+         "Prefer this over send_file when you also want to include a text message.",
+         {"text": {"type": "string",
+                   "description": "Text message to send to the user",
+                   "required": False},
+          "file_path": {"type": "string",
+                        "description": "Path to file to send (optional)",
+                        "required": False},
+          "caption": {"type": "string",
+                      "description": "Caption for the file (only used when file_path is set)",
+                      "required": False}},
+         _handle_message, group="messaging"),
 
     # ── Collaboration tools ──
     Tool("workspace_status",

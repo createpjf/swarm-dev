@@ -444,9 +444,11 @@ class _Handler(BaseHTTPRequestHandler):
         elif path.startswith("/v1/channels/") and path.endswith("/test"):
             channel_name = path[len("/v1/channels/"):-len("/test")]
             self._handle_test_channel(channel_name)
-        # ── File send proxy (from agent subprocess) ──
+        # ── File / message send proxy (from agent subprocess) ──
         elif path == "/v1/send_file":
             self._handle_send_file_proxy()
+        elif path == "/v1/send_message":
+            self._handle_send_message_proxy()
         # ── Channel reload ──
         elif path == "/v1/channels/reload":
             self._handle_reload_channels()
@@ -2512,7 +2514,7 @@ class _Handler(BaseHTTPRequestHandler):
         Agent processes cannot access _channel_manager directly (process isolation),
         so they POST here and the gateway (which owns the ChannelManager) relays it.
         """
-        body = self._read_json_body()
+        body = self._read_body()
         session_id = body.get("session_id", "")
         file_path = body.get("file_path", "")
         caption = body.get("caption", "")
@@ -2539,6 +2541,38 @@ class _Handler(BaseHTTPRequestHandler):
             self._json_response(200, {"ok": True, "message_id": msg_id or ""})
         except Exception as e:
             logger.error("send_file proxy failed: %s", e)
+            self._json_response(500, {"error": str(e)})
+
+    def _handle_send_message_proxy(self):
+        """POST /v1/send_message — proxy text message to channel manager.
+
+        Agent processes cannot access _channel_manager directly (process
+        isolation), so they POST here and the gateway relays to ChannelManager.
+        """
+        body = self._read_body()
+        session_id = body.get("session_id", "")
+        text = body.get("text", "")
+        reply_to = body.get("reply_to", "")
+
+        if not session_id or not text:
+            self._json_response(400, {"error": "session_id and text required"})
+            return
+
+        global _channel_manager
+        if not _channel_manager or not _channel_manager._loop:
+            self._json_response(503, {"error": "Channel manager not running"})
+            return
+
+        import asyncio as _asyncio
+        future = _asyncio.run_coroutine_threadsafe(
+            _channel_manager.send_message(session_id, text, reply_to),
+            _channel_manager._loop,
+        )
+        try:
+            msg_id = future.result(timeout=30)
+            self._json_response(200, {"ok": True, "message_id": msg_id or ""})
+        except Exception as e:
+            logger.error("send_message proxy failed: %s", e)
             self._json_response(500, {"error": str(e)})
 
     def _handle_reload_channels(self):
@@ -3193,10 +3227,18 @@ def _start_file_delivery_consumer():
                 session_id = delivery.get("session_id", "")
                 file_path = delivery.get("file_path", "")
                 caption = delivery.get("caption", "")
+                text = delivery.get("text", "")
                 retry_count = delivery.get("retry_count", 0)
 
-                if not session_id or not file_path or not os.path.isfile(file_path):
-                    # Invalid or file gone — remove
+                if not session_id or (not file_path and not text):
+                    # Invalid — remove
+                    try:
+                        os.remove(fpath)
+                    except OSError:
+                        pass
+                    continue
+                # Skip file entries where file has been deleted
+                if file_path and not os.path.isfile(file_path) and not text:
                     try:
                         os.remove(fpath)
                     except OSError:
@@ -3205,14 +3247,24 @@ def _start_file_delivery_consumer():
 
                 # Try sending via channel manager
                 try:
-                    future = _asyncio.run_coroutine_threadsafe(
-                        _channel_manager.send_file(session_id, file_path, caption),
-                        _channel_manager._loop,
-                    )
+                    if file_path and os.path.isfile(file_path):
+                        future = _asyncio.run_coroutine_threadsafe(
+                            _channel_manager.send_file(session_id, file_path, caption),
+                            _channel_manager._loop,
+                        )
+                    elif text:
+                        future = _asyncio.run_coroutine_threadsafe(
+                            _channel_manager.send_message(session_id, text),
+                            _channel_manager._loop,
+                        )
+                    else:
+                        os.remove(fpath)
+                        continue
                     msg_id = future.result(timeout=30)
                     if msg_id:
-                        logger.info("File delivery consumer: sent %s to %s (msg %s)",
-                                    os.path.basename(file_path), session_id, msg_id)
+                        label = os.path.basename(file_path) if file_path else "text msg"
+                        logger.info("Delivery consumer: sent %s to %s (msg %s)",
+                                    label, session_id, msg_id)
                         os.remove(fpath)
                     else:
                         raise RuntimeError("send_file returned empty msg_id")

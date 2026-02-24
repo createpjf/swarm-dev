@@ -317,6 +317,32 @@ class ChannelManager:
             return ""
         return await adapter.send_file(chat_id, file_path, caption, reply_to)
 
+    async def send_message(self, session_id: str, text: str,
+                           reply_to: str = "") -> str:
+        """Send a text message to a channel chat. Returns sent message ID.
+
+        Args:
+            session_id: Channel session ID in format "channel:chat_id"
+            text: Message text to send
+            reply_to: Optional message ID to reply to
+        """
+        if ":" not in session_id:
+            logger.error("Invalid session_id for send_message: %s", session_id)
+            return ""
+        channel, chat_id = session_id.split(":", 1)
+        adapter = self._get_adapter(channel)
+        if not adapter:
+            logger.error("No adapter for channel '%s' in send_message", channel)
+            return ""
+        max_len = PLATFORM_LIMITS.get(channel, 4096)
+        chunks = self._chunk_message(text, max_len)
+        last_msg_id = ""
+        for chunk in chunks:
+            last_msg_id = await adapter.send_message(chat_id, chunk, reply_to)
+            if len(chunks) > 1:
+                await asyncio.sleep(0.3)
+        return last_msg_id
+
     # ── Native file delivery (OpenClaw-style) ──
 
     def _extract_unsent_files(self, task_id: str) -> list[str]:
