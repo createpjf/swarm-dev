@@ -48,6 +48,9 @@ Endpoints:
   GET  /v1/memory/kb/notes           Shared knowledge base notes
   GET  /v1/memory/kb/moc             Map of Content
   GET  /v1/memory/kb/insights        Cross-agent insights feed
+  PUT  /v1/memory/cases/:id/:hash    Update a case (solution, tags, notes)
+  PUT  /v1/memory/episodes/:id/:tid  Update an episode (notes, tags, outcome)
+  POST /v1/memory/export/:agent_id   Export all memory for an agent (JSON)
   GET  /v1/channels                   Channel adapter status (Telegram/Discord/Feishu/Slack)
   PUT  /v1/channels/:name              Update channel config (enable/disable, tokens)
   GET  /v1/tools                      List built-in tools and availability
@@ -444,6 +447,10 @@ class _Handler(BaseHTTPRequestHandler):
         # ── Channel reload ──
         elif path == "/v1/channels/reload":
             self._handle_reload_channels()
+        # ── Memory export ──
+        elif path.startswith("/v1/memory/export/"):
+            agent_id = path[len("/v1/memory/export/"):]
+            self._handle_memory_export(agent_id)
         # ── Webhook inbound (external services: GitHub, Jira, etc.) ──
         elif path.startswith("/v1/webhook/"):
             source = path[len("/v1/webhook/"):]
@@ -484,6 +491,23 @@ class _Handler(BaseHTTPRequestHandler):
         elif path.startswith("/v1/agents/"):
             agent_id = path[len("/v1/agents/"):]
             self._handle_update_agent(agent_id)
+        # ── Memory write routes ──
+        elif path.startswith("/v1/memory/cases/"):
+            # PUT /v1/memory/cases/:agent_id/:case_hash
+            rest = path[len("/v1/memory/cases/"):]
+            parts = rest.split("/", 1)
+            if len(parts) == 2:
+                self._handle_update_case(parts[0], parts[1])
+            else:
+                self._json_response(400, {"error": "Expected /v1/memory/cases/:agent_id/:hash"})
+        elif path.startswith("/v1/memory/episodes/"):
+            # PUT /v1/memory/episodes/:agent_id/:task_id
+            rest = path[len("/v1/memory/episodes/"):]
+            parts = rest.split("/", 1)
+            if len(parts) == 2:
+                self._handle_update_episode(parts[0], parts[1])
+            else:
+                self._json_response(400, {"error": "Expected /v1/memory/episodes/:agent_id/:task_id"})
         else:
             self._json_response(404, {"error": "Not found"})
 
@@ -2804,6 +2828,151 @@ class _Handler(BaseHTTPRequestHandler):
                 "insights": insights,
                 "total": len(insights),
             })
+        except Exception as e:
+            self._json_response(500, {"error": str(e)})
+
+    # ── Memory Write / Export Handlers ──
+
+    def _handle_update_case(self, agent_id: str, case_hash: str):
+        """Update a case file for an agent."""
+        if not self._validate_name(agent_id):
+            return
+        if not self._validate_name(case_hash):
+            return
+        body = self._read_body()
+        if not body:
+            self._json_response(400, {"error": "Empty body"})
+            return
+        case_path = os.path.join("memory", "agents", agent_id,
+                                 "cases", f"{case_hash}.json")
+        try:
+            if not os.path.exists(case_path):
+                self._json_response(404, {"error": f"Case {case_hash} not found"})
+                return
+            with open(case_path, "r", encoding="utf-8") as f:
+                case_data = json.load(f)
+            # Merge updates (allow updating solution, tags, notes)
+            for key in ("solution", "tags", "notes", "context"):
+                if key in body:
+                    case_data[key] = body[key]
+            with open(case_path, "w", encoding="utf-8") as f:
+                json.dump(case_data, f, ensure_ascii=False, indent=2)
+            self._json_response(200, {"ok": True, "case": case_data})
+        except Exception as e:
+            self._json_response(500, {"error": str(e)})
+
+    def _handle_update_episode(self, agent_id: str, task_id: str):
+        """Update an episode file for an agent."""
+        if not self._validate_name(agent_id):
+            return
+        body = self._read_body()
+        if not body:
+            self._json_response(400, {"error": "Empty body"})
+            return
+        # Episodes are stored by date: memory/agents/{id}/episodes/{date}/{task_id}.json
+        import glob as _glob
+        pattern = os.path.join("memory", "agents", agent_id,
+                               "episodes", "*", f"{task_id}.json")
+        matches = _glob.glob(pattern)
+        if not matches:
+            self._json_response(404, {"error": f"Episode {task_id} not found"})
+            return
+        ep_path = matches[0]
+        try:
+            with open(ep_path, "r", encoding="utf-8") as f:
+                ep_data = json.load(f)
+            for key in ("notes", "tags", "outcome"):
+                if key in body:
+                    ep_data[key] = body[key]
+            with open(ep_path, "w", encoding="utf-8") as f:
+                json.dump(ep_data, f, ensure_ascii=False, indent=2)
+            self._json_response(200, {"ok": True, "episode": ep_data})
+        except Exception as e:
+            self._json_response(500, {"error": str(e)})
+
+    def _handle_memory_export(self, agent_id: str):
+        """Export all memory for an agent as JSON."""
+        if not self._validate_name(agent_id):
+            return
+        base = os.path.join("memory", "agents", agent_id)
+        if not os.path.isdir(base):
+            self._json_response(404, {"error": f"No memory for agent {agent_id}"})
+            return
+        try:
+            export = {"agent_id": agent_id, "exported_at": time.time()}
+
+            # Cases
+            cases_dir = os.path.join(base, "cases")
+            cases = []
+            if os.path.isdir(cases_dir):
+                for fname in sorted(os.listdir(cases_dir)):
+                    if fname.endswith(".json"):
+                        with open(os.path.join(cases_dir, fname),
+                                  encoding="utf-8") as f:
+                            cases.append(json.load(f))
+            export["cases"] = cases
+
+            # Episodes (all dates)
+            episodes_dir = os.path.join(base, "episodes")
+            episodes = []
+            if os.path.isdir(episodes_dir):
+                for date_dir in sorted(os.listdir(episodes_dir)):
+                    date_path = os.path.join(episodes_dir, date_dir)
+                    if os.path.isdir(date_path):
+                        for fname in sorted(os.listdir(date_path)):
+                            if fname.endswith(".json"):
+                                with open(os.path.join(date_path, fname),
+                                          encoding="utf-8") as f:
+                                    episodes.append(json.load(f))
+            export["episodes"] = episodes
+
+            # Daily logs
+            daily_dir = os.path.join(base, "daily")
+            daily_logs = []
+            if os.path.isdir(daily_dir):
+                for fname in sorted(os.listdir(daily_dir)):
+                    if fname.endswith(".md"):
+                        with open(os.path.join(daily_dir, fname),
+                                  encoding="utf-8") as f:
+                            daily_logs.append({
+                                "date": fname.replace(".md", ""),
+                                "content": f.read(),
+                            })
+            export["daily_logs"] = daily_logs
+
+            # MEMORY.md
+            mem_md = os.path.join(base, "MEMORY.md")
+            if os.path.exists(mem_md):
+                with open(mem_md, encoding="utf-8") as f:
+                    export["memory_md"] = f.read()
+
+            # Patterns
+            patterns_dir = os.path.join(base, "patterns")
+            patterns = []
+            if os.path.isdir(patterns_dir):
+                for fname in sorted(os.listdir(patterns_dir)):
+                    if fname.endswith(".json"):
+                        with open(os.path.join(patterns_dir, fname),
+                                  encoding="utf-8") as f:
+                            patterns.append(json.load(f))
+            export["patterns"] = patterns
+
+            # Score log (global, for alic)
+            if agent_id == "alic":
+                score_log = os.path.join("memory", "score_log.jsonl")
+                if os.path.exists(score_log):
+                    scores = []
+                    with open(score_log, encoding="utf-8") as f:
+                        for line in f:
+                            line = line.strip()
+                            if line:
+                                try:
+                                    scores.append(json.loads(line))
+                                except json.JSONDecodeError:
+                                    continue
+                    export["score_log"] = scores
+
+            self._json_response(200, export)
         except Exception as e:
             self._json_response(500, {"error": str(e)})
 

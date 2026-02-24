@@ -503,6 +503,7 @@ async def _agent_loop(agent, bus: ContextBus, board: TaskBoard,
     idle_count = 0
     max_idle   = config.get("max_idle_cycles", 30)
     _last_recovery_check = 0.0
+    _last_work_time: float = 0.0  # for 1.5s status-light delay
 
     while True:
         # --- check shutdown signal ---
@@ -511,9 +512,13 @@ async def _agent_loop(agent, bus: ContextBus, board: TaskBoard,
                         agent.cfg.agent_id)
             return
 
-        # --- heartbeat ---
+        # --- heartbeat (1.5s delay after task before going idle) ---
         if heartbeat:
-            heartbeat.beat("idle")
+            now = time.time()
+            if _last_work_time and now - _last_work_time < 1.5:
+                heartbeat.beat("working", progress="wrapping up...")
+            else:
+                heartbeat.beat("idle")
 
         # --- periodic stale task recovery (every 30s) ---
         now = time.time()
@@ -737,6 +742,7 @@ async def _agent_loop(agent, bus: ContextBus, board: TaskBoard,
                             agent.cfg.agent_id, task.task_id)
                 await sched.on_task_complete(agent.cfg.agent_id, task, result)
                 _extract_and_store_memories(agent, task, result)
+                _last_work_time = time.time()
 
                 # Check if any pending close-outs are ready
                 await _check_planner_closeouts(agent, bus, board, config)
@@ -775,6 +781,7 @@ async def _agent_loop(agent, bus: ContextBus, board: TaskBoard,
             # --- score & evolve ---
             await sched.on_task_complete(agent.cfg.agent_id, task, result)
             _extract_and_store_memories(agent, task, result)
+            _last_work_time = time.time()
             agent.log_transcript("task_completed", task.task_id,
                                  result[:200])
 
@@ -931,13 +938,20 @@ async def _check_planner_closeouts(agent, bus, board: TaskBoard, config: dict):
 
             # Inject tools section (same as BaseAgent.run does)
             tools_section = ""
+            tools_schemas = None
             planner_tools_cfg = (planner_def or {}).get("tools", {})
             if planner_tools_cfg:
                 try:
-                    from core.tools import build_tools_prompt
+                    from core.tools import build_tools_prompt, build_tools_schemas
                     tools_prompt = build_tools_prompt({"tools": planner_tools_cfg})
                     if tools_prompt:
                         tools_section = f"\n\n{tools_prompt}"
+                    # Build native function-calling schemas so LLM can invoke
+                    # tools like send_file during closeout synthesis
+                    tools_profile = planner_tools_cfg.get("profile", "minimal")
+                    if tools_profile in ("coding", "full") or planner_tools_cfg.get("allow"):
+                        tools_schemas = build_tools_schemas(
+                            {"tools": planner_tools_cfg})
                 except Exception as e:
                     logger.warning("closeout tools prompt build failed: %s", e)
 
@@ -950,7 +964,8 @@ async def _check_planner_closeouts(agent, bus, board: TaskBoard, config: dict):
                 {"role": "system", "content": system_prompt},
                 {"role": "user",   "content": close_prompt},
             ]
-            final_answer = await agent.llm.chat(messages, planner_model)
+            final_answer = await agent.llm.chat(
+                messages, planner_model, tools=tools_schemas)
             final_answer = _strip_think(final_answer)
 
             # Mini tool-loop: if planner invokes tools during closeout,
@@ -983,7 +998,7 @@ async def _check_planner_closeouts(agent, bus, board: TaskBoard, config: dict):
                             "FINAL polished answer for the user in Chinese. "
                             "Do NOT invoke more tools. Just synthesize."})
                         final_answer = await agent.llm.chat(
-                            messages, planner_model)
+                            messages, planner_model, tools=tools_schemas)
                         final_answer = _strip_think(final_answer)
                 except Exception as tool_err:
                     logger.warning("closeout tool loop error: %s", tool_err)
