@@ -259,12 +259,13 @@ def _is_private_hostname(hostname: str) -> bool:
 def _handle_web_search(query: str, count: int = 5, freshness: str = "",
                        country: str = "", search_lang: str = "",
                        ui_lang: str = "", provider: str = "", **_) -> dict:
-    """Search the web. Supports Brave Search API and Perplexity Sonar.
+    """Search the web. Supports Brave, Perplexity Sonar, and Kimi/Moonshot.
 
     Provider auto-detection:
       - If BRAVE_API_KEY is set → Brave Search (default)
       - If PERPLEXITY_API_KEY is set → Perplexity Sonar (fallback or explicit)
-      - Use provider="perplexity" to force Perplexity
+      - If MOONSHOT_API_KEY is set → Kimi search (best for Chinese queries)
+      - Use provider="perplexity"|"kimi" to force a specific provider
     """
     # Check cache
     cache_key = f"search:{query}:{count}:{freshness}:{country}:{search_lang}:{provider}"
@@ -274,7 +275,13 @@ def _handle_web_search(query: str, count: int = 5, freshness: str = "",
 
     brave_key = os.environ.get("BRAVE_API_KEY", "")
     pplx_key = os.environ.get("PERPLEXITY_API_KEY", "")
-    use_perplexity = (provider == "perplexity" and pplx_key) or (not brave_key and pplx_key)
+    kimi_key = os.environ.get("MOONSHOT_API_KEY", "")
+    use_perplexity = (provider == "perplexity" and pplx_key) or (not brave_key and pplx_key and not kimi_key)
+    use_kimi = (provider == "kimi" and kimi_key)
+
+    if use_kimi:
+        return _cache_set(cache_key,
+                          _search_kimi(query, int(count), kimi_key))
 
     if use_perplexity:
         return _cache_set(cache_key,
@@ -321,7 +328,11 @@ def _handle_web_search(query: str, count: int = 5, freshness: str = "",
                   "total": len(results), "provider": "brave"}
         return _cache_set(cache_key, result)
     except Exception as e:
-        # Auto-fallback to Perplexity if Brave fails and key is available
+        # Auto-fallback: try Kimi, then Perplexity if Brave fails
+        if kimi_key and provider != "brave":
+            logger.warning("Brave search failed, falling back to Kimi: %s", e)
+            return _cache_set(cache_key,
+                              _search_kimi(query, int(count), kimi_key))
         if pplx_key and provider != "brave":
             logger.warning("Brave search failed, falling back to Perplexity: %s", e)
             return _cache_set(cache_key,
@@ -375,6 +386,70 @@ def _search_perplexity(query: str, count: int, api_key: str) -> dict:
                 "answer": content[:2000]}
     except Exception as e:
         return {"ok": False, "error": f"Perplexity search failed: {e}"}
+
+
+def _search_kimi(query: str, count: int, api_key: str) -> dict:
+    """Search using Moonshot/Kimi API with built-in $web_search tool.
+
+    Optimized for Chinese-language queries. Uses moonshot-v1-auto model
+    with the $web_search builtin tool to get grounded search results.
+    """
+    payload = json.dumps({
+        "model": "moonshot-v1-auto",
+        "messages": [
+            {"role": "system",
+             "content": ("You are a search assistant. Use web_search to find "
+                         "relevant information, then provide a concise summary "
+                         "with source URLs. Reply in the same language as the query.")},
+            {"role": "user", "content": query},
+        ],
+        "tools": [{
+            "type": "builtin_function",
+            "function": {"name": "$web_search"},
+        }],
+        "max_tokens": 2048,
+    }).encode()
+
+    req = urllib.request.Request(
+        "https://api.moonshot.cn/v1/chat/completions",
+        data=payload,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read())
+
+        content = (data.get("choices", [{}])[0]
+                   .get("message", {}).get("content", ""))
+
+        # Extract URLs from the response content
+        import re as _re
+        urls = _re.findall(r'https?://[^\s\)\"\'<>]+', content)
+        results = []
+        for i, url in enumerate(urls[:count]):
+            results.append({
+                "title": f"Source {i+1}",
+                "url": url,
+                "snippet": "",
+            })
+        if not results:
+            results.append({
+                "title": "Kimi Answer",
+                "url": "",
+                "snippet": content[:500],
+            })
+
+        return {"ok": True, "query": query, "results": results,
+                "total": len(results), "provider": "kimi",
+                "answer": content[:2000]}
+    except Exception as e:
+        return {"ok": False, "error": f"Kimi search failed: {e}"}
 
 
 def _handle_web_fetch(url: str, max_chars: int = 8000,

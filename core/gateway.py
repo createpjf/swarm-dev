@@ -92,7 +92,8 @@ _sse_tb_mtime: float = 0.0
 # Field name patterns that indicate sensitive values
 _SENSITIVE_KEY_PATTERNS = re.compile(
     r'(api[_\-]?key|secret|password|token|credential|auth[_\-]?key|'
-    r'private[_\-]?key|access[_\-]?key|signing[_\-]?key)',
+    r'private[_\-]?key|access[_\-]?key|signing[_\-]?key|'
+    r'passphrase|bearer|webhook[_\-]?secret)',
     re.IGNORECASE,
 )
 

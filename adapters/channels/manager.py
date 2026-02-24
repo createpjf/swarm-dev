@@ -522,6 +522,26 @@ class ChannelManager:
         except ImportError:
             pass  # user_auth not available, continue without
 
+        # ── Natural language abort detection ──
+        _abort_phrases = {"取消", "停止", "stop", "cancel", "abort", "终止", "算了"}
+        stripped = msg.text.strip().lower()
+        if stripped in _abort_phrases or stripped.startswith("/cancel"):
+            try:
+                from core.task_board import TaskBoard
+                board = TaskBoard()
+                count = board.cancel_all()
+                _adapter = self._get_adapter(msg.channel)
+                if _adapter:
+                    if count:
+                        await _adapter.send_message(
+                            msg.chat_id, f"🛑 已取消 {count} 个任务。")
+                    else:
+                        await _adapter.send_message(
+                            msg.chat_id, "ℹ️ 当前没有正在执行的任务。")
+            except Exception as e:
+                logger.error("Abort detection error: %s", e)
+            return
+
         await self._queue.put(msg)
 
     async def _task_processor(self):

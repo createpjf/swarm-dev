@@ -30,8 +30,10 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 JOBS_PATH = "memory/cron_jobs.json"
+DEFAULT_JOB_TIMEOUT = 600  # 10 minutes default watchdog timeout
 _stop_event = Event()
 _scheduler_thread: Optional[Thread] = None
+_running_jobs: dict[str, Thread] = {}  # job_id → Thread (concurrency guard)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -234,8 +236,12 @@ def _execute_job(job: dict) -> tuple[bool, str]:
                     orch._wait()
                 except Exception as e:
                     logger.error("Cron task exec error: %s", e)
+                finally:
+                    _running_jobs.pop(job["id"], None)
 
             t = Thread(target=_run, daemon=True)
+            t._cron_started = time.time()  # type: ignore[attr-defined]
+            _running_jobs[job["id"]] = t
             t.start()
             return True, f"task submitted: {task_id}"
 
@@ -298,8 +304,26 @@ def _scheduler_tick():
         except ValueError:
             continue
 
+        # ── Concurrency guard: skip if previous run is still active ──
+        jid = job["id"]
+        prev_thread = _running_jobs.get(jid)
+        if prev_thread and prev_thread.is_alive():
+            timeout = job.get("timeout", DEFAULT_JOB_TIMEOUT)
+            # Check watchdog — if running longer than timeout, log warning
+            started = getattr(prev_thread, "_cron_started", 0)
+            elapsed = time.time() - started if started else 0
+            if elapsed > timeout:
+                logger.warning(
+                    "Cron job %s (%s) exceeded timeout (%.0fs > %ds), "
+                    "skipping new run",
+                    jid, job["name"], elapsed, timeout)
+            else:
+                logger.debug("Cron job %s still running (%.0fs), skipping",
+                             jid, elapsed)
+            continue
+
         # Execute
-        logger.info("Cron firing job: %s (%s)", job["id"], job["name"])
+        logger.info("Cron firing job: %s (%s)", jid, job["name"])
         ok, msg = _execute_job(job)
 
         job["last_run"] = now_iso

@@ -484,6 +484,12 @@ class TaskBoard:
             self._write(data)
             return True
 
+    def is_cancelled(self, task_id: str) -> bool:
+        """Check if a task has been cancelled (for agent loop early exit)."""
+        data = self._read()
+        t = data.get(task_id)
+        return bool(t and t.get("status") == TaskStatus.CANCELLED.value)
+
     def pause(self, task_id: str) -> bool:
         """Pause a pending/claimed task. Returns True if paused."""
         with self.lock:

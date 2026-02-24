@@ -21,10 +21,27 @@ logger = logging.getLogger(__name__)
 
 # ── BM25 Implementation ─────────────────────────────────────────────────────
 
+_CHINESE_STOP_WORDS: set[str] = {
+    # High-frequency function words that add noise to BM25 scoring
+    "的", "了", "在", "是", "我", "有", "和", "就", "不", "人",
+    "都", "一", "一个", "上", "也", "很", "到", "说", "要", "去",
+    "你", "会", "着", "没有", "看", "好", "自己", "这", "他", "她",
+    "它", "们", "那", "里", "为", "什么", "吗", "吧", "呢", "啊",
+    "把", "被", "让", "给", "从", "对", "但", "而", "如果", "所以",
+    "因为", "可以", "能", "想", "已经", "还", "又", "再", "才",
+    "只", "比", "更", "最", "过", "得", "地", "与", "及", "或",
+    "其", "之", "于", "以", "来", "等", "这个", "那个", "没", "做",
+    "用", "下", "出", "时", "年", "月", "日", "个", "中", "大",
+    "小", "多", "少", "后", "前", "次", "每", "当", "该", "些",
+    "怎么", "哪", "谁", "如何", "为什么", "怎样", "请", "然后",
+    "所", "向", "虽然", "但是", "不过", "而且", "并且", "或者",
+}
+
 def _tokenize(text: str) -> list[str]:
-    """Simple word tokenizer — lowercase, split on non-alphanumeric."""
-    return re.findall(r'[a-z0-9\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]+',
-                      text.lower())
+    """Word tokenizer — lowercase, split on non-alphanumeric, filter stop words."""
+    tokens = re.findall(r'[a-z0-9\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff]+',
+                        text.lower())
+    return [t for t in tokens if t not in _CHINESE_STOP_WORDS]
 
 
 class BM25Index:

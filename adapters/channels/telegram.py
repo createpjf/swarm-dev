@@ -805,10 +805,20 @@ class TelegramAdapter(ChannelAdapter):
             await update.effective_message.reply_text(f"Error: {e}")
 
     async def _cmd_cancel(self, update, context):
-        """Handle /cancel command."""
-        await update.effective_message.reply_text(
-            "⚠️ Task cancellation is not yet supported. "
-            "Current task will complete or timeout.")
+        """Handle /cancel command — cancels all active tasks."""
+        try:
+            from core.task_board import TaskBoard
+            board = TaskBoard()
+            count = board.cancel_all()
+            if count:
+                await update.effective_message.reply_text(
+                    f"🛑 已取消 {count} 个任务。")
+            else:
+                await update.effective_message.reply_text(
+                    "ℹ️ 当前没有正在执行的任务。")
+        except Exception as e:
+            logger.error("Cancel command error: %s", e)
+            await update.effective_message.reply_text(f"取消失败: {e}")
 
     # ── Helpers ──
 

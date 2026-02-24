@@ -49,6 +49,7 @@ REGISTRY_FILE = ".subagent_registry.json"
 REGISTRY_LOCK = ".subagent_registry.lock"
 MAX_DEPTH = 3
 MAX_CHILDREN_PER_PARENT = 5
+DEFAULT_SPAWN_TIMEOUT = 300  # 5 minutes default timeout for subagent tasks
 
 
 class SpawnMode(str, Enum):
@@ -70,6 +71,7 @@ class SubagentEntry:
     created_at: float = 0.0
     completed_at: float = 0.0
     task_id: str = ""  # Associated TaskBoard task ID
+    timeout: int = DEFAULT_SPAWN_TIMEOUT  # watchdog timeout in seconds
 
     def to_dict(self) -> dict:
         return {
@@ -84,6 +86,7 @@ class SubagentEntry:
             "created_at": self.created_at,
             "completed_at": self.completed_at,
             "task_id": self.task_id,
+            "timeout": self.timeout,
         }
 
     @classmethod
@@ -115,7 +118,8 @@ class SubagentRegistry:
 
     def spawn(self, parent_id: str, task: str,
               model: str = "", skills: list[str] | None = None,
-              mode: str = "run", depth: int = 0) -> str:
+              mode: str = "run", depth: int = 0,
+              timeout: int = DEFAULT_SPAWN_TIMEOUT) -> str:
         """Spawn a new subagent and submit its task to the TaskBoard.
 
         Args:
@@ -182,6 +186,7 @@ class SubagentRegistry:
             depth=depth + 1,
             created_at=time.time(),
             task_id=task_id,
+            timeout=timeout,
         )
 
         with self.lock:
@@ -272,6 +277,41 @@ class SubagentRegistry:
 
         # Update status
         self.update_status(subagent_id, "completed", result)
+
+    def check_timeouts(self) -> list[str]:
+        """Check for timed-out subagents and mark them as failed.
+
+        Called periodically by the scheduler or orchestrator loop.
+        Returns list of subagent IDs that were timed out.
+        """
+        timed_out = []
+        now = time.time()
+        with self.lock:
+            data = self._read()
+            changed = False
+            for sid, entry in data.items():
+                if entry.get("status") not in ("pending", "running"):
+                    continue
+                timeout = entry.get("timeout", DEFAULT_SPAWN_TIMEOUT)
+                created = entry.get("created_at", 0)
+                if created and (now - created) > timeout:
+                    entry["status"] = "failed"
+                    entry["result"] = (
+                        f"Timed out after {timeout}s "
+                        f"(elapsed: {now - created:.0f}s)")
+                    entry["completed_at"] = now
+                    timed_out.append(sid)
+                    changed = True
+                    logger.warning(
+                        "[subagent] %s timed out after %ds", sid, timeout)
+            if changed:
+                self._write(data)
+
+        # Notify parents of timed-out subagents
+        for sid in timed_out:
+            self.auto_announce(sid, f"TIMEOUT: subagent {sid} exceeded {DEFAULT_SPAWN_TIMEOUT}s limit")
+
+        return timed_out
 
     def cleanup_old(self, max_age_hours: int = 24):
         """Remove completed/failed entries older than max_age_hours."""

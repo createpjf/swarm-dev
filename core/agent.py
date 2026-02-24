@@ -587,6 +587,16 @@ class BaseAgent:
         tools_agent_cfg = {"tools": self.cfg.tools_config}
 
         for round_num in range(max_rounds):
+            # Check for task cancellation before each round
+            try:
+                from core.task_board import TaskBoard
+                if TaskBoard().is_cancelled(task.task_id):
+                    logger.info("[%s] task %s cancelled, aborting tool loop",
+                                self.cfg.agent_id, task.task_id[:8])
+                    return result + "\n\n[Task cancelled by user]"
+            except Exception:
+                pass
+
             # Parse tool invocations from agent output
             calls = parse_tool_calls(result)
             if not calls:

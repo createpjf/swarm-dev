@@ -247,6 +247,10 @@ class MinimaxAdapter:
                     json=payload,
                 )
                 resp.raise_for_status()
+                # ── Trace-ID tracking (OpenClaw-inspired) ──
+                trace_id = resp.headers.get("Trace-Id", "")
+                if trace_id:
+                    logger.debug("[minimax] Trace-Id: %s", trace_id)
                 data = resp.json()
                 choices = data.get("choices")
                 if not choices:
@@ -263,16 +267,19 @@ class MinimaxAdapter:
         except httpx.HTTPStatusError as e:
             code = e.response.status_code
             body = ""
+            trace_id = ""
             try:
                 body = e.response.text[:500]
+                trace_id = e.response.headers.get("Trace-Id", "")
             except Exception:
                 pass
-            logger.error("[minimax] HTTP %d — %s", code, body)
+            trace_suffix = f" [Trace-Id: {trace_id}]" if trace_id else ""
+            logger.error("[minimax] HTTP %d — %s%s", code, body, trace_suffix)
             if code == 401:
-                raise RuntimeError("Minimax API key invalid (401)") from e
+                raise RuntimeError(f"Minimax API key invalid (401){trace_suffix}") from e
             elif code == 429:
-                raise RuntimeError("Minimax rate limited (429)") from e
-            raise RuntimeError(f"Minimax API error ({code}): {body[:200]}") from e
+                raise RuntimeError(f"Minimax rate limited (429){trace_suffix}") from e
+            raise RuntimeError(f"Minimax API error ({code}): {body[:200]}{trace_suffix}") from e
         except httpx.ConnectError as e:
             raise RuntimeError(
                 f"Cannot connect to Minimax API: {self.base_url}") from e
@@ -380,6 +387,9 @@ class MinimaxAdapter:
                     json=payload,
                 )
                 resp.raise_for_status()
+                trace_id = resp.headers.get("Trace-Id", "")
+                if trace_id:
+                    logger.debug("[minimax] Trace-Id: %s", trace_id)
                 data = resp.json()
                 choices = data.get("choices")
                 if not choices:
@@ -402,12 +412,15 @@ class MinimaxAdapter:
         except httpx.HTTPStatusError as e:
             code = e.response.status_code
             body = ""
+            trace_id = ""
             try:
                 body = e.response.text[:500]
+                trace_id = e.response.headers.get("Trace-Id", "")
             except Exception:
                 pass
-            logger.error("[minimax] HTTP %d — %s", code, body)
-            raise RuntimeError(f"Minimax API error ({code}): {body[:200]}") from e
+            trace_suffix = f" [Trace-Id: {trace_id}]" if trace_id else ""
+            logger.error("[minimax] HTTP %d — %s%s", code, body, trace_suffix)
+            raise RuntimeError(f"Minimax API error ({code}): {body[:200]}{trace_suffix}") from e
         except (httpx.ConnectError, httpx.TimeoutException) as e:
             raise RuntimeError(f"Minimax API connection error: {e}") from e
         except (KeyError, IndexError, json.JSONDecodeError) as e:

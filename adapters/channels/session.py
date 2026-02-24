@@ -76,9 +76,9 @@ class SessionStore:
         cross-user context bleeding in group chats.
         """
         if is_group and GROUP_USER_ISOLATION and user_id:
-            session_id = f"{channel}:{chat_id}:{user_id}"
+            session_id = f"{channel}:{chat_id}:{user_id}".lower().strip()
         else:
-            session_id = f"{channel}:{chat_id}"
+            session_id = f"{channel}:{chat_id}".lower().strip()
         with self.lock:
             data = self._read()
             if session_id in data:
