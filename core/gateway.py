@@ -3252,6 +3252,13 @@ def start_gateway(port: int = 0, token: str = "",
     """
     global _start_time, _token, _config
 
+    # ── Ensure .env is loaded (idempotent — setdefault won't clobber) ──
+    try:
+        from core.env_loader import load_dotenv
+        load_dotenv()
+    except Exception:
+        pass
+
     port = port or int(os.environ.get("CLEO_GATEWAY_PORT",
                         os.environ.get("SWARM_GATEWAY_PORT", str(DEFAULT_PORT))))
     token = token or os.environ.get("CLEO_GATEWAY_TOKEN",
