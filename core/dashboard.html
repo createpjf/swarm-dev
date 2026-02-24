@@ -1068,11 +1068,23 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 
 <!-- ── Panel: Memory ── -->
 <div class="panel" id="panel-memory">
-  <div class="page-header">
-    <div class="page-title">Agent Memory</div>
-    <div class="page-actions"><button class="btn" onclick="loadMemory()">Refresh</button></div>
+  <div class="page-header" style="display:flex;align-items:center;justify-content:space-between">
+    <div style="display:flex;align-items:center;gap:16px">
+      <div class="page-title">Agent Memory</div>
+      <select id="memAgentSelect" class="input" style="width:140px;padding:6px 10px" onchange="loadMemory()">
+        <option value="all">All Agents</option>
+        <option value="leo">Leo</option>
+        <option value="jerry">Jerry</option>
+        <option value="alic">Alic</option>
+      </select>
+    </div>
+    <div class="page-actions" style="display:flex;gap:8px">
+      <button class="btn btn-outline" onclick="exportMemory()">Export</button>
+      <button class="btn" onclick="loadMemory()">Refresh</button>
+    </div>
   </div>
 
+  <!-- Stat Cards -->
   <div class="stat-grid" id="memStats" style="margin-bottom:18px">
     <div class="stat-card"><div class="stat-value" id="memEpisodes">—</div><div class="stat-label">Episodes</div></div>
     <div class="stat-card"><div class="stat-value" id="memCases">—</div><div class="stat-label">Cases</div></div>
@@ -1080,28 +1092,21 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
     <div class="stat-card"><div class="stat-value" id="memNotes">—</div><div class="stat-label">KB Notes</div></div>
   </div>
 
-  <!-- Per-Agent Memory -->
-  <div class="card">
-    <div class="card-title">Per-Agent Memory</div>
-    <table class="data-table">
-      <thead><tr>
-        <th>Agent</th><th>Episodes</th><th>Cases</th><th>Patterns</th><th>Daily Logs</th>
-      </tr></thead>
-      <tbody id="memAgentsBody"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
-    </table>
+  <!-- Sub-tabs -->
+  <div class="modal-tabs" id="memTabs" style="margin-bottom:16px">
+    <button class="modal-tab active" data-memtab="episodes" onclick="switchMemoryTab('episodes')">Episodes</button>
+    <button class="modal-tab" data-memtab="cases" onclick="switchMemoryTab('cases')">Cases</button>
+    <button class="modal-tab" data-memtab="daily" onclick="switchMemoryTab('daily')">Daily Log</button>
+    <button class="modal-tab" data-memtab="kb" onclick="switchMemoryTab('kb')">Knowledge Base</button>
   </div>
 
-  <!-- Knowledge Base Notes -->
-  <div class="card" style="margin-top:16px">
-    <div class="card-title">Shared Knowledge Base</div>
-    <div id="memKBList" style="font-family:var(--mono);font-size:12px;color:var(--fg2)">Loading…</div>
+  <!-- Data Area (content switches per tab) -->
+  <div id="memDataArea">
+    <div class="card"><div class="empty">Select an agent and tab to view memory data</div></div>
   </div>
 
-  <!-- Recent Insights -->
-  <div class="card" style="margin-top:16px">
-    <div class="card-title">Cross-Agent Insights</div>
-    <div id="memInsightsList" style="font-family:var(--mono);font-size:12px;color:var(--fg2)">Loading…</div>
-  </div>
+  <!-- Edit Modal Container -->
+  <div id="memEditModalContainer"></div>
 </div>
 
 <!-- ═══════════════ Cron Jobs Panel ═══════════════ -->
@@ -4793,83 +4798,380 @@ async function chainInit(agentId) {
 }
 
 // ══════════════════════════════════════════════════════════════════
-//  MEMORY PANEL
+//  MEMORY PANEL (Enhanced)
 // ══════════════════════════════════════════════════════════════════
 
-async function loadMemory() {
-  const [statusData, kbData, insightsData] = await Promise.all([
-    api('/v1/memory/status'),
-    api('/v1/memory/kb/notes'),
-    api('/v1/memory/kb/insights'),
-  ]);
+let _memActiveTab = 'episodes';
+let _memStatusCache = null;
 
-  // Stat cards
+function _getMemAgent() {
+  const sel = document.getElementById('memAgentSelect');
+  return sel ? sel.value : 'all';
+}
+
+async function loadMemory() {
+  // Load status (stats) for all agents
+  const statusData = await api('/v1/memory/status');
+  _memStatusCache = statusData;
+
   if (statusData) {
     const agents = statusData.agents || {};
+    const agent = _getMemAgent();
     let totalEps = 0, totalCases = 0, totalPats = 0;
-    Object.values(agents).forEach(a => {
-      totalEps += a.episodes || 0;
-      totalCases += a.cases || 0;
-      totalPats += a.patterns || 0;
-    });
+    if (agent === 'all') {
+      Object.values(agents).forEach(a => {
+        totalEps += a.episodes || 0;
+        totalCases += a.cases || 0;
+        totalPats += a.patterns || 0;
+      });
+    } else {
+      const a = agents[agent] || {};
+      totalEps = a.episodes || 0;
+      totalCases = a.cases || 0;
+      totalPats = a.patterns || 0;
+    }
     document.getElementById('memEpisodes').textContent = totalEps;
     document.getElementById('memCases').textContent = totalCases;
     document.getElementById('memPatterns').textContent = totalPats;
     const kb = statusData.knowledge_base || {};
     document.getElementById('memNotes').textContent = kb.notes || 0;
-
-    // Per-agent table
-    const body = document.getElementById('memAgentsBody');
-    let html = '';
-    for (const [aid, info] of Object.entries(agents)) {
-      html += '<tr>';
-      html += '<td><strong>' + escHtml(capitalize(aid)) + '</strong></td>';
-      html += '<td>' + (info.episodes || 0) + '</td>';
-      html += '<td>' + (info.cases || 0) + '</td>';
-      html += '<td>' + (info.patterns || 0) + '</td>';
-      html += '<td>' + (info.daily_logs || 0) + '</td>';
-      html += '</tr>';
-    }
-    body.innerHTML = html || '<tr><td colspan="5" class="empty">No memory data</td></tr>';
   }
 
-  // Knowledge Base notes
-  const kbList = document.getElementById('memKBList');
+  // Load active tab data
+  switchMemoryTab(_memActiveTab);
+}
+
+function switchMemoryTab(tab) {
+  _memActiveTab = tab;
+  // Update tab highlight
+  document.querySelectorAll('#memTabs .modal-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.memtab === tab);
+  });
+  // Load data for the selected tab
+  const agent = _getMemAgent();
+  if (tab === 'episodes') loadMemoryEpisodes(agent);
+  else if (tab === 'cases') loadMemoryCases(agent);
+  else if (tab === 'daily') loadMemoryDaily(agent);
+  else if (tab === 'kb') loadMemoryKB();
+}
+
+async function loadMemoryEpisodes(agent) {
+  const area = document.getElementById('memDataArea');
+  if (agent === 'all') {
+    // Load for all agents
+    const agents = ['leo', 'jerry', 'alic'];
+    let allEps = [];
+    const results = await Promise.all(agents.map(a => api('/v1/memory/episodes/' + a)));
+    results.forEach((data, i) => {
+      (data?.episodes || []).forEach(ep => { ep._agent = agents[i]; allEps.push(ep); });
+    });
+    allEps.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    renderEpisodesTable(area, allEps, true);
+  } else {
+    const data = await api('/v1/memory/episodes/' + agent);
+    const eps = (data?.episodes || []).map(ep => { ep._agent = agent; return ep; });
+    eps.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    renderEpisodesTable(area, eps, false);
+  }
+}
+
+function renderEpisodesTable(area, episodes, showAgent) {
+  if (!episodes.length) {
+    area.innerHTML = '<div class="card"><div class="empty">No episodes found</div></div>';
+    return;
+  }
+  let html = '<div class="card"><table class="data-table"><thead><tr>';
+  if (showAgent) html += '<th>Agent</th>';
+  html += '<th>Task</th><th>Date</th><th>Outcome</th><th>Score</th><th></th>';
+  html += '</tr></thead><tbody>';
+  episodes.slice(0, 50).forEach((ep, i) => {
+    const desc = escHtml((ep.task_description || ep.description || ep.task_id || '—').substring(0, 80));
+    const date = ep.timestamp ? new Date(ep.timestamp * 1000).toLocaleDateString() : '—';
+    const outcome = ep.outcome || ep.status || '—';
+    const score = ep.score != null ? ep.score : '—';
+    const outcomeColor = outcome === 'success' ? 'var(--green)' : outcome === 'failure' ? 'var(--red)' : 'var(--fg2)';
+    html += '<tr style="cursor:pointer" onclick="toggleMemDetail(\'ep-' + i + '\')">';
+    if (showAgent) html += '<td><strong>' + escHtml(capitalize(ep._agent)) + '</strong></td>';
+    html += '<td>' + desc + '</td>';
+    html += '<td style="white-space:nowrap">' + date + '</td>';
+    html += '<td style="color:' + outcomeColor + '">' + escHtml(outcome) + '</td>';
+    html += '<td>' + score + '</td>';
+    html += '<td><button class="btn btn-sm btn-outline" onclick="event.stopPropagation();showMemoryEditModal(\'episode\',' + JSON.stringify(ep._agent).replace(/"/g, '&quot;') + ',' + JSON.stringify(ep.task_id || '').replace(/"/g, '&quot;') + ',' + i + ')">Edit</button></td>';
+    html += '</tr>';
+    // Expandable detail row
+    html += '<tr id="ep-' + i + '" style="display:none"><td colspan="' + (showAgent ? 6 : 5) + '" style="padding:12px;background:var(--bg3);font-size:12px">';
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
+    html += '<div><strong>Task ID:</strong> ' + escHtml(ep.task_id || '—') + '</div>';
+    html += '<div><strong>Duration:</strong> ' + (ep.duration ? ep.duration + 's' : '—') + '</div>';
+    if (ep.tools_used) html += '<div><strong>Tools:</strong> ' + escHtml(Array.isArray(ep.tools_used) ? ep.tools_used.join(', ') : ep.tools_used) + '</div>';
+    if (ep.tags) html += '<div><strong>Tags:</strong> ' + escHtml(Array.isArray(ep.tags) ? ep.tags.join(', ') : ep.tags) + '</div>';
+    html += '</div>';
+    if (ep.notes) html += '<div style="margin-top:8px;color:var(--fg2)"><strong>Notes:</strong> ' + escHtml(ep.notes) + '</div>';
+    if (ep.lesson) html += '<div style="margin-top:4px;color:var(--cyan)"><strong>Lesson:</strong> ' + escHtml(ep.lesson) + '</div>';
+    html += '</td></tr>';
+  });
+  html += '</tbody></table>';
+  if (episodes.length > 50) html += '<div style="padding:8px;color:var(--fg3);font-size:12px">Showing 50 of ' + episodes.length + ' episodes</div>';
+  html += '</div>';
+  area.innerHTML = html;
+}
+
+async function loadMemoryCases(agent) {
+  const area = document.getElementById('memDataArea');
+  if (agent === 'all') {
+    const agents = ['leo', 'jerry', 'alic'];
+    let allCases = [];
+    const results = await Promise.all(agents.map(a => api('/v1/memory/cases/' + a)));
+    results.forEach((data, i) => {
+      (data?.cases || []).forEach(c => { c._agent = agents[i]; allCases.push(c); });
+    });
+    allCases.sort((a, b) => (b.use_count || 0) - (a.use_count || 0));
+    renderCasesTable(area, allCases, true);
+  } else {
+    const data = await api('/v1/memory/cases/' + agent);
+    const cases = (data?.cases || []).map(c => { c._agent = agent; return c; });
+    cases.sort((a, b) => (b.use_count || 0) - (a.use_count || 0));
+    renderCasesTable(area, cases, false);
+  }
+}
+
+function renderCasesTable(area, cases, showAgent) {
+  if (!cases.length) {
+    area.innerHTML = '<div class="card"><div class="empty">No cases found</div></div>';
+    return;
+  }
+  let html = '<div class="card"><table class="data-table"><thead><tr>';
+  if (showAgent) html += '<th>Agent</th>';
+  html += '<th>Problem</th><th>Uses</th><th>Tags</th><th></th>';
+  html += '</tr></thead><tbody>';
+  cases.slice(0, 50).forEach((c, i) => {
+    const problem = escHtml((c.problem || c.description || '—').substring(0, 100));
+    const uses = c.use_count || 0;
+    const tags = (c.tags || []).map(t => '<span style="background:var(--bg4);padding:1px 6px;border-radius:3px;font-size:10px;color:var(--fg2)">' + escHtml(t) + '</span>').join(' ');
+    html += '<tr style="cursor:pointer" onclick="toggleMemDetail(\'cs-' + i + '\')">';
+    if (showAgent) html += '<td><strong>' + escHtml(capitalize(c._agent)) + '</strong></td>';
+    html += '<td>' + problem + '</td>';
+    html += '<td>' + uses + '</td>';
+    html += '<td>' + (tags || '—') + '</td>';
+    html += '<td><button class="btn btn-sm btn-outline" onclick="event.stopPropagation();showMemoryEditModal(\'case\',' + JSON.stringify(c._agent).replace(/"/g, '&quot;') + ',' + JSON.stringify(c.hash || c.id || '').replace(/"/g, '&quot;') + ',' + i + ')">Edit</button></td>';
+    html += '</tr>';
+    // Expandable detail
+    html += '<tr id="cs-' + i + '" style="display:none"><td colspan="' + (showAgent ? 5 : 4) + '" style="padding:12px;background:var(--bg3);font-size:12px">';
+    html += '<div><strong>Solution:</strong></div>';
+    html += '<div style="color:var(--fg2);margin-top:4px;white-space:pre-wrap">' + escHtml(c.solution || '—') + '</div>';
+    if (c.context) html += '<div style="margin-top:8px"><strong>Context:</strong> ' + escHtml(typeof c.context === 'string' ? c.context : JSON.stringify(c.context)) + '</div>';
+    if (c.notes) html += '<div style="margin-top:4px;color:var(--cyan)"><strong>Notes:</strong> ' + escHtml(c.notes) + '</div>';
+    html += '</td></tr>';
+  });
+  html += '</tbody></table>';
+  if (cases.length > 50) html += '<div style="padding:8px;color:var(--fg3);font-size:12px">Showing 50 of ' + cases.length + ' cases</div>';
+  html += '</div>';
+  area.innerHTML = html;
+}
+
+async function loadMemoryDaily(agent) {
+  const area = document.getElementById('memDataArea');
+  if (agent === 'all') {
+    const agents = ['leo', 'jerry', 'alic'];
+    let allDaily = [];
+    const results = await Promise.all(agents.map(a => api('/v1/memory/daily/' + a)));
+    results.forEach((data, i) => {
+      (data?.entries || data?.daily || []).forEach(d => { d._agent = agents[i]; allDaily.push(d); });
+    });
+    allDaily.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    renderDailyList(area, allDaily, true);
+  } else {
+    const data = await api('/v1/memory/daily/' + agent);
+    const daily = (data?.entries || data?.daily || []).map(d => { d._agent = agent; return d; });
+    daily.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    renderDailyList(area, daily, false);
+  }
+}
+
+function renderDailyList(area, entries, showAgent) {
+  if (!entries.length) {
+    area.innerHTML = '<div class="card"><div class="empty">No daily log entries found</div></div>';
+    return;
+  }
+  let html = '<div class="card" style="display:flex;flex-direction:column;gap:12px">';
+  entries.slice(0, 30).forEach(d => {
+    const date = d.date || '—';
+    const agentLabel = showAgent ? '<span style="color:var(--accent)">[' + escHtml(capitalize(d._agent)) + ']</span> ' : '';
+    html += '<div style="border-left:2px solid var(--accent);padding-left:12px">';
+    html += '<div style="font-size:13px;font-weight:600">' + agentLabel + date + '</div>';
+    // Render learning entries
+    const items = d.learnings || d.entries || d.items || [];
+    if (Array.isArray(items) && items.length) {
+      items.forEach(item => {
+        const text = typeof item === 'string' ? item : (item.content || item.text || JSON.stringify(item));
+        html += '<div style="color:var(--fg2);font-size:12px;margin-top:4px;padding-left:8px">• ' + escHtml(text.substring(0, 200)) + '</div>';
+      });
+    } else if (d.summary) {
+      html += '<div style="color:var(--fg2);font-size:12px;margin-top:4px">' + escHtml(d.summary.substring(0, 300)) + '</div>';
+    } else if (d.content) {
+      html += '<div style="color:var(--fg2);font-size:12px;margin-top:4px">' + escHtml((typeof d.content === 'string' ? d.content : JSON.stringify(d.content)).substring(0, 300)) + '</div>';
+    }
+    html += '</div>';
+  });
+  if (entries.length > 30) html += '<div style="color:var(--fg3);font-size:12px">Showing 30 of ' + entries.length + ' entries</div>';
+  html += '</div>';
+  area.innerHTML = html;
+}
+
+async function loadMemoryKB() {
+  const area = document.getElementById('memDataArea');
+  const [kbData, insightsData] = await Promise.all([
+    api('/v1/memory/kb/notes'),
+    api('/v1/memory/kb/insights'),
+  ]);
+
+  let html = '';
+
+  // KB Notes
+  html += '<div class="card" style="margin-bottom:16px"><div class="card-title">Knowledge Base Notes</div>';
   if (kbData && kbData.notes && kbData.notes.length > 0) {
-    let html = '<div style="display:flex;flex-direction:column;gap:8px">';
+    html += '<div style="display:flex;flex-direction:column;gap:10px">';
     kbData.notes.forEach(note => {
-      const tags = (note.tags || []).map(t => '<span style="background:var(--surface);padding:1px 6px;border-radius:3px;font-size:10px">' + escHtml(t) + '</span>').join(' ');
+      const tags = (note.tags || []).map(t => '<span style="background:var(--bg4);padding:1px 6px;border-radius:3px;font-size:10px;color:var(--fg2)">' + escHtml(t) + '</span>').join(' ');
       const contributors = (note.contributors || []).join(', ');
       const content = (note.content || '').substring(0, 200);
-      html += '<div style="border-left:2px solid var(--accent1);padding-left:10px">';
+      html += '<div style="border-left:2px solid var(--accent);padding-left:10px">';
       html += '<div><strong>' + escHtml(note.topic || note.slug) + '</strong> ' + tags + '</div>';
-      html += '<div style="color:var(--fg3);font-size:11px">' + escHtml(content) + '</div>';
+      html += '<div style="color:var(--fg2);font-size:12px;margin-top:2px">' + escHtml(content) + '</div>';
       html += '<div style="color:var(--fg3);font-size:10px;margin-top:2px">by ' + escHtml(contributors) + ' · ' + (note.update_count || 1) + ' updates</div>';
       html += '</div>';
     });
     html += '</div>';
-    kbList.innerHTML = html;
   } else {
-    kbList.innerHTML = '<span class="empty">No knowledge notes yet. Notes are created as agents learn from tasks.</span>';
+    html += '<div class="empty">No knowledge notes yet</div>';
   }
+  html += '</div>';
 
-  // Insights feed
-  const insList = document.getElementById('memInsightsList');
+  // Insights
+  html += '<div class="card"><div class="card-title">Cross-Agent Insights</div>';
   if (insightsData && insightsData.insights && insightsData.insights.length > 0) {
-    let html = '';
-    insightsData.insights.slice(-15).reverse().forEach(ins => {
+    html += '<div style="display:flex;flex-direction:column;gap:8px">';
+    insightsData.insights.slice(-20).reverse().forEach(ins => {
       const ts = new Date(ins.ts * 1000).toLocaleString();
       const tags = (ins.tags || []).join(', ');
-      html += '<div style="margin-bottom:6px;border-left:2px solid var(--accent2);padding-left:8px">';
-      html += '<span style="color:var(--accent1)">[' + escHtml(ins.agent_id) + ']</span> ';
-      html += escHtml(ins.insight);
+      html += '<div style="border-left:2px solid var(--cyan);padding-left:8px">';
+      html += '<span style="color:var(--accent)">[' + escHtml(ins.agent_id) + ']</span> ';
+      html += '<span style="font-size:12px">' + escHtml(ins.insight) + '</span>';
       html += '<div style="color:var(--fg3);font-size:10px">' + ts;
       if (tags) html += ' · ' + escHtml(tags);
       html += '</div></div>';
     });
-    insList.innerHTML = html;
+    html += '</div>';
   } else {
-    insList.innerHTML = '<span class="empty">No cross-agent insights yet. Insights are generated after task completion.</span>';
+    html += '<div class="empty">No cross-agent insights yet</div>';
+  }
+  html += '</div>';
+
+  area.innerHTML = html;
+}
+
+function toggleMemDetail(id) {
+  const row = document.getElementById(id);
+  if (!row) return;
+  row.style.display = row.style.display === 'none' ? 'table-row' : 'none';
+}
+
+// ── Memory Edit Modal ──
+
+function showMemoryEditModal(type, agent, id, idx) {
+  // Find the data from the current table
+  const container = document.getElementById('memEditModalContainer');
+  let title = type === 'case' ? 'Edit Case' : 'Edit Episode';
+
+  let html = '<div class="agent-modal-overlay" onclick="closeMemoryEditModal()">';
+  html += '<div class="agent-modal" onclick="event.stopPropagation()" style="width:min(650px,90vw)">';
+  html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">';
+  html += '<span style="font-size:16px;font-weight:600">' + title + ' — ' + escHtml(capitalize(agent)) + '</span>';
+  html += '<button style="background:none;border:none;color:var(--fg3);font-size:18px;cursor:pointer" onclick="closeMemoryEditModal()">✕</button>';
+  html += '</div>';
+
+  if (type === 'case') {
+    html += '<div style="display:flex;flex-direction:column;gap:12px">';
+    html += '<div><label style="font-size:11px;color:var(--fg3);display:block;margin-bottom:4px">Solution</label>';
+    html += '<textarea id="memEditSolution" class="input" style="width:100%;height:120px;font-family:var(--mono);font-size:12px" placeholder="Solution..."></textarea></div>';
+    html += '<div><label style="font-size:11px;color:var(--fg3);display:block;margin-bottom:4px">Tags (comma-separated)</label>';
+    html += '<input id="memEditTags" class="input" style="width:100%" placeholder="tag1, tag2, ..." /></div>';
+    html += '<div><label style="font-size:11px;color:var(--fg3);display:block;margin-bottom:4px">Notes</label>';
+    html += '<textarea id="memEditNotes" class="input" style="width:100%;height:60px" placeholder="Notes..."></textarea></div>';
+    html += '</div>';
+  } else {
+    html += '<div style="display:flex;flex-direction:column;gap:12px">';
+    html += '<div><label style="font-size:11px;color:var(--fg3);display:block;margin-bottom:4px">Outcome</label>';
+    html += '<select id="memEditOutcome" class="input"><option value="success">success</option><option value="failure">failure</option><option value="partial">partial</option></select></div>';
+    html += '<div><label style="font-size:11px;color:var(--fg3);display:block;margin-bottom:4px">Tags (comma-separated)</label>';
+    html += '<input id="memEditTags" class="input" style="width:100%" placeholder="tag1, tag2, ..." /></div>';
+    html += '<div><label style="font-size:11px;color:var(--fg3);display:block;margin-bottom:4px">Notes</label>';
+    html += '<textarea id="memEditNotes" class="input" style="width:100%;height:80px" placeholder="Notes..."></textarea></div>';
+    html += '</div>';
+  }
+
+  html += '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">';
+  html += '<button class="btn btn-outline" onclick="closeMemoryEditModal()">Cancel</button>';
+  html += '<button class="btn" onclick="saveMemoryEdit(\'' + type + '\',\'' + agent + '\',\'' + escHtml(id) + '\')">Save</button>';
+  html += '</div>';
+  html += '</div></div>';
+
+  container.innerHTML = html;
+}
+
+function closeMemoryEditModal() {
+  document.getElementById('memEditModalContainer').innerHTML = '';
+}
+
+async function saveMemoryEdit(type, agent, id) {
+  const tags = (document.getElementById('memEditTags')?.value || '').split(',').map(t => t.trim()).filter(Boolean);
+  const notes = document.getElementById('memEditNotes')?.value || '';
+  let body = { tags, notes };
+
+  if (type === 'case') {
+    body.solution = document.getElementById('memEditSolution')?.value || '';
+    const res = await apiPut('/v1/memory/cases/' + agent + '/' + id, body);
+    if (res && !res.error) {
+      showToast('Case updated', 'success');
+      closeMemoryEditModal();
+      loadMemory();
+    } else {
+      showToast('Failed to update case: ' + (res?.error || 'unknown'), 'error');
+    }
+  } else {
+    body.outcome = document.getElementById('memEditOutcome')?.value || '';
+    const res = await apiPut('/v1/memory/episodes/' + agent + '/' + id, body);
+    if (res && !res.error) {
+      showToast('Episode updated', 'success');
+      closeMemoryEditModal();
+      loadMemory();
+    } else {
+      showToast('Failed to update episode: ' + (res?.error || 'unknown'), 'error');
+    }
+  }
+}
+
+// ── Memory Export ──
+
+async function exportMemory() {
+  const agent = _getMemAgent();
+  if (agent === 'all') {
+    showToast('Select a specific agent to export', 'error');
+    return;
+  }
+  const data = await apiPost('/v1/memory/export/' + agent, {});
+  if (data && !data.error) {
+    // Download as JSON file
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = agent + '_memory_export.json';
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('Memory exported for ' + capitalize(agent), 'success');
+  } else {
+    showToast('Export failed: ' + (data?.error || 'unknown'), 'error');
   }
 }
 

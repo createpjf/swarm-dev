@@ -957,7 +957,12 @@ async def _check_planner_closeouts(agent, bus, board: TaskBoard, config: dict):
 
             system_prompt = (
                 f"You are leo.\n\n"
-                f"## Role\n{planner_role}"
+                f"## Role\n{planner_role}\n\n"
+                f"## IMPORTANT OVERRIDE\n"
+                f"You are now in Phase 2 (Closeout Synthesis). "
+                f"In this phase, you CAN and MUST call `send_file` directly "
+                f"if there are files to deliver. Do NOT generate TASK: lines — "
+                f"synthesis is your final step, there is no Jerry to delegate to.\n"
                 f"{tools_section}\n"
             )
             messages = [
