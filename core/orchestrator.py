@@ -678,7 +678,14 @@ async def _agent_loop(agent, bus: ContextBus, board: TaskBoard,
                         return  # exit agent loop gracefully
                     raise
 
-            is_planner = agent.cfg.agent_id.lower() in ("leo", "planner")
+            _planner_ids = {"leo", "planner"}
+            _aid = agent.cfg.agent_id.lower()
+            _arole = (agent.cfg.role or "").lower()
+            is_planner = (_aid in _planner_ids
+                          or "planner" in _arole
+                          or "orchestrat" in _arole
+                          or "brain" in _arole
+                          or "decompos" in _arole)
 
             # Planner: extract subtasks and enter waiting state for close-out
             if is_planner:
@@ -928,7 +935,13 @@ async def _check_planner_closeouts(agent, bus, board: TaskBoard, config: dict):
             # so the synthesizing LLM has access to exec and other tools.
             planner_def = None
             for a in config.get("agents", []):
-                if a.get("id", "").lower() in ("leo", "planner"):
+                _cid = a.get("id", "").lower()
+                _crole = (a.get("role", "") or "").lower()
+                if (_cid in ("leo", "planner")
+                        or "planner" in _crole
+                        or "orchestrat" in _crole
+                        or "brain" in _crole
+                        or "decompos" in _crole):
                     planner_def = a
                     break
             planner_role = (planner_def or {}).get("role", "") or agent.cfg.role

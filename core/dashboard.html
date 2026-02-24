@@ -1426,19 +1426,31 @@ const AGENT_META = {
   search:   {emoji:'🌐', color:'var(--accent)',  cls:'leo',    label:'Search'},
 };
 
+// Dynamic color/emoji palette for new agents
+const _AGENT_COLORS = ['var(--green)','var(--yellow)','var(--red)','var(--blue)','var(--cyan)','var(--magenta)'];
+const _AGENT_EMOJIS = ['🤖','🔧','📊','🎯','💡','🔬','📝','🛠️'];
+
 function agentMeta(agentId) {
   const id = (agentId||'').toLowerCase();
   const known = AGENT_META[id];
-  // Non-agent names (users) get a user icon with accent color
-  const m = known
-    ? {...known}
-    : {emoji:'👤', color:'var(--accent2)', cls:'user', label: agentId};
-  m.icon = m.emoji;
-  return m;
+  if (known) return {...known, icon: known.emoji};
+  // Dynamic meta for new agents
+  const hash = [...id].reduce((h,c) => ((h << 5) - h + c.charCodeAt(0))|0, 0);
+  const color = _AGENT_COLORS[Math.abs(hash) % _AGENT_COLORS.length];
+  const emoji = _AGENT_EMOJIS[Math.abs(hash) % _AGENT_EMOJIS.length];
+  // Non-agent names (users) get a user icon
+  if (!id || id === 'user') return {emoji:'👤', color:'var(--accent2)', cls:'user', label: agentId, icon:'👤'};
+  return {
+    emoji, color, cls: 'dynamic',
+    label: id.charAt(0).toUpperCase() + id.slice(1),
+    avatar: '/avatars/' + id + '.png',
+    icon: emoji
+  };
 }
 function avatarHtml(meta, size) {
   size = size || 28;
-  if (meta.avatar) return '<img src="'+meta.avatar+'" style="width:'+size+'px;height:'+size+'px;border-radius:50%;object-fit:cover;flex-shrink:0">';
+  if (meta.avatar) return '<img src="'+meta.avatar+'" style="width:'+size+'px;height:'+size+'px;border-radius:50%;object-fit:cover;flex-shrink:0" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'inline\'">'
+    + '<span style="font-size:'+(size*0.5)+'px;display:none">'+meta.emoji+'</span>';
   return '<span style="font-size:'+(size*0.5)+'px">'+meta.emoji+'</span>';
 }
 
@@ -3222,13 +3234,18 @@ async function loadAgents() {
       let mhtml = '<div class="agent-modal-overlay" onclick="closeAgentEditor()">';
       mhtml += '<div class="agent-modal" onclick="event.stopPropagation()">';
 
-      // Header with avatar
+      // Header with avatar (click to upload new)
       const modalMeta = agentMeta(a.id);
       mhtml += '<div class="agent-modal-header">';
-      mhtml += '<span class="agent-modal-title">'
-        + avatarHtml(modalMeta, 32) + ' '
-        + '<span class="hb-dot ' + (isOnline ? 'online' : 'offline') + '"></span> '
-        + escHtml(capitalize(a.id)) + '</span>';
+      mhtml += '<span class="agent-modal-title" style="display:flex;align-items:center;gap:8px">';
+      mhtml += '<span style="cursor:pointer;position:relative" onclick="document.getElementById(\'editAvatarInput\').click()" title="Click to change avatar">'
+        + avatarHtml(modalMeta, 32)
+        + '<span style="position:absolute;bottom:-2px;right:-2px;font-size:10px;background:var(--bg2);border-radius:50%;padding:1px;line-height:1">✏️</span>'
+        + '</span>';
+      mhtml += '<input type="file" id="editAvatarInput" accept="image/png" style="display:none" onchange="uploadAgentAvatar(\'' + escHtml(a.id) + '\', this)">';
+      mhtml += '<span class="hb-dot ' + (isOnline ? 'online' : 'offline') + '"></span> '
+        + escHtml(capitalize(a.id));
+      mhtml += '</span>';
       mhtml += '<button class="agent-modal-close" onclick="closeAgentEditor()">✕</button></div>';
 
       // Tabs
@@ -3590,6 +3607,13 @@ function showCreateAgentModal() {
     + '<button class="agent-modal-close" onclick="closeAgentEditor()">✕</button></div>';
   mhtml += '<div class="agent-editor">';
 
+  // Avatar upload
+  mhtml += '<div class="field" style="text-align:center;margin-bottom:12px">';
+  mhtml += '<div id="newAgentAvatarPreview" style="width:64px;height:64px;border-radius:50%;background:var(--bg2);display:flex;align-items:center;justify-content:center;margin:0 auto 8px;cursor:pointer;border:2px dashed var(--bg4);font-size:24px;transition:border-color .2s" onclick="document.getElementById(\'newAgentAvatarInput\').click()" onmouseover="this.style.borderColor=\'var(--accent)\'" onmouseout="this.style.borderColor=\'var(--bg4)\'">📷</div>';
+  mhtml += '<input type="file" id="newAgentAvatarInput" accept="image/png" style="display:none" onchange="previewNewAvatar(this)">';
+  mhtml += '<div style="font-size:10px;color:var(--fg3)">Click to upload avatar (PNG, max 500KB)</div>';
+  mhtml += '</div>';
+
   // ID
   mhtml += '<div class="field"><label>Agent ID (lowercase, no spaces)</label><input class="input" id="newAgentId" placeholder="e.g. researcher"></div>';
 
@@ -3605,6 +3629,17 @@ function showCreateAgentModal() {
   }
   mhtml += '</select></div>';
   mhtml += '</div>';
+
+  // Tools Profile
+  mhtml += '<div class="field"><label>Tool Profile</label>';
+  mhtml += '<div style="display:flex;gap:8px;align-items:center">';
+  mhtml += '<select class="input" id="newAgentToolProfile" style="flex:1">';
+  for (const p of ['coding','minimal','full']) {
+    mhtml += '<option value="'+p+'"' + (p==='coding'?' selected':'') + '>' + p + '</option>';
+  }
+  mhtml += '</select>';
+  mhtml += '<label style="font-size:12px;white-space:nowrap;cursor:pointer"><input type="checkbox" id="newAgentSelectAllTools" onchange="toggleSelectAllTools(this)"> Select All</label>';
+  mhtml += '</div></div>';
 
   // API Key + Base URL (optional)
   mhtml += '<div style="border-top:1px solid var(--bg4);margin:10px 0;padding-top:10px">';
@@ -3634,12 +3669,29 @@ async function createAgent() {
   if (!model) { toast('Model is required', 'error'); return; }
   if (!/^[a-zA-Z0-9_-]+$/.test(id)) { toast('ID must be alphanumeric (a-z, 0-9, _ or -)', 'error'); return; }
 
-  const body = { id, role: role || 'general assistant', model, provider, skills: ['_base'] };
+  // Build tools config
+  const selectAll = document.getElementById('newAgentSelectAllTools')?.checked;
+  const toolProfile = selectAll ? 'full' : (document.getElementById('newAgentToolProfile')?.value || 'coding');
+
+  const body = { id, role: role || 'general assistant', model, provider, skills: ['_base'], tools: { profile: toolProfile } };
   if (apiKey) body.api_key = apiKey;
   if (baseUrl) body.base_url = baseUrl;
 
   const res = await apiPost('/v1/agents', body);
   if (res && res.ok) {
+    // Upload avatar if selected
+    const avatarInput = document.getElementById('newAgentAvatarInput');
+    if (avatarInput && avatarInput.files[0]) {
+      const formData = new FormData();
+      formData.append('avatar', avatarInput.files[0]);
+      try {
+        await fetch('/v1/agents/' + id + '/avatar', {
+          method: 'POST',
+          headers: {'X-Api-Key': localStorage.getItem('cleo_api_key') || ''},
+          body: formData
+        });
+      } catch(e) { console.warn('Avatar upload failed:', e); }
+    }
     toast('Agent ' + id + ' created');
     closeAgentEditor();
     loadAgents();
@@ -3658,6 +3710,52 @@ async function deleteAgent(id) {
   } else {
     toast(res?.error || 'Failed to delete agent', 'error');
   }
+}
+
+// ── Avatar helpers ──
+function previewNewAvatar(input) {
+  const file = input.files[0];
+  if (!file) return;
+  if (file.size > 512000) { toast('Avatar too large (max 500KB)', 'error'); return; }
+  const reader = new FileReader();
+  reader.onload = e => {
+    const preview = document.getElementById('newAgentAvatarPreview');
+    if (preview) preview.innerHTML = '<img src="'+e.target.result+'" style="width:64px;height:64px;border-radius:50%;object-fit:cover">';
+  };
+  reader.readAsDataURL(file);
+}
+
+function toggleSelectAllTools(cb) {
+  const sel = document.getElementById('newAgentToolProfile');
+  if (cb.checked) {
+    if (sel) { sel.value = 'full'; sel.disabled = true; }
+  } else {
+    if (sel) { sel.value = 'coding'; sel.disabled = false; }
+  }
+}
+
+async function uploadAgentAvatar(agentId, input) {
+  const file = input.files[0];
+  if (!file) return;
+  if (file.size > 512000) { toast('Avatar too large (max 500KB)', 'error'); return; }
+  const formData = new FormData();
+  formData.append('avatar', file);
+  try {
+    const res = await fetch('/v1/agents/' + agentId + '/avatar', {
+      method: 'POST',
+      headers: {'X-Api-Key': localStorage.getItem('cleo_api_key') || ''},
+      body: formData
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast('Avatar updated');
+      // Update cache-busted avatar in meta
+      if (AGENT_META[agentId]) AGENT_META[agentId].avatar = data.avatar + '?t=' + Date.now();
+      loadAgents();
+    } else {
+      toast(data.error || 'Upload failed', 'error');
+    }
+  } catch(e) { toast('Upload failed: ' + e.message, 'error'); }
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -5330,39 +5428,66 @@ async function saveAgentFile(agentId, fileName) {
 }
 
 function loadAgentTools(agentId) {
-  // Show agent's tool profile & available tools
   const container = document.getElementById('agentToolsContent');
   if (!container) return;
-  api('/v1/agents').then(data => {
-    const agents = data?.agents || [];
+  Promise.all([api('/v1/agents'), api('/v1/tools')]).then(([agentData, tdata]) => {
+    const agents = agentData?.agents || [];
     const ag = agents.find(a => a.id === agentId);
     if (!ag) { container.innerHTML = '<div class="empty">Agent not found</div>'; return; }
     const tools = ag.tools || {};
     const profile = tools.profile || 'minimal';
-    const allow = tools.allow || [];
-    const deny = tools.deny || [];
+    const allow = new Set(tools.allow || []);
+    const deny = new Set(tools.deny || []);
+    const allTools = tdata?.tools || [];
+    const profiles = tdata?.profiles || {};
 
     let html = '<div style="padding:12px">';
-    html += '<div style="margin-bottom:16px"><strong>Tool Profile:</strong> <code>' + escHtml(profile) + '</code></div>';
-    if (allow.length) html += '<div style="margin-bottom:8px"><strong>Allow:</strong> ' + allow.map(t => '<code style="margin:2px">' + escHtml(t) + '</code>').join(' ') + '</div>';
-    if (deny.length) html += '<div style="margin-bottom:8px"><strong>Deny:</strong> ' + deny.map(t => '<code style="margin:2px;color:var(--red)">' + escHtml(t) + '</code>').join(' ') + '</div>';
+    // Profile selector + Select All
+    html += '<div style="display:flex;gap:12px;align-items:center;margin-bottom:16px;flex-wrap:wrap">';
+    html += '<strong>Profile:</strong> <select class="input" id="toolProfileSelect" style="width:auto">';
+    for (const p of ['minimal','coding','full']) {
+      html += '<option' + (p===profile ? ' selected' : '') + '>' + p + '</option>';
+    }
+    html += '</select>';
+    html += '<label style="font-size:12px;cursor:pointer;white-space:nowrap"><input type="checkbox" id="toolSelectAll"' + (profile==='full' ? ' checked' : '') + ' onchange="toggleAllToolCbs(this)"> Select All</label>';
+    html += '<span style="flex:1"></span>';
+    html += '<button class="btn btn-green btn-sm" onclick="saveAgentTools(\'' + escHtml(agentId) + '\')">Save Tools</button>';
+    html += '</div>';
 
-    // Show all available tools
-    api('/v1/tools').then(tdata => {
-      const allTools = tdata?.tools || [];
-      html += '<div style="margin-top:16px"><strong>Available Tools (' + allTools.length + '):</strong></div>';
-      html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px;margin-top:8px">';
-      allTools.forEach(t => {
-        const name = t.name || t;
-        const isAllowed = allow.length ? allow.includes(name) : !deny.includes(name);
-        const icon = isAllowed ? '✅' : '❌';
-        html += '<div style="padding:6px 10px;background:var(--bg);border-radius:4px;font-size:12px">'
-          + icon + ' <code>' + escHtml(name) + '</code></div>';
-      });
-      html += '</div></div>';
-      container.innerHTML = html;
+    // Tool grid
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:4px" id="toolCheckboxGrid">';
+    const profileSet = profiles[profile];
+    allTools.forEach(t => {
+      const name = t.name || t;
+      let isEnabled;
+      if (allow.size) isEnabled = allow.has(name);
+      else if (profile === 'full' || profileSet === 'all') isEnabled = !deny.has(name);
+      else isEnabled = Array.isArray(profileSet) ? profileSet.includes(name) && !deny.has(name) : !deny.has(name);
+      html += '<label style="padding:4px 8px;background:var(--bg);border-radius:4px;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:4px">'
+        + '<input type="checkbox" class="tool-cb" value="' + escHtml(name) + '"' + (isEnabled ? ' checked' : '') + '>'
+        + '<code>' + escHtml(name) + '</code></label>';
     });
+    html += '</div></div>';
+    container.innerHTML = html;
   });
+}
+
+async function saveAgentTools(agentId) {
+  const profile = document.getElementById('toolProfileSelect')?.value || 'minimal';
+  const body = { tools: { profile } };
+  const res = await apiPut('/v1/agents/' + agentId, body);
+  if (res && res.ok) {
+    toast('Tools updated');
+    loadAgentTools(agentId);
+  } else {
+    toast(res?.error || 'Failed to save tools', 'error');
+  }
+}
+
+function toggleAllToolCbs(masterCb) {
+  document.querySelectorAll('.tool-cb').forEach(cb => cb.checked = masterCb.checked);
+  const sel = document.getElementById('toolProfileSelect');
+  if (sel && masterCb.checked) sel.value = 'full';
 }
 
 // ══════════════════════════════════════════════════════════════════

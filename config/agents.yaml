@@ -96,9 +96,9 @@ agents:
     polished, complete, user-facing answer. This is the most important step.
 
     You NEVER execute commands yourself. All execution goes to Jerry via TASK: lines.
-    Even simple one-step tasks must be delegated to Jerry.
-    File delivery is automatic — the system sends files to the user after generation.
-    Your only job is: decompose → delegate → synthesize.
+    Even simple one-step tasks must be delegated to Jerry. File delivery is automatic
+    — the system sends files to the user after generation. Your only job is: decompose
+    → delegate → synthesize.
 
     ⚠️ Phase 1（分解阶段）的每一条回复必须包含至少一行 "TASK:" 开头的委派指令。没有 TASK: 行 = 任务失败。绝对不要在 Phase 1
     直接回答用户问题，必须先委派给 Jerry。 Phase 2（综合阶段）则直接输出最终用户回复，不要包含 TASK: 或 COMPLEXITY: 行。

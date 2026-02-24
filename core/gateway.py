@@ -403,6 +403,9 @@ class _Handler(BaseHTTPRequestHandler):
             self._handle_exec_add_approval()
         elif path == "/v1/agents":
             self._handle_create_agent()
+        elif path.startswith("/v1/agents/") and path.endswith("/avatar"):
+            agent_id = path[len("/v1/agents/"):-len("/avatar")]
+            self._handle_upload_avatar(agent_id)
         elif path == "/v1/search":
             self._handle_brave_search()
         elif path == "/v1/skills/team/regenerate":
@@ -890,6 +893,65 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception:
             self._json_response(500, {"error": "failed to serve avatar"})
 
+    def _handle_upload_avatar(self, agent_id: str):
+        """Upload a PNG avatar for an agent → core/avatars/{agent_id}.png."""
+        import re as _re
+        if not _re.match(r'^[a-zA-Z0-9_-]+$', agent_id):
+            self._json_response(400, {"error": "Invalid agent ID"})
+            return
+
+        content_length = int(self.headers.get("Content-Length", 0))
+        if content_length > 512_000:  # 500KB max
+            self._json_response(413, {"error": "File too large (max 500KB)"})
+            return
+        if content_length == 0:
+            self._json_response(400, {"error": "Empty body"})
+            return
+
+        raw = self.rfile.read(content_length)
+        content_type = self.headers.get("Content-Type", "")
+
+        # Extract image data from multipart or raw
+        if "multipart" in content_type:
+            boundary = content_type.split("boundary=")[-1].strip()
+            parts = raw.split(f"--{boundary}".encode())
+            png_data = None
+            for part in parts:
+                if b"Content-Type: image/" in part:
+                    idx = part.find(b"\r\n\r\n")
+                    if idx >= 0:
+                        png_data = part[idx + 4:]
+                        # Strip trailing boundary markers
+                        if png_data.endswith(b"\r\n"):
+                            png_data = png_data[:-2]
+                        if png_data.endswith(b"--"):
+                            png_data = png_data[:-2]
+                        if png_data.endswith(b"\r\n"):
+                            png_data = png_data[:-2]
+                        break
+            if not png_data:
+                self._json_response(400, {"error": "No image found in upload"})
+                return
+        else:
+            png_data = raw
+
+        # Validate PNG magic bytes
+        if len(png_data) < 8 or png_data[:4] != b'\x89PNG':
+            self._json_response(400, {"error": "Not a valid PNG file"})
+            return
+
+        # Save to core/avatars/{agent_id}.png
+        avatar_dir = os.path.join(os.path.dirname(__file__), "avatars")
+        os.makedirs(avatar_dir, exist_ok=True)
+        avatar_path = os.path.join(avatar_dir, f"{agent_id}.png")
+        with open(avatar_path, "wb") as f:
+            f.write(png_data)
+
+        self._json_response(200, {
+            "ok": True,
+            "avatar": f"/avatars/{agent_id}.png",
+        })
+
     def _handle_serve_file(self, file_path: str):
         """Serve a file produced by agents (PDF, images, data files, etc.)."""
         if not file_path:
@@ -1181,7 +1243,7 @@ class _Handler(BaseHTTPRequestHandler):
         # Allowlisted fields
         updated = []
         for field in ("model", "role", "skills", "fallback_models",
-                       "autonomy_level"):
+                       "autonomy_level", "tools"):
             if field in body:
                 target[field] = body[field]
                 updated.append(field)
@@ -1314,11 +1376,15 @@ class _Handler(BaseHTTPRequestHandler):
         }
         key_env, url_env = _PROVIDER_ENVS.get(provider, ("", ""))
 
+        # Tools config from request body (default: coding profile)
+        tools_cfg = body.get("tools", {"profile": "coding"})
+
         entry = {
             "id": agent_id,
             "role": role,
             "model": model,
             "skills": skills,
+            "tools": tools_cfg,
             "memory": {"short_term_turns": 20, "long_term": True,
                        "recall_top_k": 3},
             "autonomy_level": int(body.get("autonomy_level", 1)),
@@ -1372,6 +1438,47 @@ class _Handler(BaseHTTPRequestHandler):
                         f"## Style\n<!-- Communication approach -->\n\n"
                         f"## Values\n<!-- Priorities -->\n\n"
                         f"## Boundaries\n<!-- Limits -->\n")
+
+        # Skills agent directory — soul.md, TOOLS.md, HEARTBEAT.md
+        cap_name = agent_id.capitalize()
+        skills_agent_dir = os.path.join("skills", "agents", agent_id)
+        os.makedirs(skills_agent_dir, exist_ok=True)
+
+        skills_soul = os.path.join(skills_agent_dir, "soul.md")
+        if not os.path.exists(skills_soul):
+            with open(skills_soul, "w") as f:
+                f.write(
+                    f"# Soul — {cap_name}\n\n"
+                    f"## 1. Identity\n\n{role}\n\n"
+                    f"## 2. Responsibilities\n\n"
+                    f"<!-- Define what this agent does -->\n\n"
+                    f"## 3. Standing Rules\n\n"
+                    f"1. Reply to the user in Chinese\n"
+                    f"2. Follow the multi-agent protocol\n")
+
+        tool_profile = tools_cfg.get("profile", "coding") \
+            if isinstance(tools_cfg, dict) else "coding"
+        tools_md_path = os.path.join(skills_agent_dir, "TOOLS.md")
+        if not os.path.exists(tools_md_path):
+            with open(tools_md_path, "w") as f:
+                f.write(
+                    f"# TOOLS.md — {cap_name}\n\n"
+                    f"## Tool Profile: {tool_profile}\n\n"
+                    f"See global tool definitions for available tools.\n")
+
+        hb_md_path = os.path.join(skills_agent_dir, "HEARTBEAT.md")
+        if not os.path.exists(hb_md_path):
+            with open(hb_md_path, "w") as f:
+                f.write(
+                    f"# HEARTBEAT.md — {cap_name}\n\n"
+                    f"## Background Checks\n\n"
+                    f"Every task start, {cap_name} should verify:\n\n"
+                    f"### System Health\n"
+                    f"- Tools available and responsive\n"
+                    f"- Memory system accessible\n\n"
+                    f"### Task Pipeline\n"
+                    f"- Pending tasks count\n"
+                    f"- Active session status\n")
 
         # Regenerate team skill
         try:
