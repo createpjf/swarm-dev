@@ -131,6 +131,15 @@ class SkillLoader:
             if override:
                 parts.append(f"### Agent Override ({agent_id})\n{override}")
 
+            # ── 5. TextGrad auto-patches (V0.02 improvement 8) ──
+            textgrad_path = os.path.join(
+                self.skills_dir, "agent_overrides",
+                f"{agent_id}_textgrad.md")
+            textgrad = self._read_file(textgrad_path)
+            if textgrad:
+                parts.append(
+                    f"### TextGrad Improvements ({agent_id})\n{textgrad}")
+
         return "\n\n".join(parts) if parts else "(no skills loaded)"
 
     def load_docs(self, agent_id: str) -> str:

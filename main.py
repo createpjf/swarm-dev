@@ -278,6 +278,34 @@ def build_parser() -> argparse.ArgumentParser:
                        choices=["json", "dot"],
                        help="Graph export format (for 'graph' action)")
 
+    # ── memo ────────────────────────────────────────────────────────────
+    p_memo = sub.add_parser("memo", help="Memo Protocol integration")
+    p_memo.add_argument("action", nargs="?", default="status",
+                        choices=["status", "export", "search",
+                                 "skills", "tracking"],
+                        help="Action to perform")
+    p_memo.add_argument("query", nargs="?", default=None,
+                        help="Search query (for 'search' action)")
+    p_memo.add_argument("--agent", default=None,
+                        help="Filter by agent ID")
+    p_memo.add_argument("--type", dest="memo_type", default=None,
+                        choices=["episodic", "semantic", "procedural"],
+                        help="Filter by Memo memory type")
+    p_memo.add_argument("--since", default=None,
+                        help="Date range start (YYYY-MM-DD)")
+    p_memo.add_argument("--until", default=None,
+                        help="Date range end (YYYY-MM-DD)")
+    p_memo.add_argument("--min-quality", type=float, default=0.6,
+                        help="Minimum quality score (default: 0.6)")
+    p_memo.add_argument("--min-score", type=int, default=7,
+                        help="Minimum Cleo episode score (default: 7)")
+    p_memo.add_argument("--output", "-o", default=None,
+                        help="Output directory (for 'export' action)")
+    p_memo.add_argument("--upload", action="store_true",
+                        help="Also upload to Memo API (for 'export' action)")
+    p_memo.add_argument("--dry-run", action="store_true",
+                        help="Preview without actual export/upload")
+
     # ── evolve ───────────────────────────────────────────────────────────
     p_ev = sub.add_parser("evolve", help="Manage evolution actions")
     p_ev.add_argument("agent_id")

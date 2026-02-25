@@ -476,8 +476,7 @@ class ChannelManager:
                     if adapter:
                         await adapter.send_message(
                             msg.chat_id,
-                            "⚠️ 消息发送过快，请稍后再试。\n"
-                            "Rate limited — please wait a moment.")
+                            "⚠️ Rate limited — please wait a moment.")
                 return
         except ImportError:
             pass  # rate_limiter not available, continue without
@@ -534,10 +533,10 @@ class ChannelManager:
                 if _adapter:
                     if count:
                         await _adapter.send_message(
-                            msg.chat_id, f"🛑 已取消 {count} 个任务。")
+                            msg.chat_id, f"🛑 Cancelled {count} task(s).")
                     else:
                         await _adapter.send_message(
-                            msg.chat_id, "ℹ️ 当前没有正在执行的任务。")
+                            msg.chat_id, "ℹ️ No tasks currently running.")
             except Exception as e:
                 logger.error("Abort detection error: %s", e)
             return
@@ -578,7 +577,7 @@ class ChannelManager:
             if queue_size > 0:
                 await adapter.send_message(
                     msg.chat_id,
-                    f"⏳ 任务已排队 (前方还有 {queue_size} 个任务)...")
+                    f"⏳ Task queued ({queue_size} ahead)...")
 
             try:
                 await self._process_message(msg, adapter, session)
@@ -586,7 +585,7 @@ class ChannelManager:
                 logger.exception("Error processing channel message: %s", e)
                 try:
                     await adapter.send_message(
-                        msg.chat_id, f"❌ 处理失败: {e}")
+                        msg.chat_id, f"❌ Processing failed: {e}")
                 except Exception:
                     pass
 
@@ -674,7 +673,7 @@ class ChannelManager:
             None, self._submit_task, task_text, session_history, msg.channel)
 
         if not task_id:
-            await adapter.send_message(msg.chat_id, "❌ 任务提交失败")
+            await adapter.send_message(msg.chat_id, "❌ Task submission failed")
             return
 
         self._sessions.update_task(sid, task_id)
@@ -718,7 +717,7 @@ class ChannelManager:
                     await asyncio.sleep(0.5)  # rate limit
         else:
             await adapter.send_message(
-                msg.chat_id, "⏰ 任务超时，请稍后重试或简化请求")
+                msg.chat_id, "⏰ Task timed out — please retry or simplify your request")
 
     # ── Persistent Orchestrator Pool ─────────────────────────────
     #
@@ -756,7 +755,7 @@ class ChannelManager:
                     f"{source_tag}"
                     f"{session_history}\n"
                     f"---\n\n"
-                    f"## 当前消息 (Current Message)\n"
+                    f"## ⚠️ CURRENT TASK — focus ONLY on this\n"
                     f"{description}"
                 )
             else:
@@ -806,8 +805,8 @@ class ChannelManager:
             self._persistent_orch.config["max_idle_cycles"] = \
                 self.AGENT_IDLE_CYCLES
             self._persistent_orch._launch_all()
-            logger.info("Persistent agent pool started (%d processes)",
-                        len(self._persistent_orch.procs))
+            logger.info("Persistent agent pool started (%d agents)",
+                        len(self._persistent_orch.runtime.agent_ids()))
             return
 
         # Check for hot-reload signal (new agent created via API)
@@ -816,39 +815,52 @@ class ChannelManager:
             try:
                 os.remove(reload_signal)
                 logger.info("Agent config changed — hot-reloading pool")
-                # Graceful restart: let existing tasks finish, then relaunch
-                for p in self._persistent_orch.procs:
-                    if p.is_alive():
-                        p.terminate()
-                self._persistent_orch.procs.clear()
+                # Graceful restart via runtime
+                self._persistent_orch.runtime.stop_all()
                 # Re-read config and launch
                 from core.orchestrator import Orchestrator
                 self._persistent_orch = Orchestrator()
                 self._persistent_orch.config["max_idle_cycles"] = \
                     self.AGENT_IDLE_CYCLES
                 self._persistent_orch._launch_all()
-                logger.info("Agent pool hot-reloaded (%d processes)",
-                            len(self._persistent_orch.procs))
+                logger.info("Agent pool hot-reloaded (%d agents)",
+                            len(self._persistent_orch.runtime.agent_ids()))
                 return
             except Exception as e:
                 logger.warning("Hot-reload failed: %s", e)
 
         # Check process health — restart pool if all agents exited
-        alive = [p for p in self._persistent_orch.procs if p.is_alive()]
-        if not alive:
+        runtime = self._persistent_orch.runtime
+        alive_map = runtime.all_alive()
+
+        # In lazy mode, only always_on agents should be checked for pool
+        # health.  Jerry/Alic are intentionally NOT started until the
+        # monitor thread detects pending subtasks — they are not "dead".
+        from core.runtime.lazy import LazyRuntime
+        if isinstance(runtime, LazyRuntime):
+            always_on = runtime._always_on
+            check_map = {aid: v for aid, v in alive_map.items()
+                         if aid in always_on}
+        else:
+            check_map = alive_map
+
+        alive_count = sum(1 for v in check_map.values() if v)
+        total_count = len(check_map)
+
+        if total_count > 0 and alive_count == 0:
             logger.info("All agent processes exited (idle timeout), "
                         "restarting pool")
-            self._persistent_orch.procs.clear()
+            # Clear stale state and relaunch
+            runtime.clear()
             self._persistent_orch._launch_all()
-            logger.info("Agent pool restarted (%d processes)",
-                        len(self._persistent_orch.procs))
-        elif len(alive) < len(self._persistent_orch.procs):
-            dead = [p.name for p in self._persistent_orch.procs
-                    if not p.is_alive()]
+            logger.info("Agent pool restarted (%d agents)",
+                        len(runtime.agent_ids()))
+        elif alive_count < total_count:
+            dead = [aid for aid, alive in check_map.items() if not alive]
             logger.warning("Agent processes died: %s (%d/%d alive)",
-                           dead, len(alive),
-                           len(self._persistent_orch.procs))
-            self._persistent_orch.procs = alive
+                           dead, alive_count, total_count)
+            # Prune dead entries from runtime tracking
+            runtime.prune_dead()
 
     @staticmethod
     def _archive_completed_tasks(board):
@@ -973,17 +985,18 @@ class ChannelManager:
         text = re.sub(r'^(?:\*\*)?COMPLEXITY:(?:\*\*)?\s*.+$', '',
                        text, flags=re.MULTILINE)
         # Remove progress status messages leaked from model output
-        text = re.sub(r'^.*任务已提交.*正在处理.*$', '',
-                       text, flags=re.MULTILINE)
+        text = re.sub(r'^.*(?:任务已提交.*正在处理|task submitted.*processing).*$', '',
+                       text, flags=re.MULTILINE | re.IGNORECASE)
         # Remove file delivery internal metadata (handled by native delivery)
         text = re.sub(r'"delivery"\s*:\s*"(?:failed|manual|no_session)"',
                        '', text)
         text = re.sub(r'"retry_hint"\s*:\s*"[^"]*"', '', text)
         text = re.sub(r'"send_error"\s*:\s*"[^"]*"', '', text)
-        # Remove "无法发送文件" apologies (files are auto-delivered)
+        # Remove file-delivery apologies (files are auto-delivered)
         text = re.sub(
             r'^.*(?:无法.*(?:直接|通过).*发送|系统限制.*发送|'
-            r'无法直接通过.*发送文件).*$',
+            r'无法直接通过.*发送文件|'
+            r'cannot send.*directly|system limitation.*send).*$',
             '', text, flags=re.MULTILINE)
         # Remove separator lines between merged results
         text = re.sub(r'\n---\n', '\n\n', text)

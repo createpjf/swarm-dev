@@ -23,8 +23,13 @@ from typing import Any
 
 import yaml
 
-# ── Think-tag & tool-block strippers ──
-_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+from core.protocols import (  # shared utilities
+    _strip_think, FileLock,
+    CritiqueSpec, CritiqueDimensions, CritiqueItem,
+    CritiqueVerdict, INTENT_KEY_PREFIX,
+)
+
+# ── Tool-block stripper ──
 _TOOL_BLOCK_RE = re.compile(
     r"```tool\s*\n.*?\n```"          # ```tool ... ```
     r"|<tool_code>.*?</tool_code>"   # <tool_code>...</tool_code>
@@ -32,10 +37,6 @@ _TOOL_BLOCK_RE = re.compile(
     r"|<tool_code>.*?\n```",         # mixed: <tool_code> ... ```
     re.DOTALL)
 
-def _strip_think(text: str) -> str:
-    """Strip <think>...</think> blocks from LLM output."""
-    text = _THINK_RE.sub("", text)
-    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 def _strip_tool_blocks(text: str) -> str:
     """Strip remaining tool invocation blocks from final output."""
@@ -45,14 +46,6 @@ def _strip_tool_blocks(text: str) -> str:
 
 # ── Graceful shutdown flag (per-process) ──
 _shutdown_requested = False
-
-try:
-    from filelock import FileLock
-except ImportError:
-    class FileLock:  # type: ignore
-        def __init__(self, path): pass
-        def __enter__(self): return self
-        def __exit__(self, *a): pass
 
 from core.agent import AgentConfig
 from core.context_bus import ContextBus
@@ -159,10 +152,11 @@ def _get_agent_model(agent_id: str) -> str:
 
 async def _handle_critique_request(agent, board: TaskBoard, mail: dict, sched):
     """
-    Advisor mode: score subtask output 1-10 with optional suggestions.
+    V0.02 Advisor mode: structured 5-dimension scoring via CritiqueSpec.
     Reviewer is an ADVISOR, not a gatekeeper — tasks are NEVER blocked.
     The planner reads scores/suggestions during final synthesis.
     """
+
     try:
         payload = json.loads(mail["content"])
         task_id     = payload["task_id"]
@@ -172,53 +166,116 @@ async def _handle_critique_request(agent, board: TaskBoard, mail: dict, sched):
         logger.error("[%s] bad critique_request: %s", agent.cfg.agent_id, e)
         return
 
+    # V0.02: Look up original user intent for context (IntentAnchor)
+    intent_context = ""
+    task_obj_intent = board.get(task_id)
+    if task_obj_intent and task_obj_intent.parent_id:
+        try:
+            from core.context_bus import ContextBus
+            bus_path = os.path.join(os.path.dirname(board.path), ".context_bus.json")
+            _bus = ContextBus(bus_path)
+            parent_intent = _bus.get("system",
+                                     f"{INTENT_KEY_PREFIX}{task_obj_intent.parent_id}")
+            if parent_intent:
+                intent_val = (parent_intent.get("value", parent_intent)
+                              if isinstance(parent_intent, dict)
+                              else parent_intent)
+                intent_context = f"## Original User Intent\n{intent_val}\n\n"
+        except Exception:
+            pass
+
+    # V0.02 CritiqueSpec prompt (5-dimension structured scoring)
     critique_prompt = (
-        f"Score this subtask output on a scale of 1-10.\n\n"
+        f"Score this subtask output using 5 dimensions (1-10 each).\n\n"
+        f"{intent_context}"
         f"## Subtask\n{description}\n\n"
         f"## Output\n{result}\n\n"
         f"IMPORTANT: This is a SUBTASK result (raw data/code), NOT a final user-facing answer.\n"
         f"The planner will synthesize all subtask results into the final response.\n"
-        f"Judge ONLY: correctness for this specific subtask, completeness, clarity.\n\n"
+        f"Judge each dimension independently.\n\n"
         f"Respond with JSON:\n"
-        f'{{"score": <1-10>, "suggestions": ["optional improvement 1"], "comment": "brief assessment"}}\n'
-        f"Omit suggestions if score >= 7. Max 3 suggestions if needed."
+        f'{{"dimensions": {{"accuracy": <1-10>, "completeness": <1-10>, '
+        f'"technical": <1-10>, "calibration": <1-10>, "efficiency": <1-10>}}, '
+        f'"verdict": "LGTM" or "NEEDS_WORK", '
+        f'"items": [{{"dimension": "...", "issue": "...", "suggestion": "..."}}], '
+        f'"confidence": <0.0-1.0>}}\n\n'
+        f"Rules:\n"
+        f"- Weights: accuracy 30%, completeness 20%, technical 20%, calibration 20%, efficiency 10%\n"
+        f"- If ALL scores >= 8: verdict MUST be LGTM, items MUST be empty []\n"
+        f"- Max 3 items. Only for dimensions scoring < 8.\n"
+        f"- If any score < 5: verdict MUST be NEEDS_WORK with item for that dimension.\n"
     )
     messages = [
         {"role": "system", "content": agent.cfg.role},
         {"role": "user",   "content": critique_prompt},
     ]
 
+    critique: CritiqueSpec | None = None
+    score = 7
+    suggestions: list[str] = []
+    comment = ""
+
     try:
         raw = await agent.llm.chat(messages, agent.cfg.model)
-        # Extract JSON from response (may have markdown wrapping)
-        json_str = raw.strip()
-        if "```" in json_str:
-            start = json_str.find("{")
-            end = json_str.rfind("}") + 1
-            if start >= 0 and end > start:
-                json_str = json_str[start:end]
-        critique_data = json.loads(json_str)
-        score       = critique_data.get("score", 7)
-        suggestions = critique_data.get("suggestions", [])
-        comment     = critique_data.get("comment", "")
-        passed      = True  # Reviewer NEVER blocks — always pass
+        # Extract JSON object from response (handles markdown wrapping, prose preamble, etc.)
+        json_str = raw
+        start = json_str.find("{")
+        end = json_str.rfind("}") + 1
+        if start >= 0 and end > start:
+            json_str = json_str[start:end]
+
+        parsed = json.loads(json_str)
+
+        # Detect V0.02 format (has "dimensions") vs V0.01 format (has "score")
+        if "dimensions" in parsed:
+            critique = CritiqueSpec.from_json(json_str)
+            critique.task_id = task_id
+            critique.reviewer_id = agent.cfg.agent_id
+            critique.timestamp = time.time()
+            critique.auto_simplify()
+            score = int(critique.composite_score)
+            suggestions = [item.suggestion for item in critique.items if item.suggestion]
+            comment = f"5D Score: {critique.composite_score:.1f} [{critique.verdict}]"
+        else:
+            # V0.01 fallback: {"score": N, "suggestions": [...], "comment": "..."}
+            score = parsed.get("score", 7)
+            suggestions = parsed.get("suggestions", [])
+            comment = parsed.get("comment", "")
+            critique = CritiqueSpec.from_legacy_score(score, comment, suggestions)
+            critique.task_id = task_id
+            critique.reviewer_id = agent.cfg.agent_id
+            critique.timestamp = time.time()
+
     except Exception as e:
         logger.error("[%s] critique LLM call failed: %s", agent.cfg.agent_id, e)
-        # On failure, pass the task through with default score
-        passed, score, suggestions, comment = True, 7, [], f"Critique failed: {e}"
+        score, suggestions, comment = 7, [], f"Critique failed: {e}"
+        critique = CritiqueSpec.from_legacy_score(score, comment)
+        critique.task_id = task_id
+        critique.reviewer_id = agent.cfg.agent_id
+        critique.timestamp = time.time()
 
+    passed = True  # Reviewer NEVER blocks — always pass
+
+    # Store critique + CritiqueSpec atomically (single write to avoid race)
     board.add_critique(task_id, agent.cfg.agent_id, passed, suggestions, comment,
-                       score=score)
+                       score=score,
+                       critique_spec_json=critique.to_json() if critique else None)
+
     await sched.on_critique(agent.cfg.agent_id, passed, score=score)
 
     task_obj = board.get(task_id)
     if task_obj and task_obj.agent_id:
         await sched.on_critique_result(
             task_obj.agent_id,
-            passed_first_time=True,   # Always passes now
+            passed_first_time=True,
             had_revision=False,
-            critique_score=score,      # Use real Alic score instead of heuristic
+            critique_score=score,
         )
+
+    # V0.02: Append to critique_log for TextGrad Pipeline
+    if critique:
+        _eval_agent = task_obj.agent_id if (task_obj and task_obj.agent_id) else ""
+        _append_critique_log(critique, evaluated_agent_id=_eval_agent)
 
     # ── Persist critique to Alic's episodic memory ──────────────────────
     try:
@@ -233,10 +290,11 @@ async def _handle_critique_request(agent, board: TaskBoard, mail: dict, sched):
                 agent_id=agent.cfg.agent_id,
                 task_id=f"critique_{task_id}",
                 task_description=(
-                    f"评审 [{evaluated_agent_id}] 的任务: "
+                    f"Review [{evaluated_agent_id}] task: "
                     f"{description[:200]}"),
                 result=json.dumps({
                     "score": score,
+                    "critique_spec": critique.to_json() if critique else None,
                     "suggestions": suggestions,
                     "comment": comment,
                     "evaluated_agent": evaluated_agent_id,
@@ -257,20 +315,40 @@ async def _handle_critique_request(agent, board: TaskBoard, mail: dict, sched):
             agent.episodic.save_episode(episode)
 
             icon = "⭐" if score >= 8 else "⚠️" if score >= 5 else "❌"
+            verdict_str = critique.verdict if critique else "N/A"
             agent.episodic.append_daily_log(
-                f"{icon} **评审** [{evaluated_agent_id}] "
+                f"{icon} **Review** [{evaluated_agent_id}] "
                 f"(model: {evaluated_model})\n"
-                f"**得分:** {score}/10\n"
-                f"**任务:** {description[:100]}\n"
-                f"**评语:** {comment[:200]}"
+                f"**Composite:** {score}/10 [{verdict_str}]\n"
+                f"**Task:** {description[:100]}\n"
+                f"**Comment:** {comment[:200]}"
             )
     except Exception as e:
         logger.debug("[%s] critique episode save failed: %s",
                      agent.cfg.agent_id, e)
 
-    logger.info("[%s] scored task %s: %d/10%s",
+    logger.info("[%s] scored task %s: %d/10 [%s]%s",
                 agent.cfg.agent_id, task_id, score,
-                f" ({len(suggestions)} suggestions)" if suggestions else "")
+                critique.verdict if critique else "N/A",
+                f" ({len(suggestions)} items)" if suggestions else "")
+
+
+# ── V0.02: Critique log for TextGrad Pipeline ────────────────────────────
+
+CRITIQUE_LOG_FILE = os.path.join("memory", "critique_log.jsonl")
+
+
+def _append_critique_log(critique, evaluated_agent_id: str = "") -> None:
+    """Append CritiqueSpec to the critique log for TextGrad consumption."""
+    try:
+        os.makedirs(os.path.dirname(CRITIQUE_LOG_FILE), exist_ok=True)
+        # Build entry with evaluated agent_id (TextGrad groups by this)
+        entry = json.loads(critique.to_json())
+        entry["agent_id"] = evaluated_agent_id
+        with open(CRITIQUE_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception as e:
+        logger.debug("critique_log append failed: %s", e)
 
 
 # Legacy handler: forward old review_request to critique handler
@@ -281,37 +359,118 @@ async def _handle_review_request(agent, board: TaskBoard, mail: dict, sched):
 
 # ── Subtask extraction (Phase 5) ──────────────────────────────────────────
 
-def _extract_and_create_subtasks(board: TaskBoard, planner_output: str,
-                                  parent_task_id: str) -> list[str]:
-    """
-    Parse planner output for lines starting with 'TASK:' and optional 'COMPLEXITY:'.
-    Creates subtasks as immediately PENDING (no blocked_by) so agents
-    can claim them right away after planner finishes.
-    Returns list of created subtask IDs.
-    """
-    lines = planner_output.strip().split("\n")
-    subtask_ids: list[str] = []
-    pending_description: str | None = None
-    pending_role: str | None = None
 
-    def _create_subtask(desc: str, role: str, complexity: str):
-        new_task = board.create(
-            desc,
-            blocked_by=[],
-            required_role=role,
-            parent_id=parent_task_id,
-        )
-        # Set complexity on the task
-        with board.lock:
-            data = board._read()
-            t = data.get(new_task.task_id)
-            if t:
-                t["complexity"] = complexity
-                board._write(data)
-        subtask_ids.append(new_task.task_id)
-        logger.info("Created subtask %s [role=%s, complexity=%s]: %s",
-                     new_task.task_id, role or "any", complexity,
-                     desc[:60])
+def _repair_json_quotes(raw: str):
+    """Fix LLM JSON with unescaped inner quotes by iteratively escaping at
+    error positions.
+
+    LLMs often produce:  {"objective": "标题: "内容""}
+    where the inner quotes aren't escaped.  json.loads() fails because
+    the inner ``"`` terminates the string prematurely.
+
+    Strategy: catch JSONDecodeError, find the offending quote just before
+    the error position, escape it, retry.  Repeat up to 20 times.
+    Returns the parsed dict on success, or *None* on failure.
+    """
+    import json as _json
+    s = raw
+    for _ in range(20):
+        try:
+            return _json.loads(s)
+        except _json.JSONDecodeError as e:
+            if e.pos is None or e.pos <= 0:
+                return None
+            # Walk backward from error position to find the unescaped quote
+            p = min(e.pos, len(s) - 1)
+            while p >= 0 and s[p] != '"':
+                p -= 1
+            if p <= 0 or (p > 0 and s[p - 1] == '\\'):
+                return None
+            # Escape this inner quote and retry
+            s = s[:p] + '\\' + s[p:]
+    return None
+
+
+def _extract_subtask_specs(planner_output: str, parent_task_id: str,
+                           parent_description: str) -> list:
+    """Parse planner output for SubTaskSpec JSON blocks or legacy TASK: lines.
+
+    V0.02 format (preferred):
+        ```subtask
+        {"objective": "...", "tool_hint": ["web"], ...}
+        ```
+
+    V0.01 fallback:
+        TASK: <description>
+        COMPLEXITY: simple|normal|complex
+
+    Returns list of SubTaskSpec objects.
+    """
+    from core.protocols import SubTaskSpec
+
+    specs: list[SubTaskSpec] = []
+
+    # --- Phase 1: Try V0.02 ```subtask JSON blocks ---
+    # V0.03: Multi-pattern extraction (most specific → most lenient)
+    # to handle common LLM output variations that the rigid V0.02 regex missed.
+    import re
+    _subtask_patterns = [
+        re.compile(r'```subtask\s*\n(.*?)\n\s*```', re.DOTALL),      # exact
+        re.compile(r'```\s*subtask\s*\n(.*?)\n\s*```', re.DOTALL),   # space before subtask
+        re.compile(r'```subtask\s*([\{].*?[\}])\s*```', re.DOTALL),  # no newline required
+    ]
+    for pat in _subtask_patterns:
+        for match in pat.finditer(planner_output):
+            raw_json = match.group(1).strip()
+            try:
+                spec = SubTaskSpec.from_json(raw_json)
+                specs.append(spec)
+            except Exception as e:
+                logger.warning("Failed to parse subtask spec JSON: %s — %s",
+                               raw_json[:100], e)
+                # Try to repair LLM's malformed JSON (unescaped inner quotes)
+                repaired = _repair_json_quotes(raw_json)
+                if repaired and isinstance(repaired, dict) and "objective" in repaired:
+                    try:
+                        spec = SubTaskSpec(**{
+                            k: v for k, v in repaired.items()
+                            if k in SubTaskSpec.__dataclass_fields__})
+                        specs.append(spec)
+                        logger.info(
+                            "Repaired malformed subtask JSON — objective: %s",
+                            spec.objective[:80])
+                    except Exception as e2:
+                        logger.warning("JSON repair also failed: %s", e2)
+        if specs:
+            break  # Found specs with this pattern, stop trying others
+
+    if specs:
+        logger.info("Parsed %d SubTaskSpec blocks from planner output (V0.02)",
+                     len(specs))
+        return specs
+
+    # --- Phase 1.5: Detect bare SubTaskSpec JSON objects (no fences) ---
+    # V0.03: If Leo outputs {"objective": "..."} blocks without ```subtask
+    # fences, detect and parse them as a fallback.
+    _bare_json_pattern = re.compile(
+        r'\{[^{}]*"objective"\s*:\s*"[^"]+?"[^{}]*\}')
+    for match in _bare_json_pattern.finditer(planner_output):
+        raw_json = match.group(0).strip()
+        try:
+            spec = SubTaskSpec.from_json(raw_json)
+            specs.append(spec)
+        except Exception as e:
+            logger.debug("Bare JSON object parse failed: %s — %s",
+                         raw_json[:100], e)
+
+    if specs:
+        logger.info("Parsed %d SubTaskSpec blocks from bare JSON (Phase 1.5 fallback)",
+                     len(specs))
+        return specs
+
+    # --- Phase 2: Fallback to V0.01 TASK:/COMPLEXITY: lines ---
+    lines = planner_output.strip().split("\n")
+    pending_description: str | None = None
 
     for line in lines:
         stripped = line.strip()
@@ -323,40 +482,97 @@ def _extract_and_create_subtasks(board: TaskBoard, planner_output: str,
         # Check for COMPLEXITY: line (follows a TASK: line)
         if stripped.upper().startswith("COMPLEXITY:") and pending_description:
             complexity = stripped[11:].strip().lower()
-            # Override: Leo-tagged "simple" → "normal" (send to Alic for review)
-            # Only _infer_complexity() can mark something as truly "simple"
             if complexity == "simple":
                 complexity = "normal"
             if complexity not in ("normal", "complex"):
                 complexity = _infer_complexity(pending_description)
-            _create_subtask(pending_description, pending_role, complexity)
+            specs.append(SubTaskSpec.from_legacy_task(
+                pending_description, complexity))
             pending_description = None
-            pending_role = None
             continue
 
         # If we had a pending TASK without COMPLEXITY, create it now
         if pending_description:
             complexity = _infer_complexity(pending_description)
-            _create_subtask(pending_description, pending_role, complexity)
+            specs.append(SubTaskSpec.from_legacy_task(
+                pending_description, complexity))
             pending_description = None
-            pending_role = None
 
         if stripped.upper().startswith("TASK:"):
             description = stripped[5:].strip()
             if description:
                 pending_description = description
-                pending_role = _infer_role(description)
 
     # Flush last pending task
     if pending_description:
         complexity = _infer_complexity(pending_description)
-        _create_subtask(pending_description, pending_role, complexity)
+        specs.append(SubTaskSpec.from_legacy_task(
+            pending_description, complexity))
+
+    if specs:
+        logger.info("Parsed %d subtask specs from TASK: lines (V0.01 fallback)",
+                     len(specs))
+    else:
+        # V0.03: Log extraction failure for debugging
+        logger.warning(
+            "[subtask_extract] 0 specs from planner output (%d chars). "
+            "First 500 chars: %s", len(planner_output),
+            planner_output[:500])
+
+    return specs
+
+
+def _create_subtasks_from_specs(board: TaskBoard, specs: list,
+                                 parent_task_id: str,
+                                 parent_description: str) -> list[str]:
+    """Create TaskBoard tasks from SubTaskSpec list.
+
+    Returns list of created subtask IDs.
+    """
+    subtask_ids: list[str] = []
+
+    for spec in specs:
+        # Inject parent_intent (IntentAnchor — Improvement 5)
+        if not spec.parent_intent:
+            spec.parent_intent = parent_description
+
+        description = spec.to_task_description()
+        role = _infer_role(spec.objective)
+        complexity = spec.complexity
+
+        new_task = board.create(
+            description,
+            blocked_by=[],
+            required_role=role,
+            parent_id=parent_task_id,
+        )
+        # Set complexity and spec on the task
+        with board.lock:
+            data = board._read()
+            t = data.get(new_task.task_id)
+            if t:
+                t["complexity"] = complexity
+                t["spec"] = spec.to_json()
+                board._write(data)
+        subtask_ids.append(new_task.task_id)
+        logger.info("Created subtask %s [role=%s, complexity=%s, tools=%s]: %s",
+                     new_task.task_id, role or "any", complexity,
+                     ",".join(spec.tool_hint) or "all",
+                     spec.objective[:60])
 
     if subtask_ids:
         logger.info("Planner extracted %d subtasks from task %s",
                      len(subtask_ids), parent_task_id)
 
     return subtask_ids
+
+
+# Keep legacy function as alias for backward compatibility
+def _extract_and_create_subtasks(board: TaskBoard, planner_output: str,
+                                  parent_task_id: str) -> list[str]:
+    """Legacy wrapper: parse + create in one step (V0.01 compatibility)."""
+    specs = _extract_subtask_specs(planner_output, parent_task_id, "")
+    return _create_subtasks_from_specs(board, specs, parent_task_id, "")
 
 
 def _infer_complexity(description: str) -> str:
@@ -505,6 +721,28 @@ async def _agent_loop(agent, bus: ContextBus, board: TaskBoard,
     _last_recovery_check = 0.0
     _last_work_time: float = 0.0  # for 1.5s status-light delay
 
+    # V0.02: MemoryConsolidator (background, non-blocking)
+    _consolidator = None
+    try:
+        from adapters.memory.consolidator import MemoryConsolidator
+        from adapters.memory.episodic import EpisodicMemory
+        from adapters.memory.knowledge_base import KnowledgeBase
+        _ep_mem = EpisodicMemory(agent.cfg.agent_id)
+        _kb = KnowledgeBase()
+        _consolidator = MemoryConsolidator(_ep_mem, _kb)
+    except Exception as e:
+        logger.debug("[%s] consolidator init skipped: %s",
+                     agent.cfg.agent_id, e)
+
+    # V0.02: TextGrad Pipeline (background, non-blocking)
+    _textgrad = None
+    try:
+        from reputation.textgrad import TextGradPipeline
+        _textgrad = TextGradPipeline()
+    except Exception as e:
+        logger.debug("[%s] textgrad init skipped: %s",
+                     agent.cfg.agent_id, e)
+
     while True:
         # --- check shutdown signal ---
         if _shutdown_requested:
@@ -528,6 +766,30 @@ async def _agent_loop(agent, bus: ContextBus, board: TaskBoard,
             if recovered:
                 logger.info("[%s] recovered %d stale tasks",
                             agent.cfg.agent_id, len(recovered))
+
+        # --- V0.02: periodic memory consolidation (daily, non-blocking) ---
+        if _consolidator and _consolidator.should_run(interval_seconds=86400):
+            try:
+                import asyncio as _aio
+                _cons_stats = await _aio.to_thread(_consolidator.run)
+                if _cons_stats.get("compressed", 0) > 0:
+                    logger.info("[%s] memory consolidation: %s",
+                                agent.cfg.agent_id, _cons_stats)
+            except Exception as e:
+                logger.debug("[%s] memory consolidation failed: %s",
+                             agent.cfg.agent_id, e)
+
+        # --- V0.02: TextGrad pipeline (every 60s, lightweight) ---
+        if _textgrad and _textgrad.should_run(interval_seconds=60):
+            try:
+                import asyncio as _aio
+                _tg_stats = await _aio.to_thread(_textgrad.run)
+                if _tg_stats.get("agents_patched", 0) > 0:
+                    logger.info("[%s] textgrad pipeline: %s",
+                                agent.cfg.agent_id, _tg_stats)
+            except Exception as e:
+                logger.debug("[%s] textgrad pipeline failed: %s",
+                             agent.cfg.agent_id, e)
 
         # --- check mail first (P2P messages from teammates) ---
         mails = agent.read_mail()
@@ -641,7 +903,21 @@ async def _agent_loop(agent, bus: ContextBus, board: TaskBoard,
             if heartbeat:
                 heartbeat.beat("working", task.task_id,
                                progress="loading skills & context...")
-            result = await agent.run(task, bus)
+
+            # V0.02: Extract tool_hints from SubTaskSpec for ToolScope
+            _tool_hints = None
+            with board.lock:
+                data = board._read()
+                t = data.get(task.task_id)
+                if t and t.get("spec"):
+                    try:
+                        from core.protocols import SubTaskSpec as _STS
+                        _spec = _STS.from_json(t["spec"])
+                        _tool_hints = _spec.tool_hint or None
+                    except Exception:
+                        pass
+
+            result = await agent.run(task, bus, tool_hints=_tool_hints)
 
             if heartbeat:
                 heartbeat.beat("working", task.task_id,
@@ -680,20 +956,72 @@ async def _agent_loop(agent, bus: ContextBus, board: TaskBoard,
 
             _planner_ids = {"leo", "planner"}
             _aid = agent.cfg.agent_id.lower()
-            _arole = (agent.cfg.role or "").lower()
-            is_planner = (_aid in _planner_ids
-                          or "planner" in _arole
-                          or "orchestrat" in _arole
-                          or "brain" in _arole
-                          or "decompos" in _arole)
+            # NOTE: Do NOT scan agent.cfg.role text for keywords — the role
+            # field contains the full system prompt which may mention planner
+            # keywords in negation (e.g. "you MUST NOT decompose").  Jerry's
+            # role includes "decompose" in a prohibition, causing false-positive
+            # planner detection and infinite fallback subtask loops.
+            is_planner = _aid in _planner_ids
 
-            # Planner: extract subtasks and enter waiting state for close-out
+            # Planner: route decision, then extract subtasks or direct-answer
             if is_planner:
-                subtask_ids = _extract_and_create_subtasks(
-                    board, result, task.task_id)
+                # V0.02 TaskRouter: check if Leo declared a route
+                _route_decision = None
+                try:
+                    from core.task_router import (
+                        parse_route_from_output, classify_task)
+                    from core.protocols import RouteDecision
+                    _route_decision = parse_route_from_output(result)
+                    if _route_decision is None:
+                        # Leo didn't declare ROUTE: — use heuristic
+                        _route_decision = classify_task(task.description)
+                        logger.debug(
+                            "[%s] task_router heuristic → %s for: %s",
+                            agent.cfg.agent_id, _route_decision.name,
+                            task.description[:80])
+                    else:
+                        logger.info(
+                            "[%s] Leo declared ROUTE: %s",
+                            agent.cfg.agent_id, _route_decision.name)
+                except Exception as e:
+                    logger.debug("[%s] task_router failed, defaulting MAS: %s",
+                                 agent.cfg.agent_id, e)
+
+                # DIRECT_ANSWER path: Leo already answered, skip Jerry+Alic
+                if (_route_decision is not None
+                        and _route_decision.name == "DIRECT_ANSWER"):
+                    board.submit_for_review(task.task_id, result)
+                    board.complete(task.task_id)
+                    logger.info(
+                        "[%s] DIRECT_ANSWER route — task %s completed by planner",
+                        agent.cfg.agent_id, task.task_id)
+                    await sched.on_task_complete(
+                        agent.cfg.agent_id, task, result)
+                    _extract_and_store_memories(agent, task, result)
+                    _last_work_time = time.time()
+                    await _check_planner_closeouts(
+                        agent, bus, board, config)
+                    continue
+
+                # MAS_PIPELINE path: extract subtasks normally
+                specs = _extract_subtask_specs(
+                    result, task.task_id, task.description)
+                subtask_ids = _create_subtasks_from_specs(
+                    board, specs, task.task_id, task.description) if specs else []
                 if subtask_ids:
                     # Store subtask mapping for close-out tracking
                     _register_subtasks(bus, task.task_id, subtask_ids)
+                    # V0.02: Publish IntentAnchor to ContextBus L0 (TASK layer)
+                    try:
+                        from core.protocols import INTENT_KEY_PREFIX
+                        from core.context_bus import LAYER_TASK
+                        bus.publish("system",
+                                    f"{INTENT_KEY_PREFIX}{task.task_id}",
+                                    task.description,
+                                    layer=LAYER_TASK)
+                    except Exception as e:
+                        logger.debug("[%s] intent anchor publish failed: %s",
+                                     agent.cfg.agent_id, e)
                     # Keep planner result but mark as review (waiting for close-out)
                     board.submit_for_review(task.task_id, result)
                     logger.info("[%s] planner created %d subtasks for task %s, waiting for close-out",
@@ -704,7 +1032,13 @@ async def _agent_loop(agent, bus: ContextBus, board: TaskBoard,
                 else:
                     # No TASK: lines found — fallback delegation
                     stripped_result = result.strip()
-                    if len(stripped_result) > 20 and task.description.strip():
+                    # Guard: prevent recursive fallback chains.  If this
+                    # task is ALREADY a fallback, don't create yet another
+                    # one — just auto-complete to break the cascade.
+                    _is_already_fallback = "planner fallback delegation" in (task.description or "")
+                    if (len(stripped_result) > 20
+                            and task.description.strip()
+                            and not _is_already_fallback):
                         # Leo produced content but forgot TASK: format.
                         # Wrap the original request as a single implement subtask
                         # so Jerry still gets the work.
@@ -713,9 +1047,9 @@ async def _agent_loop(agent, bus: ContextBus, board: TaskBoard,
                             "— auto-delegating to executor: %s",
                             agent.cfg.agent_id, task.task_id)
                         fallback_desc = (
-                            f"执行以下任务（planner 未正确分解）：\n"
-                            f"原始请求：{task.description}\n"
-                            f"参考方案：{stripped_result[:1500]}"
+                            f"Execute the following task (planner fallback delegation):\n"
+                            f"Original request: {task.description[:500]}\n"
+                            f"Reference plan: {stripped_result[:1500]}"
                         )
                         fallback_task = board.create(
                             fallback_desc,
@@ -741,7 +1075,13 @@ async def _agent_loop(agent, bus: ContextBus, board: TaskBoard,
                         if wakeup:
                             wakeup.wake_all()
                     else:
-                        # Truly empty or trivially short — auto-complete
+                        # Truly empty, trivially short, or already a
+                        # fallback (recursion guard) — auto-complete.
+                        if _is_already_fallback:
+                            logger.warning(
+                                "[%s] skipping recursive fallback for task %s "
+                                "— auto-completing to break cascade",
+                                agent.cfg.agent_id, task.task_id)
                         board.submit_for_review(task.task_id, result)
                         board.complete(task.task_id)
                         logger.info(
@@ -756,11 +1096,11 @@ async def _agent_loop(agent, bus: ContextBus, board: TaskBoard,
                 continue
 
             # Executor: complexity-based routing after task completion
-            board.submit_for_review(task.task_id, result)
-
-            # Get task complexity (Task dataclass already has .complexity)
+            # V0.03: Capture complexity BEFORE submit to avoid TOCTOU race
+            # (submit_for_review changes status; a concurrent read could see stale data)
             task_data = board.get(task.task_id)
             task_complexity = task_data.complexity if task_data else "normal"
+            board.submit_for_review(task.task_id, result)
 
             if task_complexity == "simple":
                 # Simple tasks: skip review, auto-complete
@@ -905,29 +1245,61 @@ async def _check_planner_closeouts(agent, bus, board: TaskBoard, config: dict):
                              parent_id)
             continue
 
+        # V0.03: Double-check inside board lock to prevent race where two agents
+        # both detect "all subtasks complete" and both enter synthesis.
+        # Mark parent as "synthesizing" atomically to claim exclusive synthesis.
+        with board.lock:
+            fresh_data = board._read()
+            fresh_parent = fresh_data.get(parent_id)
+            if not fresh_parent or fresh_parent.get("status") in (
+                    "completed", "synthesizing"):
+                completed_ids.add(parent_id)
+                continue  # Already handled by another agent
+            fresh_all_done = all(
+                fresh_data.get(sid, {}).get("status") == "completed"
+                for sid in subtask_ids)
+            if not fresh_all_done:
+                continue  # Subtask status changed since initial check
+            fresh_parent["status"] = "synthesizing"
+            board._write(fresh_data)
+
         # All subtasks done — synthesize final answer with reviewer feedback
         logger.info("All %d subtasks completed for parent %s, synthesizing close-out",
                      len(subtask_ids), parent_id)
         results_text, critique_text = board.collect_results_with_critiques(
             parent_id, subtask_ids=subtask_ids)
-        parent_desc = parent.get("description", "")
+        parent_desc = fresh_parent.get("description", "")
 
         # ── Check if file generation tasks actually produced files ──
         file_gen_warning = ""
-        _file_keywords = ("文件", "文档", "pdf", "docx", "excel",
-                          "word", "generate_doc")
+        _file_keywords = ("文件", "文档", "file", "document",
+                          "pdf", "docx", "excel", "word", "generate_doc")
         if any(kw in parent_desc.lower() for kw in _file_keywords):
             import re as _re
             _fp_re = _re.compile(
                 r'/tmp/doc_\w+\.\w+|"path"\s*:\s*"([^"]+)"')
             if not _fp_re.search(results_text):
                 file_gen_warning = (
-                    "\n⚠️ WARNING: 子任务结果中没有找到文件路径。"
-                    "这意味着文件可能没有成功生成。"
-                    "不要告诉用户文件已发送。如实报告遇到的问题。\n")
+                    "\n⚠️ WARNING: No file path found in subtask results. "
+                    "The file may not have been generated successfully. "
+                    "Do NOT tell the user the file was sent. Report the issue honestly.\n")
+
+        # V0.02: Read IntentAnchor for closeout synthesis
+        _intent_text = ""
+        try:
+            from core.protocols import INTENT_KEY_PREFIX
+            _intent_raw = bus.get("system", f"{INTENT_KEY_PREFIX}{parent_id}")
+            if _intent_raw:
+                _iv = (_intent_raw.get("value", _intent_raw)
+                       if isinstance(_intent_raw, dict) else _intent_raw)
+                if _iv and _iv != parent_desc:
+                    _intent_text = f"## Original User Intent (anchored)\n{_iv}\n\n"
+        except Exception:
+            pass
 
         close_prompt = (
             f"You are synthesizing the FINAL answer for the user.\n\n"
+            f"{_intent_text}"
             f"## Original User Request\n{parent_desc}\n\n"
             f"## Subtask Results (from executor)\n{results_text}\n\n"
             f"{file_gen_warning}"
@@ -937,13 +1309,13 @@ async def _check_planner_closeouts(agent, bus, board: TaskBoard, config: dict):
             f"2. Consider reviewer suggestions — incorporate valid improvements.\n"
             f"3. Remove all internal task IDs, agent references, and metadata.\n"
             f"4. Your response must DIRECTLY answer the user's original question.\n"
-            f"5. 用中文回复用户 (respond in Chinese).\n"
-            f"6. 如果子任务结果包含文件路径（如 /tmp/doc_*.pdf），文件会由系统自动发送给用户，"
-            f"只需确认文件已发送。如果结果中没有文件路径或报告了错误，如实告知用户。\n"
-            f"7. **禁止**: 不要说'系统限制'、'无法直接通过Telegram发送'。"
-            f"如果文件确实没有生成，可以说'文件生成遇到问题'并建议重试。\n"
-            f"8. **绝对禁止**: 不要在回复中包含 TASK:、COMPLEXITY: 行。"
-            f"这些是内部指令，不是用户可见的内容。\n"
+            f"5. Respond in the user's language (default: Chinese).\n"
+            f"6. If subtask results contain file paths (e.g. /tmp/doc_*.pdf), files are auto-delivered by the system — "
+            f"just confirm the file was sent. If no file path or an error is reported, tell the user honestly.\n"
+            f"7. **FORBIDDEN**: Do not say 'system limitation' or 'cannot send via Telegram directly'. "
+            f"If the file was not generated, say 'file generation encountered an issue' and suggest retrying.\n"
+            f"8. **STRICTLY FORBIDDEN**: Do not include TASK:, COMPLEXITY: lines in your reply. "
+            f"These are internal directives, not user-visible content.\n"
         )
         try:
             # Build full system prompt for planner (with tools, skills, soul)
@@ -1327,6 +1699,35 @@ def _extract_and_store_memories(agent, task, result: str) -> None:
     except Exception:
         pass  # doc update is non-critical
 
+    # ── Memo Protocol auto-upload hook (V0.03) ───────────────────────────
+    try:
+        from adapters.memo.config import MemoConfig
+        import yaml as _yaml
+        _cfg_path = "config/agents.yaml"
+        if os.path.exists(_cfg_path):
+            with open(_cfg_path) as _f:
+                _raw_cfg = _yaml.safe_load(_f) or {}
+        else:
+            _raw_cfg = {}
+        _memo_cfg = MemoConfig.from_yaml(_raw_cfg)
+        if _memo_cfg.enabled and _memo_cfg.auto_upload_enabled:
+            import asyncio
+            from adapters.memo.hooks import post_task_memo_hook
+            _outcome = getattr(task, "outcome", None) or "success"
+            _score = getattr(task, "score", None)
+            asyncio.create_task(
+                post_task_memo_hook(
+                    agent_id=agent.cfg.agent_id,
+                    task_id=task.task_id,
+                    outcome=_outcome,
+                    score=_score,
+                    config=_memo_cfg,
+                ))
+    except ImportError:
+        pass  # memo module not installed, silently skip
+    except Exception:
+        pass  # memo hook failure never affects core pipeline
+
 
 # ── Orchestrator ────────────────────────────────────────────────────────────
 
@@ -1335,6 +1736,9 @@ class Orchestrator:
     Reads agents.yaml, spins up one OS process per agent,
     submits the initial task, then waits for all processes to finish.
     Handles SIGTERM/SIGINT for graceful shutdown of all children.
+
+    Agent lifecycle is delegated to an AgentRuntime backend
+    (ProcessRuntime by default — zero behaviour change from pre-v0.02).
     """
 
     def __init__(self, config_path: str = "config/agents.yaml"):
@@ -1342,12 +1746,21 @@ class Orchestrator:
             self.config = yaml.safe_load(f)
         self.bus    = ContextBus()
         self.board  = TaskBoard()
-        self.procs: list[mp.Process] = []
         self._shutting_down = False
 
+        # ── AgentRuntime (Phase 1) ──
+        from core.runtime import create_runtime
+        self.runtime = create_runtime(self.config)
+
         # WakeupBus: event-driven agent wakeup (zero-delay subtask dispatch)
-        from core.wakeup import WakeupBus
-        self.wakeup = WakeupBus()
+        # Use DualWakeupBus matching the runtime mode (process vs async)
+        runtime_mode = self.config.get("runtime", {}).get("mode", "process")
+        if runtime_mode == "in_process":
+            from core.runtime.wakeup import DualWakeupBus
+            self.wakeup = DualWakeupBus(mode="async")
+        else:
+            from core.wakeup import WakeupBus
+            self.wakeup = WakeupBus()
         for agent_def in self.config.get("agents", []):
             self.wakeup.register(agent_def["id"])
 
@@ -1370,6 +1783,22 @@ class Orchestrator:
         except Exception as e:
             logger.warning("Failed to sync exec approvals: %s", e)
 
+    # ── backward-compat: orch.procs → runtime.procs ─────────────────────
+
+    @property
+    def procs(self) -> list:
+        """Backward-compat bridge: delegates to runtime.procs.
+
+        ChannelManager and other code access ``orch.procs`` directly.
+        This property transparently routes to the runtime backend.
+        """
+        return self.runtime.procs
+
+    @procs.setter
+    def procs(self, value: list):
+        """Backward-compat setter used by ChannelManager hot-reload."""
+        self.runtime.procs = value
+
     def submit(self, task_description: str,
                blocked_by: list[str] | None = None,
                required_role: str | None = None) -> str:
@@ -1389,78 +1818,47 @@ class Orchestrator:
         self._wait()
 
     def _launch_all(self):
-        for agent_def in self.config["agents"]:
-            compact_cfg = self.config.get("compaction", {})
-            cfg_dict = {
-                "agent_id":       agent_def["id"],
-                "role":           agent_def["role"],
-                "model":          agent_def["model"],
-                "skills":         agent_def.get("skills", ["_base"]),
-                "wallet_key":     os.getenv(
-                    agent_def.get("wallet", ""), ""),
-                "short_term_turns": agent_def.get("memory", {})
-                                     .get("short_term_turns", 20),
-                "long_term":      agent_def.get("memory", {})
-                                     .get("long_term", True),
-                "recall_top_k":   agent_def.get("memory", {})
-                                     .get("recall_top_k", 3),
-                "autonomy_level": agent_def.get("autonomy_level", 1),
-                # Compaction config
-                "compaction_enabled":    compact_cfg.get("enabled", True),
-                "max_context_tokens":    compact_cfg.get("max_context_tokens", 8000),
-                "summary_target_tokens": compact_cfg.get("summary_target_tokens", 1500),
-                "keep_recent_turns":     compact_cfg.get("keep_recent_turns", 4),
-                # Episodic + KB memory config
-                "episodic_recall_budget": agent_def.get("memory", {})
-                                          .get("episodic_recall_budget", 1500),
-                "kb_recall_budget":       agent_def.get("memory", {})
-                                          .get("kb_recall_budget", 800),
-                # Tool configuration (OpenClaw-inspired)
-                "tools_config":           agent_def.get("tools", {}),
-            }
-            p = mp.Process(
-                target=_agent_process,
-                args=(cfg_dict, agent_def, self.config, self.wakeup),
-                name=agent_def["id"],
-                daemon=False,
-            )
-            p.start()
-            self.procs.append(p)
-            logger.info("launched process for agent '%s' (pid=%d)",
-                        agent_def["id"], p.pid)
+        """Launch all agents via the pluggable AgentRuntime."""
+        self.runtime.start_all(self.config, self.wakeup)
+        logger.info("launched %d agents via %s",
+                    len(self.runtime.agent_ids()),
+                    type(self.runtime).__name__)
 
     def _wait(self):
-        for p in self.procs:
-            p.join()
+        """Wait for all agent work to complete.
+
+        Supports both ProcessRuntime (all agents start upfront) and
+        LazyRuntime (agents start on demand).  Polls until no active
+        tasks remain and no agent processes are alive.
+        """
+        while True:
+            alive = [p for p in self.runtime.procs if p.is_alive()]
+            if alive:
+                # Wait for first alive process with timeout for re-check
+                alive[0].join(timeout=3)
+                continue
+
+            # No alive processes — check if tasks still need work
+            data = self.board._read() or {}
+            if any(t.get("status") in ("pending", "claimed", "review",
+                                         "critique", "blocked", "paused",
+                                         "synthesizing")
+                   for t in data.values()):
+                time.sleep(2)  # wait for lazy monitor to start agents
+                continue
+
+            break  # All done
+
         logger.info("all agent processes finished")
 
     def shutdown(self):
-        """Gracefully shut down all agent processes."""
+        """Gracefully shut down all agents via AgentRuntime."""
         if self._shutting_down:
             return
         self._shutting_down = True
-        logger.info("Orchestrator shutting down — sending SIGTERM to %d processes",
-                     len(self.procs))
-        # Send shutdown via mailbox first (clean exit)
-        for p in self.procs:
-            if p.is_alive():
-                self.shutdown_agent(p.name)
-        # Give agents 5s to exit cleanly, then SIGTERM
-        deadline = time.time() + 5
-        while time.time() < deadline:
-            if not any(p.is_alive() for p in self.procs):
-                break
-            time.sleep(0.5)
-        # Force SIGTERM on remaining
-        for p in self.procs:
-            if p.is_alive():
-                try:
-                    os.kill(p.pid, signal.SIGTERM)
-                except OSError:
-                    pass
-        # Final wait
-        for p in self.procs:
-            p.join(timeout=3)
+        logger.info("Orchestrator shutting down via %s",
+                    type(self.runtime).__name__)
+        self.runtime.stop_all()
 
     def shutdown_agent(self, agent_id: str):
         """Send shutdown message via mailbox (Agent Teams pattern)."""

@@ -250,7 +250,7 @@ class TestResultAttribution:
         board.submit_for_review(t1.task_id, "plan output")
         board.complete(t1.task_id)
 
-        t2 = board.create("implement")
+        t2 = board.create("implement", parent_id=t1.task_id)
         board.claim_next("jerry")
         board.submit_for_review(t2.task_id, "code output here")
         board.complete(t2.task_id)

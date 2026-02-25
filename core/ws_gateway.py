@@ -128,9 +128,11 @@ class WebSocketGateway:
         # Authenticate
         if self.token:
             # Extract token from query params or first message
+            # websockets 15.x: use websocket.path (not .request.path)
+            _ws_path = getattr(websocket, 'path', '') or ''
             query_params = dict(
-                p.split("=", 1) for p in (websocket.request.path.split("?", 1)[1]
-                if "?" in websocket.request.path else "").split("&")
+                p.split("=", 1) for p in (_ws_path.split("?", 1)[1]
+                if "?" in _ws_path else "").split("&")
                 if "=" in p
             )
             client_token = query_params.get("token", "")
@@ -304,6 +306,9 @@ class WebSocketGateway:
                     pid = t.get("parent_id")
                     if pid:
                         compact_tasks[tid]["pid"] = pid
+                    cs = t.get("critique_spec")
+                    if cs:
+                        compact_tasks[tid]["cs"] = cs
                 snapshot["tasks"] = compact_tasks
         except Exception:
             snapshot["tasks"] = {}

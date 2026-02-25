@@ -99,6 +99,7 @@ def _next_cron_match(expr: str, after: float) -> str | None:
 
     Returns the next matching minute as ISO string.
     Only supports numeric values, *, and */N step syntax.
+    Day-of-week uses POSIX convention: 0=Sunday, 1=Monday, ..., 6=Saturday.
     """
     parts = expr.strip().split()
     if len(parts) != 5:
@@ -115,20 +116,22 @@ def _next_cron_match(expr: str, after: float) -> str | None:
         except ValueError:
             return False
 
-    # Search forward up to 48 hours
+    # Search forward up to 8 days (covers weekly cron jobs)
     dt = datetime.fromtimestamp(after, tz=timezone.utc)
     # Start from next minute
     dt = dt.replace(second=0, microsecond=0)
     import datetime as dt_mod
     delta = dt_mod.timedelta(minutes=1)
 
-    for _ in range(48 * 60):  # 48 hours of minutes
+    for _ in range(8 * 24 * 60):  # 8 days of minutes
         dt += delta
+        # Convert Python weekday (Mon=0..Sun=6) to POSIX (Sun=0..Sat=6)
+        posix_dow = (dt.weekday() + 1) % 7
         if (_matches(parts[0], dt.minute, 59) and
                 _matches(parts[1], dt.hour, 23) and
                 _matches(parts[2], dt.day, 31) and
                 _matches(parts[3], dt.month, 12) and
-                _matches(parts[4], dt.weekday(), 6)):
+                _matches(parts[4], posix_dow, 6)):
             return dt.isoformat()
 
     return None

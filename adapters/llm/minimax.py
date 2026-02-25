@@ -119,51 +119,80 @@ def _extract_params_from_truncated(raw_args: str) -> dict:
     """Extract key-value params from truncated/unparseable JSON via regex.
 
     When _repair_truncated_json() and json.loads() both fail, this function
-    uses regex to pull out whatever complete key-value pairs exist in the raw
-    string.  This avoids the brittle _raw_args round-trip through json.dumps →
-    parse_tool_calls → json.loads, which can silently lose data.
+    uses manual scanning + regex to pull out whatever complete key-value pairs
+    exist in the raw string.
+
+    Always includes _raw_args for downstream tool recovery (e.g. generate_doc
+    has its own regex-based content extraction as a last resort).
 
     Returns a dict with extracted params (may be partial).
     """
     if not isinstance(raw_args, str) or len(raw_args) < 10:
-        return {}
+        return {"_raw_args": raw_args} if isinstance(raw_args, str) else {}
 
     extracted: dict = {}
 
     # Extract simple string fields (format, title, output_path, etc.)
     for key in ("format", "title", "output_path", "file_path", "caption",
                 "command", "path", "url", "query", "topic"):
-        m = re.search(rf'"{key}"\s*:\s*"((?:[^"\\]|\\.)*)"', raw_args)
-        if m:
-            extracted[key] = m.group(1)
-
-    # Extract "content" — may be truncated (no closing quote), so use greedy
-    mc = re.search(r'"content"\s*:\s*"((?:[^"\\]|\\.)*)', raw_args, re.DOTALL)
-    if mc:
-        raw_content = mc.group(1)
-        # Strip trailing incomplete JSON delimiters
-        raw_content = raw_content.rstrip('} \t\n\r')
-        if raw_content.endswith('\\'):
-            raw_content = raw_content[:-1]
-        raw_content = raw_content.rstrip('"')
-        # Unescape JSON string escapes (\\n → \n, etc.)
         try:
-            extracted["content"] = raw_content.encode().decode(
-                'unicode_escape', errors='replace')
-        except Exception:
-            extracted["content"] = (raw_content
-                                    .replace('\\n', '\n')
-                                    .replace('\\t', '\t')
-                                    .replace('\\"', '"'))
+            m = re.search(rf'"{key}"\s*:\s*"((?:[^"\\]|\\.)*)"', raw_args)
+            if m:
+                extracted[key] = m.group(1)
+        except re.error:
+            pass
 
-    if extracted:
+    # Extract "content" using manual string scanning (more robust than regex
+    # for very long CJK/emoji strings that can cause regex backtracking).
+    try:
+        content_idx = raw_args.find('"content"')
+        if content_idx >= 0:
+            colon_idx = raw_args.find(':', content_idx + 9)
+            if colon_idx >= 0:
+                val_start = raw_args.find('"', colon_idx + 1)
+                if val_start >= 0:
+                    # Scan forward to find closing quote (handle escapes)
+                    i = val_start + 1
+                    while i < len(raw_args):
+                        if raw_args[i] == '\\' and i + 1 < len(raw_args):
+                            i += 2  # skip escape sequence
+                        elif raw_args[i] == '"':
+                            break  # found closing quote
+                        else:
+                            i += 1
+                    raw_content = raw_args[val_start + 1 : i]
+                    # Strip trailing incomplete escape sequences
+                    if raw_content.endswith('\\'):
+                        raw_content = raw_content[:-1]
+                    # Unescape JSON string properly using json.loads
+                    # (NOT unicode_escape which corrupts CJK/emoji chars)
+                    if raw_content:
+                        try:
+                            extracted["content"] = json.loads(
+                                '"' + raw_content + '"')
+                        except (json.JSONDecodeError, ValueError):
+                            # Fallback: manual unescape of common sequences
+                            extracted["content"] = (raw_content
+                                .replace('\\n', '\n')
+                                .replace('\\t', '\t')
+                                .replace('\\"', '"')
+                                .replace('\\\\', '\\'))
+    except Exception as exc:
+        logger.debug("[minimax] Content scanning failed: %s", exc)
+
+    # ALWAYS include raw_args so downstream tools (e.g. generate_doc) can
+    # do their own recovery if our extraction missed something.
+    extracted["_raw_args"] = raw_args
+
+    if len(extracted) > 1:  # more than just _raw_args
         extracted["_recovered_from_truncation"] = True
-        logger.info("[minimax] Recovered %d params from truncated args via regex: %s",
-                    len(extracted) - 1, list(k for k in extracted if k[0] != '_'))
+        logger.info("[minimax] Recovered %d params from truncated args: %s",
+                    len(extracted) - 2,  # exclude _raw_args and _recovered flag
+                    [k for k in extracted if not k.startswith('_')])
         return extracted
 
-    # Nothing recoverable — fall back to legacy _raw_args propagation
-    return {"_parse_error": "regex extraction failed", "_raw_args": raw_args}
+    # Nothing recoverable — still pass _raw_args for downstream recovery
+    return {"_parse_error": "extraction failed", "_raw_args": raw_args}
 
 
 def _tool_calls_to_text(tool_calls: list[dict]) -> str:
@@ -228,6 +257,7 @@ class MinimaxAdapter:
     def __init__(self, api_key: str | None = None, base_url: str | None = None):
         self.api_key  = api_key  or os.getenv("MINIMAX_API_KEY", "")
         self.base_url = base_url or os.getenv("MINIMAX_BASE_URL", MINIMAX_BASE_URL)
+        self._last_stream_usage: dict | None = None  # real token counts from streaming
         if not self.api_key:
             logger.warning("MINIMAX_API_KEY not set — LLM calls will fail")
 
@@ -302,6 +332,9 @@ class MinimaxAdapter:
         try:
             payload = _build_payload(model, messages, **kwargs)
             payload["stream"] = True
+            # Request real token usage in the final SSE chunk
+            payload["stream_options"] = {"include_usage": True}
+            self._last_stream_usage = None
             accumulated_tool_calls: list[dict] = []
 
             async with httpx.AsyncClient(timeout=120.0) as client:
@@ -325,8 +358,19 @@ class MinimaxAdapter:
                                 break
                             try:
                                 chunk = json.loads(data_str)
-                                delta = chunk.get("choices", [{}])[0].get(
-                                    "delta", {})
+                                # Capture real usage from final chunk
+                                # (enabled by stream_options.include_usage)
+                                usage = chunk.get("usage")
+                                if usage:
+                                    self._last_stream_usage = {
+                                        "prompt_tokens": usage.get("prompt_tokens", 0),
+                                        "completion_tokens": usage.get("completion_tokens", 0),
+                                        "total_tokens": usage.get("total_tokens", 0),
+                                    }
+                                choices = chunk.get("choices")
+                                if not choices:
+                                    continue  # skip usage-only or empty chunks
+                                delta = choices[0].get("delta", {})
                                 # Regular content
                                 content = delta.get("content")
                                 if content:

@@ -23,26 +23,7 @@ from typing import Optional
 CLAIMED_TIMEOUT = 180   # 3 min — agent crashed if no progress (was 10 min)
 REVIEW_TIMEOUT  = 300   # 5 min — reviewer crashed
 
-# Phase 8: loud warning on missing filelock
-try:
-    from filelock import FileLock
-except ImportError:
-    import warnings
-    warnings.warn(
-        "filelock package not installed. TaskBoard is NOT process-safe. "
-        "Install with: pip install filelock",
-        RuntimeWarning, stacklevel=2,
-    )
-
-    class FileLock:  # type: ignore
-        def __init__(self, path):
-            logging.getLogger(__name__).warning(
-                "FileLock unavailable — concurrent access to %s is UNSAFE",
-                path)
-        def __enter__(self):
-            return self
-        def __exit__(self, *a):
-            pass
+from core.protocols import FileLock  # shared fallback
 
 logger = logging.getLogger(__name__)
 
@@ -156,8 +137,10 @@ class Task:
     evolution_flags: list[str] = field(default_factory=list)    # error tags
     complexity:      str = "normal"                             # "simple" | "normal" | "complex"
     critique:        dict | None = None                         # {reviewer, passed, suggestions, comment, ts}
+    critique_spec:   str | None = None                          # V0.02: JSON-serialized CritiqueSpec
     critique_round:  int = 0                                    # current revision round (max=1)
     parent_id:       Optional[str] = None                       # parent task ID for subtask tree
+    spec:            str | None = None                          # V0.02: JSON-serialized SubTaskSpec
 
     def to_dict(self) -> dict:
         return {
@@ -178,8 +161,10 @@ class Task:
             "evolution_flags":self.evolution_flags,
             "complexity":     self.complexity,
             "critique":       self.critique,
+            "critique_spec":  self.critique_spec,
             "critique_round": self.critique_round,
             "parent_id":      self.parent_id,
+            "spec":           self.spec,
         }
 
     @classmethod
@@ -197,8 +182,10 @@ class Task:
         d.setdefault("retry_count", 0)
         d.setdefault("complexity", "normal")
         d.setdefault("critique", None)
+        d.setdefault("critique_spec", None)
         d.setdefault("critique_round", 0)
         d.setdefault("parent_id", None)
+        d.setdefault("spec", None)
         # Remove internal bookkeeping fields not in dataclass
         d.pop("_paused_from", None)
         d.pop("partial_result", None)
@@ -364,12 +351,18 @@ class TaskBoard:
 
     def add_critique(self, task_id: str, reviewer_id: str,
                      passed: bool, suggestions: list[str], comment: str,
-                     score: int = 7):
+                     score: int = 7,
+                     critique_spec_json: str | None = None):
         """Advisor submits structured critique with quality score.
 
-        IMPORTANT: Reviewer is an ADVISOR, not a gatekeeper.
-        Tasks are ALWAYS marked completed regardless of score.
+        If passed=True  → task completes immediately (advisor approves).
+        If passed=False → task moves to CRITIQUE status so the original
+                          executor can claim it, revise, and resubmit.
         The planner reads scores/suggestions during final synthesis.
+
+        critique_spec_json: Optional V0.02 CritiqueSpec JSON string.
+            Written atomically alongside the critique to avoid race conditions
+            where dashboard polls between separate writes.
         """
         with self.lock:
             data = self._read()
@@ -379,15 +372,24 @@ class TaskBoard:
                 return
             t["critique"] = {
                 "reviewer": reviewer_id,
-                "passed": True,       # Always pass — reviewer is advisor, not gatekeeper
+                "passed": passed,
                 "score": score,
                 "suggestions": suggestions or [],
                 "comment": comment,
                 "ts": time.time(),
             }
-            # Always complete — reviewer never blocks tasks
-            t["status"] = TaskStatus.COMPLETED.value
-            t["completed_at"] = time.time()
+            # Store full CritiqueSpec atomically with critique
+            if critique_spec_json:
+                t["critique_spec"] = critique_spec_json
+            if passed:
+                # Critique passed → complete immediately
+                t["status"] = TaskStatus.COMPLETED.value
+                t["completed_at"] = time.time()
+            else:
+                # Critique not passed → executor must revise
+                t["status"] = TaskStatus.CRITIQUE.value
+                t.setdefault("critique_round", 0)
+                t["critique_round"] += 1
             self._write(data)
 
     def claim_critique(self, agent_id: str,
@@ -653,7 +655,7 @@ class TaskBoard:
             t = data.get(tid)
             if not t or not t.get("result"):
                 continue
-            agent = t.get("agent_id", "")
+            agent = t.get("agent_id") or ""
             desc  = t.get("description", "")[:80]
             if agent.lower() in ("leo", "planner") or "planner" in agent.lower():
                 planner_result = t["result"]
@@ -709,7 +711,7 @@ class TaskBoard:
             t = data.get(tid)
             if not t or not t.get("result"):
                 continue
-            agent = t.get("agent_id", "")
+            agent = t.get("agent_id") or ""
             # Skip planner's own decomposition output
             if agent.lower() in ("leo", "planner") or "planner" in agent.lower():
                 continue
@@ -723,9 +725,47 @@ class TaskBoard:
                 f"{t['result']}"
             )
 
-            # Reviewer critique (if exists)
+            # Reviewer critique — prefer V0.02 CritiqueSpec over legacy format
+            critique_spec_json = t.get("critique_spec")
             critique = t.get("critique")
-            if critique:
+            if critique_spec_json:
+                # V0.02: Full 5D CritiqueSpec
+                try:
+                    cs = json.loads(critique_spec_json) if isinstance(
+                        critique_spec_json, str) else critique_spec_json
+                    dims = cs.get("dimensions", {})
+                    verdict = cs.get("verdict", "N/A")
+                    items = cs.get("items", [])
+                    reviewer = cs.get("reviewer_id") or (
+                        critique.get("reviewer", "unknown") if critique else "unknown")
+                    composite = cs.get("composite_score", "N/A")
+
+                    critique_entry = (
+                        f"### Subtask: {desc}\n"
+                        f"**Verdict:** {verdict} | **Composite:** {composite}/10 "
+                        f"| **Reviewer:** {reviewer}\n"
+                        f"**Dimensions:** "
+                        f"accuracy={dims.get('accuracy', '?')}, "
+                        f"completeness={dims.get('completeness', '?')}, "
+                        f"technical={dims.get('technical', '?')}, "
+                        f"calibration={dims.get('calibration', '?')}, "
+                        f"efficiency={dims.get('efficiency', '?')}\n"
+                    )
+                    if items:
+                        critique_entry += "**Items:**\n"
+                        for item in items:
+                            dim = item.get("dimension", "")
+                            issue = item.get("issue", "")
+                            suggestion = item.get("suggestion", "")
+                            critique_entry += f"- [{dim}] {issue}"
+                            if suggestion:
+                                critique_entry += f" → {suggestion}"
+                            critique_entry += "\n"
+                    critique_parts.append(critique_entry)
+                except (json.JSONDecodeError, TypeError):
+                    pass  # Fall through to legacy format below
+            elif critique:
+                # V0.01 Legacy format (backward compatible)
                 score = critique.get("score", "N/A")
                 comment = critique.get("comment", "")
                 suggestions = critique.get("suggestions", [])

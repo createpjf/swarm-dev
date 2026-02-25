@@ -19,14 +19,7 @@ if TYPE_CHECKING:
     from reputation.scorer import ScoreAggregator
     from core.task_board import TaskBoard
 
-# Phase 7: file locks for all shared state
-try:
-    from filelock import FileLock
-except ImportError:
-    class FileLock:  # type: ignore
-        def __init__(self, path): pass
-        def __enter__(self): return self
-        def __exit__(self, *a): pass
+from core.protocols import FileLock  # shared fallback
 
 logger = logging.getLogger(__name__)
 

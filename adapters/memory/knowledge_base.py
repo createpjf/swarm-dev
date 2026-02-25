@@ -30,13 +30,7 @@ import time
 from datetime import datetime, timezone
 from typing import Optional
 
-try:
-    from filelock import FileLock
-except ImportError:
-    class FileLock:  # type: ignore
-        def __init__(self, path): pass
-        def __enter__(self): return self
-        def __exit__(self, *a): pass
+from core.protocols import FileLock  # shared fallback
 
 logger = logging.getLogger(__name__)
 
@@ -80,14 +74,28 @@ class KnowledgeBase:
     def create_note(self, topic: str, content: str,
                     tags: Optional[list[str]] = None,
                     author: str = "system",
-                    links: Optional[list[str]] = None) -> str:
+                    links: Optional[list[str]] = None,
+                    density: Optional[str] = None) -> str:
         """
         Create or update an atomic note.
         If a note with the same topic slug exists, MERGE content.
+
+        Args:
+            density: "HIGH", "NORMAL", or "LOW". If None, auto-classified
+                     using V0.02 DensityTag heuristics.
+
         Returns the note slug.
         """
         slug = _slug(topic)
         path = os.path.join(self.atomic_dir, f"{slug}.json")
+
+        # V0.02 DensityTag: auto-classify if not provided
+        if density is None:
+            try:
+                from core.protocols import classify_density
+                density = classify_density(content, tags or []).value
+            except Exception:
+                density = "NORMAL"
 
         with self.lock:
             existing = None
@@ -118,6 +126,13 @@ class KnowledgeBase:
                 existing["update_count"] = existing.get("update_count", 1) + 1
                 existing["contributors"] = list(
                     set(existing.get("contributors", []) + [author]))
+                # V0.02: Update density — upgrade to HIGH if new content
+                # warrants it, never downgrade
+                old_density = existing.get("density", "NORMAL")
+                if density == "HIGH" or old_density == "HIGH":
+                    existing["density"] = "HIGH"
+                else:
+                    existing["density"] = density
                 note = existing
             else:
                 note = {
@@ -131,6 +146,7 @@ class KnowledgeBase:
                     "created_at": time.time(),
                     "updated_at": time.time(),
                     "update_count": 1,
+                    "density": density,
                 }
 
             with open(path, "w") as f:

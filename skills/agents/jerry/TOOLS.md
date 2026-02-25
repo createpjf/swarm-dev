@@ -1,6 +1,8 @@
 # TOOLS.md — Jerry (Executor)
 
-## Available Tools (33)
+## Available Tools (34)
+
+> **V0.02 ToolScope**: The system dynamically loads a tool subset (9-14 tools) based on the SubTaskSpec's `tool_hint`. You may only receive a portion of the tools listed below. Base tools (Memory + Messaging) are always available.
 
 ### 🌐 Web
 | Tool | Description | Usage |
@@ -63,6 +65,20 @@
 | browser_screenshot | Page screenshot | Visual capture |
 | browser_evaluate | Execute page JS | Advanced scraping |
 | browser_page_info | Get page info (URL/title) | Confirm navigation state |
+
+### 🤖 A2A Delegation (Phase 5)
+| Tool | Description | Usage |
+|---|---|---|
+| a2a_delegate | Delegate subtask to external A2A agent | Chart generation, specialized analysis, image gen |
+
+**a2a_delegate parameters**:
+- `agent_url`: Target Agent URL or `"auto"` to auto-match via Registry (required)
+- `message`: Task description to send to the external Agent; English recommended (required)
+- `files`: Attached file paths (comma-separated; only verified Agents can send files)
+- `required_skills`: Required capability tags (comma-separated; used with auto matching)
+- `timeout`: Maximum wait in seconds (default: 120)
+
+**Return fields**: `result.text`, `result.files`, `result.status` (completed/failed/timeout), `result.agent_name`, `result.trust_level`, `result.warnings`
 
 ### 🔧 Skill Management
 | Tool | Description | Usage |

@@ -54,6 +54,9 @@ Endpoints:
   GET  /v1/channels                   Channel adapter status (Telegram/Discord/Feishu/Slack)
   PUT  /v1/channels/:name              Update channel config (enable/disable, tokens)
   GET  /v1/tools                      List built-in tools and availability
+  GET  /.well-known/agent.json        A2A Agent Card (public, no auth)
+  POST /a2a                           A2A JSON-RPC 2.0 endpoint (message/send, tasks/get, tasks/cancel)
+  POST /a2a/stream                    A2A SSE streaming endpoint
 
 Default port: 19789  (configurable via CLEO_GATEWAY_PORT or config)
 Auth: Bearer token  (auto-injected into dashboard, configurable via CLEO_GATEWAY_TOKEN)
@@ -81,6 +84,7 @@ _config: dict = {}
 
 _SAFE_NAME = re.compile(r'^[a-zA-Z0-9_-]+$')
 _channel_manager = None  # ChannelManager instance (set by start_gateway)
+_a2a_server = None       # A2AServer instance (set by start_gateway)
 
 # SSE task-board mtime cache (avoids json.load every 1.5s when idle)
 _sse_tb_cache: dict = {}
@@ -266,6 +270,11 @@ class _Handler(BaseHTTPRequestHandler):
             self._serve_avatar(path.split("/avatars/", 1)[1])
             return
 
+        # A2A Agent Card — public (per A2A spec, discoverable without auth)
+        if path == "/.well-known/agent.json":
+            self._handle_a2a_agent_card()
+            return
+
         if not self._check_auth():
             return
 
@@ -356,6 +365,12 @@ class _Handler(BaseHTTPRequestHandler):
             self._handle_get_budget()
         elif path == "/v1/alerts":
             self._handle_get_alerts()
+        # ── Runtime status ──
+        elif path == "/v1/runtime":
+            self._handle_runtime_status()
+        # ── A2A status ──
+        elif path == "/v1/a2a/status":
+            self._handle_a2a_status()
         # ── Channel status ──
         elif path == "/v1/channels":
             self._handle_channels()
@@ -453,6 +468,9 @@ class _Handler(BaseHTTPRequestHandler):
         # ── Channel reload ──
         elif path == "/v1/channels/reload":
             self._handle_reload_channels()
+        # ── Memo Protocol export ──
+        elif path == "/v1/memo/export":
+            self._handle_memo_export()
         # ── Memory export ──
         elif path.startswith("/v1/memory/export/"):
             agent_id = path[len("/v1/memory/export/"):]
@@ -461,6 +479,11 @@ class _Handler(BaseHTTPRequestHandler):
         elif path.startswith("/v1/webhook/"):
             source = path[len("/v1/webhook/"):]
             self._handle_webhook_inbound(source)
+        # ── A2A JSON-RPC 2.0 endpoint ──
+        elif path == "/a2a":
+            self._handle_a2a_rpc()
+        elif path == "/a2a/stream":
+            self._handle_a2a_stream()
         else:
             self._json_response(404, {"error": "Not found"})
 
@@ -2666,6 +2689,245 @@ class _Handler(BaseHTTPRequestHandler):
             self._json_response(500, {"error": str(e)})
 
     # ══════════════════════════════════════════════════════════════════════════
+    #  RUNTIME & A2A STATUS HANDLERS
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _handle_runtime_status(self):
+        """GET /v1/runtime — Runtime mode + per-agent process status."""
+        import yaml
+        try:
+            cfg_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "config", "agents.yaml")
+            with open(cfg_path) as f:
+                cfg = yaml.safe_load(f) or {}
+        except Exception:
+            cfg = {}
+
+        runtime_cfg = cfg.get("runtime", {})
+        mode = runtime_cfg.get("mode", "process")
+        always_on = runtime_cfg.get("always_on", [])
+        idle_shutdown = runtime_cfg.get("idle_shutdown", 300)
+
+        # Load context bus for agent liveness (fallback when no heartbeat files)
+        ctx_agents = {}
+        try:
+            ctx_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                ".context_bus.json")
+            if os.path.exists(ctx_path):
+                import json as _json
+                with open(ctx_path) as f:
+                    ctx = _json.load(f)
+                ctx_agents = ctx.get("agents", {})
+        except Exception:
+            pass
+
+        agents_cfg = cfg.get("agents", [])
+        agents_status = []
+        for a in agents_cfg:
+            aid = a.get("id", "unknown")
+            alive = False
+            last_hb = None
+
+            # 1. Check heartbeat file
+            hb_file = os.path.join(".heartbeats", f"{aid}.json")
+            if os.path.exists(hb_file):
+                try:
+                    import json as _json
+                    with open(hb_file) as f:
+                        hb = _json.load(f)
+                    last_hb = hb.get("timestamp", hb.get("t"))
+                    if last_hb:
+                        age = time.time() - float(last_hb)
+                        alive = age < 30
+                except Exception:
+                    pass
+
+            # 2. Fallback: check context bus for agent activity
+            if not alive and aid in ctx_agents:
+                ctx_info = ctx_agents[aid]
+                ctx_active = ctx_info.get("last_active", 0)
+                ctx_status = ctx_info.get("status", "")
+                if ctx_active:
+                    age = time.time() - float(ctx_active)
+                    alive = age < 120  # context bus: alive if active < 2min
+                    if not last_hb:
+                        last_hb = ctx_active
+
+            agents_status.append({
+                "id": aid,
+                "alive": alive,
+                "status": ctx_agents.get(aid, {}).get("status", "idle"),
+                "current_task": ctx_agents.get(aid, {}).get("current_task_id", ""),
+                "last_heartbeat": last_hb,
+                "model": a.get("model", "—"),
+                "always_on": aid in always_on,
+            })
+
+        self._json_response(200, {
+            "mode": mode,
+            "always_on": always_on,
+            "idle_shutdown": idle_shutdown,
+            "agents": agents_status,
+        })
+
+    def _handle_a2a_status(self):
+        """GET /v1/a2a/status — A2A server/client config and connection info."""
+        import yaml
+        try:
+            cfg_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "config", "agents.yaml")
+            with open(cfg_path) as f:
+                cfg = yaml.safe_load(f) or {}
+        except Exception:
+            cfg = {}
+
+        a2a_cfg = cfg.get("a2a", {})
+        server_cfg = a2a_cfg.get("server", {})
+        client_cfg = a2a_cfg.get("client", {})
+
+        # Server info
+        server_enabled = server_cfg.get("enabled", False)
+        server_info = {
+            "enabled": server_enabled,
+            "path": server_cfg.get("path", "/a2a"),
+            "agent_card_path": server_cfg.get("agent_card_path", "/.well-known/agent.json"),
+            "active": _a2a_server is not None,
+        }
+
+        # Client info
+        client_enabled = client_cfg.get("enabled", False)
+        remotes = client_cfg.get("remotes", [])
+        registries = client_cfg.get("registries", [])
+        security = client_cfg.get("security", {})
+
+        # Sanitize remote entries (hide tokens)
+        safe_remotes = []
+        for r in remotes:
+            entry = {
+                "url": r.get("url", ""),
+                "trust_level": r.get("trust_level", "untrusted"),
+                "skills": r.get("skills", []),
+            }
+            auth = r.get("auth", {})
+            if auth:
+                entry["auth_scheme"] = auth.get("scheme", "none")
+                token_env = auth.get("token_env", "")
+                entry["auth_configured"] = bool(token_env and os.environ.get(token_env))
+            safe_remotes.append(entry)
+
+        safe_registries = []
+        for reg in registries:
+            safe_registries.append({
+                "url": reg.get("url", ""),
+                "trust_level": reg.get("trust_level", "community"),
+                "refresh_interval": reg.get("refresh_interval", 3600),
+            })
+
+        # Task map stats
+        task_map_count = 0
+        task_map_file = os.path.join(".a2a_task_map.json")
+        if os.path.exists(task_map_file):
+            try:
+                import json as _json
+                with open(task_map_file) as f:
+                    tm = _json.load(f)
+                task_map_count = len(tm.get("a2a_to_cleo", {}))
+            except Exception:
+                pass
+
+        self._json_response(200, {
+            "server": server_info,
+            "client": {
+                "enabled": client_enabled,
+                "remotes": safe_remotes,
+                "registries": safe_registries,
+                "security": {
+                    "max_timeout": security.get("max_timeout", 600),
+                    "redact_patterns": security.get("redact_patterns", True),
+                    "untrusted_require_confirmation": security.get("untrusted_require_confirmation", True),
+                },
+            },
+            "task_map_count": task_map_count,
+        })
+
+    # ══════════════════════════════════════════════════════════════════════════
+    #  A2A HANDLERS
+    # ══════════════════════════════════════════════════════════════════════════
+
+    def _handle_a2a_agent_card(self):
+        """GET /.well-known/agent.json — serve A2A Agent Card (public)."""
+        global _a2a_server
+        if not _a2a_server:
+            self._json_response(404, {"error": "A2A Server not enabled"})
+            return
+        self._json_response(200, _a2a_server.get_agent_card_dict())
+
+    def _handle_a2a_rpc(self):
+        """POST /a2a — A2A JSON-RPC 2.0 endpoint."""
+        global _a2a_server
+        if not _a2a_server:
+            self._json_response(404, {"error": "A2A Server not enabled"})
+            return
+        body = self._read_body()
+        if not body:
+            self._json_response(400, {"error": "Empty body"})
+            return
+        result = _a2a_server.handle_rpc(body)
+        # JSON-RPC errors use 200 status with error object in body
+        self._json_response(200, result)
+
+    def _handle_a2a_stream(self):
+        """POST /a2a/stream — A2A SSE streaming endpoint.
+
+        Accepts a message/send via JSON-RPC, creates the task, then
+        streams status updates via Server-Sent Events until completion.
+        """
+        global _a2a_server
+        if not _a2a_server:
+            self._json_response(404, {"error": "A2A Server not enabled"})
+            return
+        body = self._read_body()
+        if not body:
+            self._json_response(400, {"error": "Empty body"})
+            return
+
+        # Create the task first via normal message/send
+        result = _a2a_server.handle_rpc(body)
+        if "error" in result:
+            self._json_response(200, result)
+            return
+
+        # Extract a2a_task_id from result
+        a2a_id = result.get("result", {}).get("id", "")
+        if not a2a_id:
+            self._json_response(200, result)
+            return
+
+        # Start SSE stream
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+
+        try:
+            # Send initial task created event
+            initial_event = _a2a_server._sse_event("task", result.get("result", {}))
+            self.wfile.write(initial_event.encode("utf-8"))
+            self.wfile.flush()
+
+            # Stream status updates
+            for event in _a2a_server.generate_sse_events(a2a_id):
+                self.wfile.write(event.encode("utf-8"))
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            logger.debug("[a2a:stream] client disconnected for task %s", a2a_id)
+
+    # ══════════════════════════════════════════════════════════════════════════
     #  CRON HANDLERS
     # ══════════════════════════════════════════════════════════════════════════
 
@@ -2814,11 +3076,18 @@ class _Handler(BaseHTTPRequestHandler):
                         "co": t.get("completed_at"),
                         "rc": t.get("retry_count", 0),
                     }
-                    # Include review score if available
-                    scores = t.get("review_scores", [])
-                    if scores:
-                        avg = sum(r["score"] for r in scores) / len(scores)
-                        compact_tasks[tid]["rs"] = int(avg)
+                    # Include review/critique data
+                    critique = t.get("critique")
+                    if critique:
+                        compact_tasks[tid]["cr"] = {
+                            "v": "LGTM" if critique.get("passed") else "NEEDS_WORK",
+                            "s": critique.get("score", 0),
+                        }
+                    else:
+                        scores = t.get("review_scores", [])
+                        if scores:
+                            avg = sum(r["score"] for r in scores) / len(scores)
+                            compact_tasks[tid]["rs"] = int(avg)
                     # Streaming: partial result (last 200 chars)
                     pr = t.get("partial_result", "")
                     if pr:
@@ -3128,6 +3397,133 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._json_response(500, {"error": str(e)})
 
+    def _handle_memo_export(self):
+        """Run Memo Protocol export — return single packaged JSON for browser save dialog."""
+        try:
+            body = self._read_body()
+        except Exception:
+            body = {}
+
+        agent = body.get("agent") or None
+        export_name = body.get("export_name") or (f"{agent}_memo" if agent else "cleo_memo")
+        memo_type = body.get("memo_type") or None
+        min_quality = float(body.get("min_quality", 0.6))
+        min_score = int(body.get("min_score", 7))
+        dry_run = bool(body.get("dry_run", False))
+        upload = bool(body.get("upload", False))
+
+        try:
+            from adapters.memo.config import MemoConfig
+            from adapters.memo.exporter import MemoExporter, ExportFilter
+            import yaml as _yaml
+            import time as _time
+            from datetime import datetime as _dt
+
+            cfg_path = "config/agents.yaml"
+            if os.path.exists(cfg_path):
+                with open(cfg_path, encoding="utf-8") as f:
+                    raw = _yaml.safe_load(f) or {}
+            else:
+                raw = {}
+            config = MemoConfig.from_yaml(raw)
+
+            filt = ExportFilter(
+                agents=[agent] if agent else [],
+                types=[memo_type] if memo_type else [],
+                min_score=min_score,
+                min_quality=min_quality,
+            )
+
+            exporter = MemoExporter(config)
+
+            import asyncio
+            t0 = _time.monotonic()
+
+            # Collect and process — pack into a single JSON
+            async def _run_export():
+                candidates = exporter._collect_candidates(filt)
+                _total_scanned = len(candidates)
+                _memo_objects = []
+                _skipped_quality = 0
+                _skipped_duplicate = 0
+                _skipped_error = 0
+                _errors = []
+
+                for cand in candidates:
+                    st = cand["_source_type"]
+                    si = cand["_source_id"]
+                    if exporter.tracker.is_exported(st, si):
+                        _skipped_duplicate += 1
+                        continue
+                    try:
+                        obj = await exporter._process_one(cand, filt)
+                    except Exception as ex:
+                        _skipped_error += 1
+                        _errors.append(f"{st}:{si}: {ex}")
+                        continue
+                    if obj is None:
+                        _skipped_quality += 1
+                        continue
+                    _memo_objects.append(obj)
+
+                return _total_scanned, _memo_objects, _skipped_quality, _skipped_duplicate, _skipped_error, _errors
+
+            total_scanned, memo_objects, skipped_quality, skipped_duplicate, skipped_error, errors = \
+                asyncio.run(_run_export())
+
+            total_eligible = len(memo_objects)
+            total_exported = total_eligible
+            by_type = {}
+            memories_payload = []
+
+            for obj in memo_objects:
+                by_type[obj.type] = by_type.get(obj.type, 0) + 1
+                memories_payload.append(obj.to_api_payload())
+                if not dry_run:
+                    exporter.tracker.record(
+                        obj._cleo_source_type, obj._cleo_source_id, obj.id)
+
+            if not dry_run:
+                exporter.tracker.save()
+
+            if upload and not dry_run:
+                for obj in memo_objects:
+                    try:
+                        asyncio.run(exporter._upload(obj, ExportResult()))
+                    except Exception:
+                        pass
+
+            duration = round(_time.monotonic() - t0, 2)
+
+            file_content = {
+                "memo_version": "1.0",
+                "export_name": export_name,
+                "agent": agent,
+                "exported_at": _dt.now().isoformat(),
+                "total_memories": total_exported,
+                "by_type": by_type,
+                "memories": memories_payload,
+            }
+
+            resp = {
+                "total_scanned": total_scanned,
+                "total_eligible": total_eligible,
+                "total_exported": total_exported,
+                "skipped_quality": skipped_quality,
+                "skipped_duplicate": skipped_duplicate,
+                "skipped_error": skipped_error,
+                "by_type": by_type,
+                "duration_seconds": duration,
+                "errors": errors[:5],
+            }
+
+            if not dry_run:
+                resp["file_content"] = file_content
+
+            self._json_response(200, resp)
+        except Exception as e:
+            self._json_response(500, {"error": str(e)})
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  .env FILE MANAGEMENT
@@ -3370,6 +3766,19 @@ def start_gateway(port: int = 0, token: str = "",
         logger.info("Channel manager started (hot-reload ready)")
     except Exception as e:
         logger.warning("Channel manager failed to start: %s", e)
+
+    # ── A2A Server (Agent-to-Agent protocol) ──
+    global _a2a_server
+    try:
+        a2a_enabled = full_config.get("a2a", {}).get("server", {}).get("enabled", False)
+        if a2a_enabled:
+            from adapters.a2a.server import A2AServer
+            _a2a_server = A2AServer(full_config)
+            logger.info("A2A Server enabled (/.well-known/agent.json + /a2a)")
+        else:
+            logger.debug("A2A Server disabled (set a2a.server.enabled: true to enable)")
+    except Exception as e:
+        logger.warning("A2A Server failed to init: %s", e)
 
     # ── Provider Router (cross-provider LLM failover) ──
     try:

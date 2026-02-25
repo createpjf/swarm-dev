@@ -18,49 +18,13 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
-_THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
-
-def _strip_think(text: str) -> str:
-    """Strip <think>...</think> blocks from LLM output.
-    If stripping leaves nothing, extract the think content as the result
-    (some models wrap their entire response in <think> tags)."""
-    think_contents = _THINK_RE.findall(text)
-    stripped = _THINK_RE.sub("", text)
-    stripped = re.sub(r"\n{3,}", "\n\n", stripped).strip()
-    if stripped:
-        return stripped
-    # Entire output was think blocks — use the content rather than returning empty
-    if think_contents:
-        combined = "\n\n".join(c.strip() for c in think_contents if c.strip())
-        if combined:
-            logger.info("[_strip_think] entire output was <think> — recovering %d chars",
-                        len(combined))
-            return re.sub(r"\n{3,}", "\n\n", combined).strip()
-    return stripped
+from core.protocols import _strip_think, FileLock  # noqa: E402 — shared utilities
 
 if TYPE_CHECKING:
     from core.context_bus import ContextBus
     from core.task_board import Task
     from adapters.memory.episodic import EpisodicMemory
     from adapters.memory.knowledge_base import KnowledgeBase
-
-try:
-    from filelock import FileLock
-except ImportError:
-    import warnings
-    warnings.warn(
-        "filelock package not installed. Mailbox is NOT process-safe. "
-        "Install with: pip install filelock",
-        RuntimeWarning, stacklevel=2,
-    )
-
-    class FileLock:  # type: ignore
-        def __init__(self, path):
-            pass
-        def __enter__(self):
-            return self
-        def __exit__(self, *a):
-            pass
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +55,7 @@ class AgentConfig:
     cognition_file:         str  = ""     # path to cognition.md (legacy, optional)
     soul_file:              str  = ""     # path to soul.md (OpenClaw pattern, optional)
     # System prompt budget (prevents exceeding model context window)
-    max_system_prompt_tokens: int = 12000  # ~48K chars; 0 = no limit
+    max_system_prompt_tokens: int = 16000  # ~64K chars; 0 = no limit
     # Tool configuration (OpenClaw-inspired)
     tools_config:           dict = field(default_factory=dict)  # {profile, allow, deny}
 
@@ -271,7 +235,8 @@ class BaseAgent:
             logger.warning("[%s] failed to save short-term memory: %s",
                            self.cfg.agent_id, e)
 
-    async def run(self, task: "Task", bus: "ContextBus") -> str:
+    async def run(self, task: "Task", bus: "ContextBus",
+                  tool_hints: list[str] | None = None) -> str:
         """
         Execute a task with full memory pipeline:
         1. Load skill documents from disk (hot-reload)
@@ -283,6 +248,16 @@ class BaseAgent:
         7. Tool execution loop (parse tool calls → execute → feed back)
         8. Store episode + publish to context bus
         """
+        # 0. Clear short-term memory when starting a new root task to prevent
+        #    context bleeding between unrelated user requests.
+        #    Subtasks (with parent_id) keep the parent's context for continuity.
+        if not getattr(task, 'parent_id', None):
+            if self._short_term:
+                logger.info("[%s] new root task — clearing %d short-term entries",
+                            self.cfg.agent_id, len(self._short_term))
+                self._short_term = []
+                self._save_short_term()
+
         # 1. Skills
         skills_text = self.skill_loader.load(self.cfg.skills, self.cfg.agent_id)
 
@@ -310,22 +285,33 @@ class BaseAgent:
         memory_block = f"\n\n{memory_section}" if memory_section else ""
 
         # 5b. Tools prompt (OpenClaw-inspired tool system)
+        #     V0.02: ToolScope — load scoped tools when tool_hints provided
         tools_section = ""
         tools_schemas = None
         tools_cfg = self.cfg.tools_config
         if tools_cfg:
             try:
-                from core.tools import build_tools_prompt, build_tools_schemas
-                tools_prompt = build_tools_prompt({"tools": tools_cfg})
-                if tools_prompt:
-                    tools_section = f"\n\n{tools_prompt}"
-                # Native function calling for executor agents (coding/full),
-                # OR for planners that have explicitly allowed tools (e.g.
-                # Leo with send_file — doesn't produce content but needs to
-                # deliver files to users).
-                tools_profile = tools_cfg.get("profile", "minimal")
-                if tools_profile in ("coding", "full") or tools_cfg.get("allow"):
-                    tools_schemas = build_tools_schemas({"tools": tools_cfg})
+                from core.tools import (build_tools_prompt, build_tools_schemas,
+                                        build_scoped_tools_prompt,
+                                        build_scoped_tools_schemas)
+                if tool_hints:
+                    # V0.02 ToolScope: load only base + category tools
+                    tools_prompt = build_scoped_tools_prompt(
+                        tool_hints, {"tools": tools_cfg})
+                    if tools_prompt:
+                        tools_section = f"\n\n{tools_prompt}"
+                    tools_schemas = build_scoped_tools_schemas(
+                        tool_hints, {"tools": tools_cfg})
+                else:
+                    # V0.01 fallback: load full profile
+                    tools_prompt = build_tools_prompt({"tools": tools_cfg})
+                    if tools_prompt:
+                        tools_section = f"\n\n{tools_prompt}"
+                    # Native function calling for executor agents (coding/full),
+                    # OR for planners that have explicitly allowed tools
+                    tools_profile = tools_cfg.get("profile", "minimal")
+                    if tools_profile in ("coding", "full") or tools_cfg.get("allow"):
+                        tools_schemas = build_tools_schemas({"tools": tools_cfg})
             except Exception as e:
                 logger.warning("[%s] tools prompt build failed: %s",
                                self.cfg.agent_id, e)
@@ -375,9 +361,30 @@ class BaseAgent:
             except Exception as e:
                 logger.debug("Workspace listing failed: %s", e)
 
+        # V0.02: IntentAnchor — inject original user intent for subtasks
+        intent_section = ""
+        if task.parent_id:
+            try:
+                from core.protocols import INTENT_KEY_PREFIX
+                parent_intent = bus.get("system",
+                                        f"{INTENT_KEY_PREFIX}{task.parent_id}")
+                if parent_intent:
+                    if isinstance(parent_intent, dict):
+                        intent_val = parent_intent.get("value", parent_intent)
+                    else:
+                        intent_val = parent_intent
+                    intent_section = (
+                        f"\n\n## Original User Intent\n"
+                        f"Original user request: {intent_val}\n"
+                        f"Your subtask serves this overarching goal — ensure your output directly contributes to answering it.\n"
+                    )
+            except Exception as e:
+                logger.debug("[%s] intent anchor lookup failed: %s",
+                             self.cfg.agent_id, e)
+
         system_prompt = self._budget_system_prompt(
             role_section=self.cfg.role,
-            soul_section=soul_section,
+            soul_section=soul_section + intent_section,
             tools_md_section=tools_md_section,
             user_section=user_section,
             skills_text=skills_text,
@@ -397,8 +404,13 @@ class BaseAgent:
         for turn in self._short_term[-(self.cfg.short_term_turns * 2):]:
             messages.append(turn)
 
-        # Current task
-        messages.append({"role": "user", "content": task.description})
+        # Current task — prefix with task_id anchor so LLM knows exactly
+        # which task it's working on (prevents cross-task confusion when
+        # session history or memory recall references other tasks).
+        task_header = f"[Task {task.task_id[:8]}]"
+        if getattr(task, 'parent_id', None):
+            task_header += f" [Subtask of {task.parent_id[:8]}]"
+        messages.append({"role": "user", "content": f"{task_header} {task.description}"})
 
         # 5c. Context compaction (if history is too long)
         if self.cfg.compaction_enabled:
@@ -585,6 +597,10 @@ class BaseAgent:
 
         result = initial_result
         tools_agent_cfg = {"tools": self.cfg.tools_config}
+        # Circuit breaker: track consecutive failures per tool name.
+        # If a tool fails 2+ times in a row, skip it to avoid wasting LLM rounds
+        # (e.g. generate_doc with truncated JSON args retrying 5 times).
+        _consecutive_failures: dict[str, int] = {}
 
         for round_num in range(max_rounds):
             # Check for task cancellation before each round
@@ -602,12 +618,40 @@ class BaseAgent:
             if not calls:
                 break  # No tool calls — agent is done
 
+            # Circuit breaker: filter out tools that have failed consecutively
+            filtered_calls = []
+            skipped_tools = []
+            for c in calls:
+                fail_count = _consecutive_failures.get(c["tool"], 0)
+                if fail_count >= 2:
+                    skipped_tools.append(c["tool"])
+                else:
+                    filtered_calls.append(c)
+            if skipped_tools:
+                logger.warning(
+                    "[%s] circuit breaker: skipping %s (failed %d+ consecutive times)",
+                    self.cfg.agent_id, skipped_tools,
+                    2)
+            if not filtered_calls:
+                logger.warning(
+                    "[%s] all tool calls circuit-broken, ending tool loop",
+                    self.cfg.agent_id)
+                break
+
             logger.info("[%s] tool round %d: %d call(s) — %s",
-                        self.cfg.agent_id, round_num + 1, len(calls),
-                        [c["tool"] for c in calls])
+                        self.cfg.agent_id, round_num + 1, len(filtered_calls),
+                        [c["tool"] for c in filtered_calls])
 
             # Execute all tool calls
-            tool_results = execute_tool_calls(calls, tools_agent_cfg)
+            tool_results = execute_tool_calls(filtered_calls, tools_agent_cfg)
+
+            # Track consecutive failures for circuit breaker
+            for tr in tool_results:
+                tn = tr["tool"]
+                if tr["result"].get("ok"):
+                    _consecutive_failures.pop(tn, None)  # reset on success
+                else:
+                    _consecutive_failures[tn] = _consecutive_failures.get(tn, 0) + 1
 
             # Build tool results message
             results_text = []
@@ -620,6 +664,14 @@ class BaseAgent:
                 results_text.append(
                     f"### Tool Result: {tool_name} [{status}]\n"
                     f"```json\n{result_json}\n```"
+                )
+
+            # Add circuit breaker hint for skipped tools
+            if skipped_tools:
+                results_text.append(
+                    f"### ⚠️ Skipped tools (repeated failures): {skipped_tools}\n"
+                    "These tools failed multiple times. Do NOT retry them. "
+                    "Provide your answer using the content you already have."
                 )
 
             tool_feedback = (

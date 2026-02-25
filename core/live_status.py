@@ -42,7 +42,8 @@ ICON_PAUSED    = f"[bold {_theme.warning}]⏸[/bold {_theme.warning}]"
 class TaskRow:
     """One row in the status display, representing a single task."""
     __slots__ = ("task_id", "agent_id", "status", "description",
-                 "elapsed", "error_msg", "review_score", "partial_preview")
+                 "elapsed", "error_msg", "review_score", "review_verdict",
+                 "partial_preview")
 
     def __init__(self, task_id: str):
         self.task_id     = task_id
@@ -52,6 +53,7 @@ class TaskRow:
         self.elapsed:      Optional[float] = None
         self.error_msg   = ""
         self.review_score: Optional[int] = None
+        self.review_verdict: str = ""       # V0.02: LGTM / NEEDS_WORK
         self.partial_preview: str = ""
 
 
@@ -62,9 +64,9 @@ class LiveStatus:
     Polls .task_board.json and renders a Claude Code-style live panel.
 
     Shows one row per task (not per agent), so you can see:
-      ✓ planner   分解任务                              6.8s
+      ✓ planner   decomposing tasks                      6.8s
       ● executor  implement a modern responsive HTML…   12s
-      ○ reviewer  等待中…                                —
+      ○ reviewer  waiting…                              —
     """
 
     def __init__(self, console: Console, agents_config: list[dict]):
@@ -134,11 +136,26 @@ class LiveStatus:
                 ended   = t.get("completed_at")
                 if started and ended:
                     row.elapsed = ended - started
-                # Review score
-                scores = t.get("review_scores", [])
-                if scores:
-                    avg = sum(r["score"] for r in scores) / len(scores)
-                    row.review_score = int(avg)
+                # Review score — V0.02 CritiqueSpec > critique > review_scores
+                critique_spec_raw = t.get("critique_spec")
+                critique = t.get("critique")
+                if critique_spec_raw:
+                    try:
+                        import json as _json
+                        cs = _json.loads(critique_spec_raw) if isinstance(
+                            critique_spec_raw, str) else critique_spec_raw
+                        row.review_score = int(cs.get("composite_score", 0))
+                        row.review_verdict = cs.get("verdict", "")
+                    except (ValueError, TypeError):
+                        pass
+                elif critique:
+                    row.review_score = critique.get("score")
+                    row.review_verdict = "LGTM" if critique.get("passed") else "NEEDS_WORK"
+                else:
+                    scores = t.get("review_scores", [])
+                    if scores:
+                        avg = sum(r["score"] for r in scores) / len(scores)
+                        row.review_score = int(avg)
 
             elif status == "failed":
                 row.status = "failed"
@@ -223,7 +240,8 @@ class LiveStatus:
                 working_count += 1
             elif row.status == "done":
                 if row.review_score is not None:
-                    desc_text = f"[{_theme.success}]{row.description} ({row.review_score}/100)[/{_theme.success}]"
+                    verdict_tag = f" [{row.review_verdict}]" if row.review_verdict else ""
+                    desc_text = f"[{_theme.success}]{row.description} ({row.review_score}/10{verdict_tag})[/{_theme.success}]"
                 else:
                     desc_text = f"[{_theme.success}]{row.description}[/{_theme.success}]"
                 done_count += 1

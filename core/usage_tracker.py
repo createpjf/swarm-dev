@@ -13,13 +13,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-try:
-    from filelock import FileLock
-except ImportError:
-    class FileLock:  # type: ignore
-        def __init__(self, path): pass
-        def __enter__(self): return self
-        def __exit__(self, *a): pass
+from core.protocols import FileLock  # shared fallback
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +24,7 @@ BUDGET_FILE = "config/budget.json"
 # ── Cost estimation (per 1M tokens) ─────────────────────────────────────────
 # Approximate costs for FLock-hosted models (adjust as needed)
 MODEL_COSTS = {
+    "minimax-m2.5":         {"input": 1.0, "output": 4.0},
     "minimax-m2.1":         {"input": 1.0, "output": 4.0},
     "deepseek-v3.2":        {"input": 0.5, "output": 2.0},
     "qwen3-235b-thinking":  {"input": 1.5, "output": 6.0},
@@ -47,7 +42,7 @@ class BudgetExceeded(Exception):
 def estimate_cost(model: str, prompt_tokens: int,
                   completion_tokens: int) -> float:
     """Estimate cost in USD for a single call."""
-    costs = MODEL_COSTS.get(model, MODEL_COSTS["_default"])
+    costs = MODEL_COSTS.get(model.lower(), MODEL_COSTS["_default"])
     cost = (
         (prompt_tokens / 1_000_000) * costs["input"] +
         (completion_tokens / 1_000_000) * costs["output"]

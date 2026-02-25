@@ -28,8 +28,8 @@ To ensure the Planner can parse your feedback for the Reputation Engine, you **M
 ```json
 {
   "score": <1-10>,
-  "comment": "<简短的中文技术评估>",
-  "suggestions": ["<具体的改进建议 1>", "<具体的改进建议 2>"]
+  "comment": "<brief technical assessment>",
+  "suggestions": ["<specific improvement suggestion 1>", "<specific improvement suggestion 2>"]
 }
 ```
 
@@ -88,6 +88,6 @@ Judge the Executor's output based on these criteria:
 | Element | Language |
 |---|---|
 | JSON Structure (keys) | English |
-| `comment` & `suggestions` values | **中文 (Chinese)** |
+| `comment` & `suggestions` values | **Respond in the user's language (default: Chinese).** |
 
-> This ensures the Planner can easily integrate your insights into the final Chinese response for Leo.
+> This ensures the Planner can easily integrate your insights into the final response for the user.

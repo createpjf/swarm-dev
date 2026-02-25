@@ -8,7 +8,7 @@ Architecture:
   - Agents invoke tools via structured JSON blocks in their output
   - Tool results are fed back to the agent as context
 
-Tool categories (36 tools across 9 groups):
+Tool categories (37 tools across 10 groups):
   - Web:        web_search (Brave + Perplexity), web_fetch (text + markdown)
   - Filesystem: read_file, write_file, edit_file, list_dir
   - Memory:     memory_search, memory_save, kb_search, kb_write
@@ -19,6 +19,7 @@ Tool categories (36 tools across 9 groups):
                 browser_screenshot, browser_evaluate, browser_page_info
   - Media:      screenshot, notify, analyze_image
   - Messaging:  send_mail, send_file, message
+  - A2A:        a2a_delegate (delegate to external agents via A2A protocol)
 
 Access control:
   - Tool profiles: "minimal", "coding", "full"
@@ -176,7 +177,8 @@ TOOL_PROFILES = {
                "search_skills", "install_remote_skill",
                "browser_navigate", "browser_click", "browser_fill",
                "browser_get_text", "browser_screenshot",
-               "browser_evaluate", "browser_page_info"},
+               "browser_evaluate", "browser_page_info",
+               "a2a_delegate"},  # Phase 5: A2A delegation
     "full": None,  # None = all tools allowed
 }
 
@@ -196,6 +198,7 @@ TOOL_GROUPS = {
     "group:browser": ["browser_navigate", "browser_click", "browser_fill",
                       "browser_get_text", "browser_screenshot",
                       "browser_evaluate", "browser_page_info"],
+    "group:a2a": ["a2a_delegate"],
 }
 
 
@@ -1147,25 +1150,31 @@ def _handle_generate_doc(**kwargs) -> dict:
                 else:
                     result["delivery"] = "failed"
                     result["send_error"] = send_result.get("error", "")
-                    result["retry_hint"] = (
-                        f"文件已生成在 {result['path']}，但自动发送失败"
-                        f"（错误: {send_result.get('error', 'unknown')}）。"
-                        f"请调用 send_file(file_path='{result['path']}') 重试发送。")
+                    result["retry_hint"] = _file_delivery_hint(
+                        result["path"], "auto-send failed",
+                        send_result.get("error", "unknown"))
                     logger.warning("generate_doc auto-send failed: %s",
                                    send_result.get("error"))
             else:
                 result["delivery"] = "no_session"
-                result["retry_hint"] = (
-                    f"文件已生成在 {result['path']}，但没有活跃的频道会话。"
-                    f"请调用 send_file(file_path='{result['path']}') 发送给用户。")
+                result["retry_hint"] = _file_delivery_hint(
+                    result["path"], "no active channel session")
         except Exception as e:
             logger.warning("generate_doc auto-send error: %s", e)
             result["delivery"] = "manual"
-            result["retry_hint"] = (
-                f"文件已生成在 {result['path']}，自动发送异常: {e}。"
-                f"请调用 send_file(file_path='{result['path']}') 重试。")
+            result["retry_hint"] = _file_delivery_hint(
+                result["path"], "auto-send exception", str(e))
 
     return result
+
+
+def _file_delivery_hint(path: str, reason: str, error: str = "") -> str:
+    """Build a standard file delivery retry hint message."""
+    msg = f"File generated at {path}, but {reason}"
+    if error:
+        msg += f" (error: {error})"
+    msg += f". Call send_file(file_path='{path}') to retry."
+    return msg
 
 
 def _gen_pdf(content: str, output_path: str, title: str) -> dict:
@@ -2145,6 +2154,71 @@ def _handle_spawn_subagent(**kwargs) -> dict:
         return {"ok": False, "error": f"Spawn failed: {e}"}
 
 
+# ── A2A delegate handler (Phase 5) ──
+
+def _handle_a2a_delegate(**kwargs) -> dict:
+    """Delegate a subtask to an external AI agent via A2A protocol."""
+    agent_url = kwargs.get("agent_url", "auto")
+    message = kwargs.get("message", "")
+    files_str = kwargs.get("files", "")
+    timeout = int(kwargs.get("timeout", 120))
+    stream = kwargs.get("stream", True)
+
+    if not message:
+        return {"ok": False, "error": "message parameter required"}
+
+    try:
+        from adapters.a2a.client import A2AClient
+        import yaml
+
+        # Load config
+        config = {}
+        config_path = "config/agents.yaml"
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = yaml.safe_load(f) or {}
+
+        client = A2AClient(config)
+        if not client.enabled:
+            return {"ok": False,
+                    "error": "A2A Client disabled. Set a2a.client.enabled=true"}
+
+        # Parse files
+        files = [f.strip() for f in files_str.split(",") if f.strip()] \
+            if isinstance(files_str, str) and files_str else \
+            (files_str if isinstance(files_str, list) else [])
+
+        # Parse required_skills from message context or kwargs
+        required_skills = kwargs.get("required_skills", [])
+        if isinstance(required_skills, str):
+            required_skills = [s.strip() for s in required_skills.split(",")
+                               if s.strip()]
+
+        result = client.send_task(
+            agent_url=agent_url,
+            message=message,
+            files=files,
+            required_skills=required_skills,
+            timeout=timeout,
+            stream=bool(stream),
+        )
+
+        _audit_log("a2a_delegate",
+                    agent_url=result.agent_url,
+                    trust=result.trust_level,
+                    status=result.status,
+                    duration=result.duration)
+
+        return {
+            "ok": result.status == "completed",
+            "result": result.to_dict(),
+        }
+
+    except Exception as e:
+        logger.error("a2a_delegate error: %s", e, exc_info=True)
+        return {"ok": False, "error": f"A2A delegation failed: {e}"}
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  REGISTRY
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2507,6 +2581,29 @@ _BUILTIN_TOOLS: list[Tool] = [
                      "description": "Comma-separated skill names for the child",
                      "required": False}},
          _handle_spawn_subagent, group="task"),
+
+    # ── A2A delegation tool (Phase 5) ──
+    Tool("a2a_delegate",
+         "Delegate a subtask to an external AI agent via the A2A (Agent-to-Agent) protocol. "
+         "Use when the task requires capabilities Cleo doesn't have (chart generation, "
+         "specialized data analysis, image generation, etc). Set agent_url='auto' to "
+         "automatically find the best matching agent by required_skills.",
+         {"agent_url": {"type": "string",
+                        "description": "Target agent URL or 'auto' for automatic matching",
+                        "required": True},
+          "message": {"type": "string",
+                      "description": "Task description for the external agent (English preferred)",
+                      "required": True},
+          "files": {"type": "string",
+                    "description": "Comma-separated file paths to attach (verified agents only)",
+                    "required": False},
+          "required_skills": {"type": "string",
+                              "description": "Comma-separated skill tags for auto-matching",
+                              "required": False},
+          "timeout": {"type": "integer",
+                      "description": "Max wait seconds (default 120)",
+                      "required": False}},
+         _handle_a2a_delegate, group="a2a"),
 ]
 
 # Keyed registry for fast lookup
@@ -2612,6 +2709,127 @@ def build_tools_prompt(agent_config: dict | None = None) -> str:
 def build_tools_schemas(agent_config: dict | None = None) -> list[dict]:
     """Build tool schemas for function-calling LLMs."""
     tools = get_available_tools(agent_config)
+    return [t.to_schema() for t in tools]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  V0.02 TOOL SCOPE — Category-based tool loading
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Base tools always loaded (memory + messaging essentials)
+_BASE_TOOL_NAMES: set[str] = {
+    "memory_search", "memory_save", "kb_search", "kb_write",
+    "send_mail", "send_file", "message",
+}
+
+# Startup validation: ensure all base tool names exist in _BUILTIN_TOOLS
+_builtin_names = {t.name for t in _BUILTIN_TOOLS}
+_missing_base = _BASE_TOOL_NAMES - _builtin_names
+if _missing_base:
+    logger.error("ToolScope: _BASE_TOOL_NAMES references non-existent tools: %s", _missing_base)
+
+# Mapping from SubTaskSpec tool_hint values → TOOL_GROUPS keys
+_HINT_TO_GROUP: dict[str, str] = {
+    "web":       "group:web",
+    "fs":        "group:fs",
+    "automation": "group:automation",
+    "media":     "group:media",
+    "browser":   "group:browser",
+    "memory":    "group:memory",
+    "messaging": "group:messaging",
+    "task":      "group:task",
+    "skill":     "group:skill",
+    "a2a_delegate": "group:a2a",
+}
+
+
+def get_scoped_tools(tool_hints: list[str],
+                     agent_config: dict | None = None) -> list[Tool]:
+    """Get tools scoped to specific categories (V0.02 ToolScope).
+
+    Loads base tools (memory + messaging) plus tools matching tool_hints.
+    Falls back to full profile if tool_hints is empty.
+
+    Args:
+        tool_hints: List of category hints (e.g. ["web", "fs"]).
+        agent_config: Agent config dict with tools.deny etc.
+
+    Returns:
+        Scoped tool list (typically 9-14 tools vs 33 in full coding profile).
+    """
+    if not tool_hints:
+        # Fallback: V0.01 behavior — load full profile
+        return get_available_tools(agent_config)
+
+    # Build allowed tool names: base + categories from hints
+    allowed_names: set[str] = set(_BASE_TOOL_NAMES)
+    for hint in tool_hints:
+        group_key = _HINT_TO_GROUP.get(hint)
+        if group_key and group_key in TOOL_GROUPS:
+            allowed_names.update(TOOL_GROUPS[group_key])
+
+    # Apply deny list from agent config
+    tools_cfg = (agent_config or {}).get("tools", {})
+    deny_list = set(tools_cfg.get("deny", []))
+    expanded_deny: set[str] = set()
+    for item in deny_list:
+        if item in TOOL_GROUPS:
+            expanded_deny.update(TOOL_GROUPS[item])
+        else:
+            expanded_deny.add(item)
+
+    available = []
+    for tool in _BUILTIN_TOOLS:
+        if tool.name not in allowed_names:
+            continue
+        if tool.name in expanded_deny:
+            continue
+        if not tool.is_available():
+            continue
+        available.append(tool)
+
+    return available
+
+
+def build_scoped_tools_prompt(tool_hints: list[str],
+                              agent_config: dict | None = None) -> str:
+    """Build tools prompt section for scoped tool set."""
+    tools = get_scoped_tools(tool_hints, agent_config)
+    if not tools:
+        return ""
+
+    lines = [
+        "## Available Tools",
+        "",
+        "You can invoke tools by including a JSON block in your response.",
+        "Use this EXACT format (any of these formats work):",
+        "",
+        "Format 1 (preferred):",
+        "```tool",
+        '{"tool": "tool_name", "params": {"param1": "value1"}}',
+        "```",
+        "",
+        "Format 2:",
+        "<tool_code>",
+        '{"tool": "tool_name", "params": {"param1": "value1"}}',
+        "</tool_code>",
+        "",
+        "IMPORTANT: Use ONE tool per block. The tool JSON must have a \"tool\" key and a \"params\" key.",
+        "After tool execution, you will receive the results and can continue.",
+        "",
+        f"Available tools (scoped to: {', '.join(tool_hints)}):",
+        "",
+    ]
+    for t in tools:
+        lines.append(t.to_prompt())
+
+    return "\n".join(lines)
+
+
+def build_scoped_tools_schemas(tool_hints: list[str],
+                               agent_config: dict | None = None) -> list[dict]:
+    """Build tool schemas for scoped tool set (function-calling LLMs)."""
+    tools = get_scoped_tools(tool_hints, agent_config)
     return [t.to_schema() for t in tools]
 
 

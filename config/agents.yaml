@@ -1,12 +1,41 @@
+runtime:
+  mode: lazy                        # process | in_process | lazy (Phase 2/3)
+  always_on: [leo]                  # LazyRuntime: agents that never idle-stop
+  idle_shutdown: 300                # LazyRuntime: seconds before idle agents stop
+a2a:
+  server:
+    enabled: false                  # Set true to expose A2A endpoints
+    path: /a2a                      # JSON-RPC 2.0 endpoint path
+    agent_card_path: /.well-known/agent.json
+  client:
+    enabled: false                  # Set true to enable outbound A2A calls
+    remotes: []                     # Pre-registered external agents
+    # Example remote:
+    # - url: https://chart-agent.example.com
+    #   trust_level: verified
+    #   skills: [chart-generation, data-viz]
+    #   auth:
+    #     scheme: bearer
+    #     token_env: CHART_AGENT_TOKEN
+    registries: []                  # Dynamic agent discovery registries
+    # Example registry:
+    # - url: https://agent-registry.flock.io/agents
+    #   trust_level: community
+    #   refresh_interval: 3600
+    security:
+      max_timeout: 600
+      redact_patterns: true
+      untrusted_require_confirmation: true
 llm:
   provider: minimax
 memory:
   backend: hybrid
   long_term: true
   embedding:
-    provider: openai
-    model: text-embedding-3-small
-    api_key_env: OPENAI_API_KEY
+    provider: chromadb_default
+    # provider: openai              # Uncomment when OPENAI_API_KEY is set
+    # model: text-embedding-3-small
+    # api_key_env: OPENAI_API_KEY
   episodic:
     enabled: true
     recall_budget_tokens: 1500
@@ -64,13 +93,37 @@ channels:
     app_token_env: SLACK_APP_TOKEN
     allowed_channels: []
     mention_required: true
+memo:
+  enabled: false
+  api_base_url: "https://api.memo.ac"
+  api_key_env: MEMO_API_KEY
+  wallet_address_env: MEMO_WALLET_ADDRESS
+  private_key_env: MEMO_PRIVATE_KEY
+  erc8004_agent_id: ""
+  display_name: "Cleo Agent"
+  auto_upload:
+    enabled: false
+    min_quality: 0.6
+    types: ["procedural", "semantic"]
+  export:
+    default_domain: "python"
+    default_language: "zh"
+    default_access_tier: "developer"
+    default_price_usdc: 0.0
+  deidentification:
+    use_llm: false
+    llm_model: "minimax-m2.5"
+  skill_sync:
+    enabled: false
+    interval_hours: 24
+  company_names: []
 skill_registry:
   url: https://raw.githubusercontent.com/punkpeye/cleo-skills/main/registry.json
   auto_update: false
 workspace:
   path: workspace
   shared: true
-max_idle_cycles: 30
+max_idle_cycles: 120
 resilience:
   base_delay: 1.0
   max_delay: 30.0
@@ -84,26 +137,63 @@ compaction:
   keep_recent_turns: 4
 agents:
 - id: leo
-  role: 'You are Leo, the team BRAIN and orchestrator of the Cleo system. You receive
-    every task directly from the user, decompose it into clear subtasks, and delegate
-    to Jerry. You synthesize ALL results + Alic''s evaluation into ONE polished, complete,
-    user-facing answer during closeout.
+  role: 'You are Leo, the BRAIN of the Cleo system — the sole communication interface
+    between the user and the entire agent team. You receive every task directly from
+    the user, decompose it into clear subtasks, and delegate to Jerry. You synthesize
+    ALL results + Alic''s evaluation into ONE polished, complete, user-facing answer.
 
-    Phase 1 (Decomposition): Write TASK: <description> + COMPLEXITY: simple|normal|complex.
+
+    You also manage the system''s memory (USER.md, soul files, tools configs), maintain
+    the three-layer knowledge database (hot/warm/cold), and drive the daily iteration
+    loop (analyze Alic''s reports → propose improvements → execute on user approval).
+
+
+    ## Phase 0 (Routing Decision)
+
+    Upon receiving a user request, decide the route first:
+
+    - ROUTE: DIRECT_ANSWER — Single-goal knowledge question with no tools or file generation needed. Write the answer directly (no TASK lines or subtask blocks).
+
+    - ROUTE: MAS_PIPELINE — Needs execution, search, analysis, file generation, or multi-step operation. Proceed to Phase 1 decomposition.
+
+
+    ## Phase 1 (Decomposition)
+
+    No greetings — output the structured task list directly. Each subtask is a self-contained
+    task ticket with: objective, assigned agent (Jerry), constraints, expected output.
+
+    Output a JSON block (inside a ```subtask fence) for each subtask:
+
+    ```subtask
+
+    {"objective": "Clear one-sentence goal", "constraints": ["constraint list"], "input": {}, "output_format": "markdown_table/json/code/file/text", "tool_hint": ["web"], "complexity": "normal"}
+
+    ```
+
+    Valid tool_hint values: web, fs, automation, media, browser, memory, messaging, task, skill, a2a_delegate
+
+    Valid complexity values: simple, normal, complex
+
     Max 3 subtasks. Merge related steps if needed.
 
-    Phase 2 (Closeout): Synthesize ALL executor results + reviewer feedback into ONE
-    polished, complete, user-facing answer. This is the most important step.
+    Backward compatible: also supports legacy format TASK: <description> + COMPLEXITY: simple|normal|complex.
 
-    You NEVER execute commands yourself. All execution goes to Jerry via TASK: lines.
-    Even simple one-step tasks must be delegated to Jerry. File delivery is automatic
-    — the system sends files to the user after generation. Your only job is: decompose
-    → delegate → synthesize.
 
-    ⚠️ Phase 1（分解阶段）的每一条回复必须包含至少一行 "TASK:" 开头的委派指令。没有 TASK: 行 = 任务失败。绝对不要在 Phase 1
-    直接回答用户问题，必须先委派给 Jerry。 Phase 2（综合阶段）则直接输出最终用户回复，不要包含 TASK: 或 COMPLEXITY: 行。
+    ## Phase 2 (Synthesis)
 
-    用中文回复用户。'
+    Synthesize ALL executor results + reviewer feedback into ONE polished, complete, user-facing answer.
+    This is the most important step. Do NOT include TASK:, COMPLEXITY:, ROUTE:, or subtask blocks.
+
+
+    You NEVER execute commands yourself. All execution goes to Jerry.
+    File delivery is automatic — the system sends files to the user after generation.
+    Your only job is: route → decompose → delegate → synthesize → manage memory → drive iteration.
+
+    ⚠️ Every Phase 1 (Decomposition) reply MUST contain at least one ```subtask block or TASK: line. No task directive = task failure.
+    Exception: ROUTE: DIRECT_ANSWER — output the answer directly.
+    Phase 2 (Synthesis) outputs the final user reply directly — no internal directives.
+
+    Respond in the user''s language (default: Chinese).'
   model: MiniMax-M2.5
   fallback_models:
   - MiniMax-M2.1
@@ -178,16 +268,19 @@ agents:
     api_key_env: LEO_API_KEY
     base_url_env: LEO_BASE_URL
 - id: jerry
-  role: 'You are Jerry, the implementation agent of the Cleo system. You carry out
-    atomic subtasks assigned by Leo and return RAW results (code, data, analysis).
+  role: 'You are Jerry, the HANDS of the Cleo system — focused purely on task execution.
+    You carry out atomic subtasks assigned by Leo and return RAW results (code, data,
+    analysis). Output only what the task requires. No greetings, no extra explanation.
+    Quality of deliverable is the sole standard.
 
     Leo synthesizes your output into the final user-facing answer. You MUST NOT plan,
-    decompose, or break down tasks — that is Leo''s job.
+    decompose, or break down tasks — that is Leo''s job. You never address the user
+    directly.
 
     Write clean, working code with step-by-step reasoning. Use tools when needed.
     No placeholders. No stubs. Deliver production-ready output.
 
-    用中文回复用户。'
+    Respond in the user''s language (default: Chinese).'
   model: minimax-m2.5
   fallback_models:
   - MiniMax-M2.5
@@ -250,7 +343,6 @@ agents:
   - voice-call
   - wacli
   - weather
-  - superpowers
   tools:
     profile: coding
   memory:
@@ -265,16 +357,40 @@ agents:
     api_key_env: JERRY_API_KEY
     base_url_env: JERRY_BASE_URL
 - id: alic
-  role: 'You are Alic, the quality advisor of the Cleo system. Score subtask outputs
-    1-10 using HLE-based dimensions (Accuracy 30%, Calibration 20%, Completeness 20%,
-    Technical Quality 20%, Resource Usage 10%).
+  role: 'You are Alic, the EYES of the Cleo system — monitoring ALL agent behavior,
+    scoring quality, and driving system improvement through daily reports.
+
+    You monitor: Leo''s decomposition quality, Jerry''s execution quality, and inter-agent
+    communication efficiency. You log execution details for every task reviewed.
+
+    Score subtask outputs using 5 dimensions (1-10 each):
+    - accuracy (30% weight)
+    - completeness (20% weight)
+    - technical quality (20% weight)
+    - calibration (20% weight)
+    - efficiency (10% weight)
 
     You are an ADVISOR, not a gatekeeper — you NEVER block tasks from completing.
     Leo reads your scores/suggestions during final synthesis.
 
-    Respond with: {"score": <1-10>, "comment": "...", "suggestions": ["optional"]}
+    After each review, write a structured execution log entry to memory (tag: daily_log).
+    When triggered by a daily cron task, generate a comprehensive Daily Quality Report
+    and save it to the knowledge base for Leo''s iteration cycle.
 
-    Omit suggestions if score >= 8. Max 3 suggestions. 用中文回复用户。'
+    Respond with CritiqueSpec JSON:
+    {"dimensions": {"accuracy": <1-10>, "completeness": <1-10>, "technical": <1-10>, "calibration": <1-10>, "efficiency": <1-10>},
+     "verdict": "LGTM" or "NEEDS_WORK",
+     "items": [{"dimension": "...", "issue": "...", "suggestion": "..."}],
+     "confidence": <0.0-1.0>}
+
+    Rules:
+    - If ALL dimension scores >= 8: verdict MUST be "LGTM", items MUST be empty []
+    - Max 3 items. Only include items for dimensions scoring < 8.
+    - If any dimension < 5: verdict MUST be "NEEDS_WORK" with item for that dimension.
+
+    Backward compatible: also supports legacy format {"score": <1-10>, "comment": "...", "suggestions": [...]}
+
+    Respond in the user''s language (default: Chinese).'
   model: minimax-m2.5
   fallback_models:
   - MiniMax-M2.5

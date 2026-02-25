@@ -18,23 +18,7 @@ import logging
 import os
 import time
 
-try:
-    from filelock import FileLock
-except ImportError:
-    import warnings
-    warnings.warn(
-        "filelock package not installed. ContextBus is NOT process-safe. "
-        "Install with: pip install filelock",
-        RuntimeWarning, stacklevel=2,
-    )
-
-    class FileLock:  # type: ignore
-        def __init__(self, path):
-            pass
-        def __enter__(self):
-            return self
-        def __exit__(self, *a):
-            pass
+from core.protocols import FileLock  # shared fallback
 
 logger = logging.getLogger(__name__)
 

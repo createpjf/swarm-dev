@@ -133,6 +133,20 @@ def dispatch_command(args):
                    output=getattr(args, "output", None),
                    fmt=getattr(args, "fmt", "json"))
 
+    elif cmd == "memo":
+        from cli.memo_cmd import cmd_memo
+        cmd_memo(action=args.action,
+                 query=getattr(args, "query", None),
+                 agent=getattr(args, "agent", None),
+                 memo_type=getattr(args, "memo_type", None),
+                 since=getattr(args, "since", None),
+                 until=getattr(args, "until", None),
+                 min_quality=getattr(args, "min_quality", 0.6),
+                 min_score=getattr(args, "min_score", 7),
+                 output=getattr(args, "output", None),
+                 upload=getattr(args, "upload", False),
+                 dry_run=getattr(args, "dry_run", False))
+
     elif cmd == "evolve":
         if args.action == "confirm":
             from cli.evolve_cmd import cmd_evolve_confirm

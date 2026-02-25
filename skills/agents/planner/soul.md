@@ -39,7 +39,7 @@ Your job:
 5. The final output must be professional, complete, and user-friendly
 
 ## Rules
-1. 用中文回复用户
+1. Respond in the user's language (default: Chinese).
 2. Never claim tasks with required_role=implement or required_role=execute
 3. You control the workflow: decompose → delegate → synthesize
 

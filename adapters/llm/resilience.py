@@ -439,22 +439,35 @@ class ResilientLLM:
                     latency = (time.time() - start_ts) * 1000
                     circuit.record_success()
 
-                    # Estimate tokens from char counts (~4 chars/token)
-                    prompt_chars = sum(
-                        len(m.get("content", "")) for m in messages)
-                    est_prompt = max(1, prompt_chars // 4)
-                    est_completion = max(1, output_chars // 4)
-
-                    record = UsageRecord(
-                        model=current_model,
-                        prompt_tokens=est_prompt,
-                        completion_tokens=est_completion,
-                        total_tokens=est_prompt + est_completion,
-                        latency_ms=latency,
-                        success=True,
-                        retries=total_retries,
-                        failover_used=is_failover,
-                    )
+                    # Prefer real usage from adapter (via stream_options)
+                    real_usage = getattr(self.adapter, '_last_stream_usage', None)
+                    if real_usage and real_usage.get("total_tokens", 0) > 0:
+                        record = UsageRecord(
+                            model=current_model,
+                            prompt_tokens=real_usage.get("prompt_tokens", 0),
+                            completion_tokens=real_usage.get("completion_tokens", 0),
+                            total_tokens=real_usage.get("total_tokens", 0),
+                            latency_ms=latency,
+                            success=True,
+                            retries=total_retries,
+                            failover_used=is_failover,
+                        )
+                    else:
+                        # Fallback: estimate from char counts (~4 chars/token)
+                        prompt_chars = sum(
+                            len(m.get("content", "")) for m in messages)
+                        est_prompt = max(1, prompt_chars // 4)
+                        est_completion = max(1, output_chars // 4)
+                        record = UsageRecord(
+                            model=current_model,
+                            prompt_tokens=est_prompt,
+                            completion_tokens=est_completion,
+                            total_tokens=est_prompt + est_completion,
+                            latency_ms=latency,
+                            success=True,
+                            retries=total_retries,
+                            failover_used=is_failover,
+                        )
                     self.usage_log.append(record)
                     return
 

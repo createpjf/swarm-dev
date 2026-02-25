@@ -161,6 +161,7 @@ class BM25Index:
 def reciprocal_rank_fusion(
     *ranked_lists: list[tuple[str, float]],
     k: int = 60,
+    density_map: dict[str, str] | None = None,
 ) -> list[tuple[str, float]]:
     """
     Combine multiple ranked result lists using Reciprocal Rank Fusion.
@@ -168,13 +169,29 @@ def reciprocal_rank_fusion(
     Each input is a list of (doc_id, score) tuples.
     Returns merged list of (doc_id, rrf_score) sorted by fused score.
 
+    Args:
+        k: RRF constant (default 60).
+        density_map: V0.02 DensityTag — optional mapping of
+            doc_id → density level ("HIGH"/"NORMAL"/"LOW").
+            HIGH notes get ×1.5 boost, LOW get ×0.5 penalty.
+
     k=60 is the standard RRF constant.
     """
+    # V0.02 DensityTag multipliers
+    _DENSITY_MULT = {"HIGH": 1.5, "NORMAL": 1.0, "LOW": 0.5}
+
     fused: dict[str, float] = defaultdict(float)
 
     for ranked in ranked_lists:
         for rank, (doc_id, _score) in enumerate(ranked, start=1):
             fused[doc_id] += 1.0 / (k + rank)
+
+    # V0.02: Apply density weighting
+    if density_map:
+        for doc_id in fused:
+            density = density_map.get(doc_id, "NORMAL")
+            mult = _DENSITY_MULT.get(density, 1.0)
+            fused[doc_id] *= mult
 
     result = sorted(fused.items(), key=lambda x: x[1], reverse=True)
     return result
@@ -299,9 +316,19 @@ class HybridMemory:
                 doc_id = bm25_idx.doc_ids[doc_idx]
                 bm25_results.append((doc_id, score))
 
-        # 3. Fuse results with RRF
+        # 3. Build density map from metadata (V0.02 DensityTag)
+        density_map: dict[str, str] = {}
+        if bm25_idx:
+            for i, did in enumerate(bm25_idx.doc_ids):
+                meta = bm25_idx.doc_metadata[i] if i < len(bm25_idx.doc_metadata) else {}
+                if "density" in meta:
+                    density_map[did] = meta["density"]
+
+        # 4. Fuse results with RRF (+ density weighting)
         if vector_results and bm25_results:
-            fused = reciprocal_rank_fusion(vector_results, bm25_results)
+            fused = reciprocal_rank_fusion(
+                vector_results, bm25_results,
+                density_map=density_map if density_map else None)
         elif vector_results:
             fused = vector_results
         elif bm25_results:

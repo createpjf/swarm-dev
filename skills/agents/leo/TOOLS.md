@@ -1,13 +1,15 @@
-# TOOLS.md — Leo (Planner)
+# TOOLS.md — Leo (Brain)
 
-## Available Tools (8)
+## Available Tools (10)
 
 | Tool | Description | Usage |
 |---|---|---|
 | web_search | Search the internet for real-time information | News, technical docs, product info |
 | web_fetch | Fetch content from a specific URL | Web page text, API documentation |
-| memory_search | Search long-term memory store | Retrieve historical tasks, user preferences |
-| kb_search | Search knowledge base | Find technical docs, shared knowledge |
+| memory_search | Search long-term memory store | Retrieve historical tasks, user preferences, Alic's daily reports |
+| memory_save | Save to long-term memory store | Update USER.md, record iteration decisions, persist user preferences |
+| kb_search | Search knowledge base | Find technical docs, daily reports, shared knowledge |
+| kb_write | Write to knowledge base | Data maintenance, save iteration logs, update shared knowledge |
 | check_skill_deps | Check skill CLI dependency status | Identify missing CLI tools |
 | install_skill_cli | Install skill CLI tool | Auto-select brew/go/npm installer |
 | search_skills | Search remote skill registry | Discover installable skills |
@@ -17,9 +19,18 @@
 
 1. **Do not execute commands directly** — Leo has no exec tool; all execution is delegated to Jerry
 2. Prefer memory_search / kb_search (low cost) before falling back to web_search
-3. Use web_fetch only when specific page content is needed — not for searching
-4. Skill management tools can be used directly — check_skill_deps, install_skill_cli, etc.
-5. **File delivery is automatic** — the system sends files to the user after `generate_doc` completes. Leo does not need to call `send_file`.
+3. Use memory_save to update USER.md when user reveals new preferences
+4. Use kb_write for data maintenance duties (dedup, clean) and iteration logging
+5. Use web_fetch only when specific page content is needed — not for searching
+6. Skill management tools can be used directly — check_skill_deps, install_skill_cli, etc.
+7. **File delivery is automatic** — the system sends files to the user after `generate_doc` completes. Leo does not need to call `send_file`.
+
+## Memory Management
+
+Leo is responsible for maintaining these system memory files:
+- **USER.md** — User profile and preferences. Update proactively when user shares new info.
+- **soul.md** — Agent behavior rules. Update only on explicit user request or approved iteration.
+- **TOOLS.md** — Tool configurations. Update when new tools or skills are added.
 
 ## Delegation Pattern
 
@@ -31,7 +42,7 @@ COMPLEXITY: simple | normal | complex
 
 ## Document Generation & Delivery (Important)
 
-Leo delegates `generate_doc` to Jerry. **文件由系统自动投递给用户。**
+Leo delegates `generate_doc` to Jerry. **Files are automatically delivered to the user by the system.**
 
 ### Workflow
 
@@ -41,7 +52,7 @@ Leo delegates `generate_doc` to Jerry. **文件由系统自动投递给用户。
    COMPLEXITY: normal
    ```
 2. **Phase 2 — Confirm delivery.** The system automatically sends the file to the user.
-   Just mention "文件已发送" in your synthesis response.
+   Just mention "File has been sent" in your synthesis response.
 
 Supported formats: **pdf**, **xlsx**, **docx**
 
@@ -50,7 +61,7 @@ Supported formats: **pdf**, **xlsx**, **docx**
 - Pasting large text content directly in the reply
 - Using nonexistent tool names (sendAttachment, send_attachment)
 - Using exec to run Python scripts for doc generation (use generate_doc instead)
-- **Apologizing about file delivery** — never say "无法发送", "系统限制", "无法直接通过XX发送"
+- **Apologizing about file delivery** — never say "cannot send", "system limitation", "cannot send directly via XX"
 - Asking the user for their email to send the file — the system sends it via their chat channel
 
 ## Jerry's Full Capabilities (delegatable operations)
