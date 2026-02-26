@@ -421,7 +421,8 @@ class TaskBoard:
             t["status"]       = TaskStatus.COMPLETED.value
             t["completed_at"] = time.time()
             self._write(data)
-            return Task.from_dict(t)
+        self.cleanup_stream(task_id)
+        return Task.from_dict(t)
 
     def fail(self, task_id: str, reason: str = ""):
         with self.lock:
@@ -433,6 +434,7 @@ class TaskBoard:
             t["status"] = TaskStatus.FAILED.value
             t.setdefault("evolution_flags", []).append(f"failed:{reason}")
             self._write(data)
+        self.cleanup_stream(task_id)
 
     def flag(self, task_id: str, tag: str):
         with self.lock:
@@ -467,6 +469,54 @@ class TaskBoard:
             )
             self._write(data)
 
+    # ── Per-task SSE stream files (lockless append) ─────────────────────
+
+    STREAM_DIR = ".task_streams"
+
+    @staticmethod
+    def append_stream_chunk(task_id: str, chunk: str, seq: int):
+        """Append a single streaming chunk to per-task stream file.
+
+        Lockless: single writer (agent process), OS guarantees atomic append
+        for lines < PIPE_BUF (4 KB on macOS/Linux).
+        """
+        os.makedirs(TaskBoard.STREAM_DIR, exist_ok=True)
+        path = os.path.join(TaskBoard.STREAM_DIR, f"{task_id}.stream")
+        line = json.dumps(
+            {"c": chunk, "seq": seq, "ts": time.time()},
+            ensure_ascii=False,
+        )
+        with open(path, "a") as f:
+            f.write(line + "\n")
+
+    @staticmethod
+    def read_stream_chunks(
+        task_id: str, after_seq: int = -1
+    ) -> list[dict]:
+        """Read stream chunks after a given sequence number (cursor-based)."""
+        path = os.path.join(TaskBoard.STREAM_DIR, f"{task_id}.stream")
+        if not os.path.exists(path):
+            return []
+        chunks: list[dict] = []
+        with open(path) as f:
+            for line in f:
+                try:
+                    obj = json.loads(line.strip())
+                    if obj.get("seq", 0) > after_seq:
+                        chunks.append(obj)
+                except (json.JSONDecodeError, ValueError):
+                    continue  # partial line at EOF — will be read fully next poll
+        return chunks
+
+    @staticmethod
+    def cleanup_stream(task_id: str):
+        """Remove per-task stream file after task completes."""
+        path = os.path.join(TaskBoard.STREAM_DIR, f"{task_id}.stream")
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
     # ── Cancel / Pause / Resume / Retry ───────────────────────────────────
 
     def cancel(self, task_id: str) -> bool:
@@ -484,7 +534,8 @@ class TaskBoard:
             t["completed_at"] = time.time()
             t.setdefault("evolution_flags", []).append("user_cancelled")
             self._write(data)
-            return True
+        self.cleanup_stream(task_id)
+        return True
 
     def is_cancelled(self, task_id: str) -> bool:
         """Check if a task has been cancelled (for agent loop early exit)."""

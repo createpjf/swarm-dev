@@ -360,6 +360,9 @@ class _Handler(BaseHTTPRequestHandler):
         # ── SSE event stream ──
         elif path == "/v1/events":
             self._handle_sse()
+        elif path.startswith("/v1/stream/"):
+            task_id = path[len("/v1/stream/"):]
+            self._handle_task_stream(task_id)
         # ── Budget & Alerts ──
         elif path == "/v1/budget":
             self._handle_get_budget()
@@ -390,6 +393,16 @@ class _Handler(BaseHTTPRequestHandler):
             query = urllib.parse.parse_qs(parsed.query)
             file_path = query.get("path", [""])[0]
             self._handle_serve_file(file_path)
+        # ── Dashboard sessions ──
+        elif path == "/v1/sessions":
+            self._handle_list_sessions()
+        elif path.startswith("/v1/sessions/") and path.endswith("/messages"):
+            sid = urllib.parse.unquote(
+                path[len("/v1/sessions/"):-len("/messages")])
+            self._handle_get_session_messages(sid)
+        elif path.startswith("/v1/sessions/"):
+            sid = urllib.parse.unquote(path[len("/v1/sessions/"):])
+            self._handle_get_session(sid)
         else:
             self._json_response(404, {"error": "Not found"})
 
@@ -479,6 +492,13 @@ class _Handler(BaseHTTPRequestHandler):
         elif path.startswith("/v1/webhook/"):
             source = path[len("/v1/webhook/"):]
             self._handle_webhook_inbound(source)
+        # ── Dashboard sessions ──
+        elif path == "/v1/sessions":
+            self._handle_create_session()
+        elif path.startswith("/v1/sessions/") and path.endswith("/message"):
+            sid = urllib.parse.unquote(
+                path[len("/v1/sessions/"):-len("/message")])
+            self._handle_add_session_message(sid)
         # ── A2A JSON-RPC 2.0 endpoint ──
         elif path == "/a2a":
             self._handle_a2a_rpc()
@@ -537,6 +557,10 @@ class _Handler(BaseHTTPRequestHandler):
                 self._handle_update_episode(parts[0], parts[1])
             else:
                 self._json_response(400, {"error": "Expected /v1/memory/episodes/:agent_id/:task_id"})
+        # ── Dashboard sessions ──
+        elif path.startswith("/v1/sessions/"):
+            sid = urllib.parse.unquote(path[len("/v1/sessions/"):])
+            self._handle_update_session(sid)
         else:
             self._json_response(404, {"error": "Not found"})
 
@@ -562,6 +586,10 @@ class _Handler(BaseHTTPRequestHandler):
         elif path.startswith("/v1/skills/"):
             name = path[len("/v1/skills/"):]
             self._handle_delete_skill(name)
+        # ── Dashboard sessions ──
+        elif path.startswith("/v1/sessions/"):
+            sid = urllib.parse.unquote(path[len("/v1/sessions/"):])
+            self._handle_delete_session(sid)
         else:
             self._json_response(404, {"error": "Not found"})
 
@@ -795,6 +823,7 @@ class _Handler(BaseHTTPRequestHandler):
     def _handle_submit_task(self):
         body = self._read_body()
         description = body.get("description", "").strip()
+        session_id = body.get("session_id", "").strip()
         if not description:
             self._json_response(400, {"error": "Missing 'description'"})
             return
@@ -814,13 +843,54 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception as e:
             logger.warning("Failed to archive task history: %s", e)
 
+        # Salvage in-progress streaming results before clear
+        if session_id and old_data:
+            try:
+                store = self._get_dashboard_sessions()
+                for _tid, t in old_data.items():
+                    salvage = t.get("result") or t.get("partial_result", "")
+                    if (salvage.strip()
+                            and t.get("status") in (
+                                "claimed", "review", "critique", "synthesizing")):
+                        store.add_message(session_id, "assistant",
+                                          salvage.strip())
+            except Exception as e:
+                logger.debug("Salvage streaming results failed: %s", e)
+
         board.clear(force=True)
         # NOTE: We no longer destroy .context_bus.json or .mailboxes
         # to preserve cross-round context for session continuity.
         # ContextBus TTL mechanism handles natural expiry of stale entries.
 
+        # Session history injection (same pattern as ChannelManager)
+        full_description = description
+        if session_id:
+            try:
+                store = self._get_dashboard_sessions()
+                store.add_message(session_id, "user", description)
+                history = store.format_history_for_prompt(
+                    session_id, max_turns=10)
+                if history:
+                    full_description = (
+                        f"[source:dashboard]\n\n"
+                        f"{history}\n"
+                        f"---\n\n"
+                        f"## Current Task\n"
+                        f"{description}"
+                    )
+            except Exception as e:
+                logger.warning("Session history injection failed: %s", e)
+
         orch = Orchestrator()
-        task_id = orch.submit(description, required_role="planner")
+        task_id = orch.submit(full_description, required_role="planner")
+
+        # Track task in session
+        if session_id:
+            try:
+                store = self._get_dashboard_sessions()
+                store.update_task(session_id, task_id)
+            except Exception:
+                pass
 
         # Run agents in background thread
         def _run():
@@ -835,9 +905,114 @@ class _Handler(BaseHTTPRequestHandler):
 
         self._json_response(202, {
             "task_id": task_id,
+            "session_id": session_id or None,
             "status": "accepted",
             "message": "Task submitted. Poll GET /v1/task/{id} for results.",
         })
+
+    # ── Dashboard Sessions ─────────────────────────────────────
+
+    _dashboard_sessions = None  # lazy-init module-level singleton
+
+    @classmethod
+    def _get_dashboard_sessions(cls):
+        """Lazy-init the SessionStore for dashboard sessions."""
+        if cls._dashboard_sessions is None:
+            from adapters.channels.session import SessionStore
+            cls._dashboard_sessions = SessionStore()
+        return cls._dashboard_sessions
+
+    def _session_full_id(self, sid: str) -> str:
+        """Ensure session_id has 'dashboard:' prefix."""
+        if not sid.startswith("dashboard:"):
+            return f"dashboard:{sid}"
+        return sid
+
+    def _handle_list_sessions(self):
+        """GET /v1/sessions — list all dashboard sessions."""
+        store = self._get_dashboard_sessions()
+        sessions = store.list_dashboard_sessions()
+        result = []
+        for s in sessions:
+            result.append({
+                "session_id": s.session_id,
+                "title": s.title or "",
+                "message_count": s.message_count,
+                "last_active": s.last_active,
+                "created_at": s.created_at,
+                "pinned": s.pinned,
+            })
+        self._json_response(200, {"sessions": result})
+
+    def _handle_create_session(self):
+        """POST /v1/sessions — create a new dashboard session."""
+        body = self._read_body()
+        title = body.get("title", "").strip() if body else ""
+        store = self._get_dashboard_sessions()
+        session = store.create_dashboard_session(title=title)
+        self._json_response(201, {
+            "session_id": session.session_id,
+            "title": session.title,
+            "created_at": session.created_at,
+        })
+
+    def _handle_get_session(self, sid: str):
+        """GET /v1/sessions/:id — session details + message history."""
+        store = self._get_dashboard_sessions()
+        full_id = self._session_full_id(sid)
+        data = store._read()
+        if full_id not in data:
+            self._json_response(404, {"error": "Session not found"})
+            return
+        s = store._from_dict(data[full_id])
+        messages = store.get_history(full_id, max_turns=50)
+        self._json_response(200, {
+            "session_id": s.session_id,
+            "title": s.title,
+            "message_count": s.message_count,
+            "last_active": s.last_active,
+            "created_at": s.created_at,
+            "pinned": s.pinned,
+            "messages": messages,
+        })
+
+    def _handle_get_session_messages(self, sid: str):
+        """GET /v1/sessions/:id/messages — message history only."""
+        store = self._get_dashboard_sessions()
+        full_id = self._session_full_id(sid)
+        messages = store.get_history(full_id, max_turns=50)
+        self._json_response(200, {"messages": messages})
+
+    def _handle_update_session(self, sid: str):
+        """PUT /v1/sessions/:id — rename or pin."""
+        body = self._read_body()
+        store = self._get_dashboard_sessions()
+        full_id = self._session_full_id(sid)
+        if body.get("title") is not None:
+            store.rename_session(full_id, body["title"])
+        if body.get("pinned") is not None:
+            store.pin_session(full_id, bool(body["pinned"]))
+        self._json_response(200, {"ok": True})
+
+    def _handle_delete_session(self, sid: str):
+        """DELETE /v1/sessions/:id — remove session + history."""
+        store = self._get_dashboard_sessions()
+        full_id = self._session_full_id(sid)
+        store.delete_session(full_id)
+        self._json_response(200, {"ok": True})
+
+    def _handle_add_session_message(self, sid: str):
+        """POST /v1/sessions/:id/message — persist a message."""
+        body = self._read_body()
+        role = body.get("role", "assistant") if body else "assistant"
+        content = (body.get("content", "") if body else "").strip()
+        if not content:
+            self._json_response(400, {"error": "Missing 'content'"})
+            return
+        store = self._get_dashboard_sessions()
+        full_id = self._session_full_id(sid)
+        store.add_message(full_id, role, content)
+        self._json_response(200, {"ok": True})
 
     # ── Dashboard ──
     def _serve_login_page(self, error: str = ""):
@@ -3131,6 +3306,84 @@ class _Handler(BaseHTTPRequestHandler):
 
         return snapshot
 
+    # ── Per-task SSE stream (token-level) ─────────────────────────────────
+
+    def _handle_task_stream(self, task_id: str):
+        """SSE stream for a specific task — pushes token-level chunks.
+
+        Agent writes chunks to .task_streams/{task_id}.stream via lockless
+        append.  This handler polls the file every 150 ms and pushes new
+        chunks as ``event: chunk`` SSE messages.
+
+        Events:
+          chunk  — ``{"c": "text", "seq": N}``
+          done   — task reached terminal state
+          timeout — 30 s with no new data
+        """
+        from core.task_board import TaskBoard
+        import time as _time
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+
+        last_seq = -1
+        idle_cycles = 0
+        max_idle = 200          # 200 × 0.15 s = 30 s max silence
+
+        try:
+            while True:
+                chunks = TaskBoard.read_stream_chunks(
+                    task_id, after_seq=last_seq)
+
+                if chunks:
+                    idle_cycles = 0
+                    for c in chunks:
+                        event_data = json.dumps(
+                            {"c": c["c"], "seq": c["seq"]},
+                            ensure_ascii=False)
+                        self.wfile.write(
+                            f"event: chunk\ndata: {event_data}\n\n"
+                            .encode("utf-8"))
+                        last_seq = max(last_seq, c["seq"])
+                    self.wfile.flush()
+                else:
+                    idle_cycles += 1
+                    # Check if task reached terminal state
+                    if self._task_is_terminal(task_id):
+                        self.wfile.write(b"event: done\ndata: {}\n\n")
+                        self.wfile.flush()
+                        break
+                    if idle_cycles > max_idle:
+                        self.wfile.write(
+                            b"event: timeout\ndata: {}\n\n")
+                        self.wfile.flush()
+                        break
+                    # Keepalive every ~3 s (20 cycles)
+                    if idle_cycles % 20 == 0:
+                        self.wfile.write(b": keepalive\n\n")
+                        self.wfile.flush()
+
+                _time.sleep(0.15)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass  # Client disconnected
+
+    def _task_is_terminal(self, task_id: str) -> bool:
+        """Check if a task reached a terminal state."""
+        try:
+            if os.path.exists(".task_board.json"):
+                with open(".task_board.json") as f:
+                    data = json.load(f)
+                t = data.get(task_id, {})
+                return t.get("status") in (
+                    "completed", "failed", "cancelled")
+        except Exception:
+            pass
+        return False
+
     # ══════════════════════════════════════════════════════════════════════════
     #  MEMORY HANDLERS
     # ══════════════════════════════════════════════════════════════════════════
@@ -3897,9 +4150,17 @@ def run_gateway_cli(port: int = 0, token: str = ""):
     port = port or int(os.environ.get("CLEO_GATEWAY_PORT",
                         os.environ.get("SWARM_GATEWAY_PORT",
                                        str(DEFAULT_PORT))))
-    print(f"  Dashboard: http://127.0.0.1:{port}/")
+    dashboard_url = f"http://127.0.0.1:{port}/"
+    print(f"  Dashboard: {dashboard_url}")
     print(f"  API Base:  http://127.0.0.1:{port}/v1")
     print()
+
+    # Auto-open dashboard in browser
+    import webbrowser
+    try:
+        webbrowser.open(dashboard_url)
+    except Exception:
+        pass  # non-critical — user can open manually
 
     start_gateway(port=port, token=token, daemon=False)
 

@@ -251,9 +251,10 @@ def _execute_job(job: dict) -> tuple[bool, str]:
         elif action == "exec":
             # Run shell command
             import subprocess
+            cmd_timeout = job.get("timeout", DEFAULT_JOB_TIMEOUT)
             result = subprocess.run(
                 payload, shell=True, capture_output=True,
-                text=True, timeout=300)
+                text=True, timeout=cmd_timeout)
             if result.returncode == 0:
                 return True, result.stdout[:500] or "(no output)"
             else:
@@ -312,14 +313,21 @@ def _scheduler_tick():
         prev_thread = _running_jobs.get(jid)
         if prev_thread and prev_thread.is_alive():
             timeout = job.get("timeout", DEFAULT_JOB_TIMEOUT)
-            # Check watchdog — if running longer than timeout, log warning
+            # Check watchdog — if running longer than timeout, force-kill
             started = getattr(prev_thread, "_cron_started", 0)
             elapsed = time.time() - started if started else 0
             if elapsed > timeout:
                 logger.warning(
                     "Cron job %s (%s) exceeded timeout (%.0fs > %ds), "
-                    "skipping new run",
+                    "force-terminating stale thread",
                     jid, job["name"], elapsed, timeout)
+                # Remove from running jobs so next tick can start fresh
+                _running_jobs.pop(jid, None)
+                job["last_error"] = (
+                    f"terminated: exceeded {timeout}s timeout "
+                    f"(ran {elapsed:.0f}s)")
+                changed = True
+                # Don't re-execute this tick — let next tick handle it
             else:
                 logger.debug("Cron job %s still running (%.0fs), skipping",
                              jid, elapsed)

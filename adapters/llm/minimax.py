@@ -293,7 +293,14 @@ class MinimaxAdapter:
                     content = message.get("content") or ""
                     tc_text = _tool_calls_to_text(tool_calls)
                     return f"{content}\n{tc_text}" if content else tc_text
-                return message["content"]
+                content = message.get("content") or ""
+                if not content.strip():
+                    logger.warning("[minimax] empty content in response "
+                                   "(possible content filter)")
+                    raise RuntimeError(
+                        "Minimax returned empty content "
+                        "(content filter or API issue)")
+                return content
         except httpx.HTTPStatusError as e:
             code = e.response.status_code
             body = ""
@@ -446,7 +453,13 @@ class MinimaxAdapter:
                     tc_text = _tool_calls_to_text(tool_calls)
                     content = f"{content}\n{tc_text}" if content else tc_text
                 else:
-                    content = message["content"]
+                    content = message.get("content") or ""
+                    if not content.strip():
+                        logger.warning("[minimax] empty content in "
+                                       "chat_with_usage (possible content filter)")
+                        raise RuntimeError(
+                            "Minimax returned empty content "
+                            "(content filter or API issue)")
                 usage = data.get("usage", {})
                 return content, {
                     "prompt_tokens":     usage.get("prompt_tokens", 0),

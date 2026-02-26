@@ -119,9 +119,14 @@ class EpisodicMemory:
     Integrates with the existing HybridMemory for vector+keyword retrieval.
     """
 
-    def __init__(self, agent_id: str, base_dir: str = "memory/agents"):
+    _DEFAULT_BASE = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__)))),  # → project root
+        "memory", "agents")
+
+    def __init__(self, agent_id: str, base_dir: str = ""):
         self.agent_id = agent_id
-        self.base = os.path.join(base_dir, agent_id)
+        self.base = os.path.join(base_dir or self._DEFAULT_BASE, agent_id)
         self.episodes_dir = os.path.join(self.base, "episodes")
         self.daily_dir = os.path.join(self.base, "daily")
         self.cases_dir = os.path.join(self.base, "cases")
@@ -144,6 +149,28 @@ class EpisodicMemory:
             json.dump(episode, f, ensure_ascii=False, indent=2)
         logger.debug("[%s] saved episode %s", self.agent_id, task_id)
         return path
+
+    def update_episode_score(self, task_id: str, score: int,
+                             date: Optional[str] = None) -> bool:
+        """Retroactively set/overwrite the score field of an episode."""
+        dates_to_check = [date] if date else sorted(
+            self._list_dates(), reverse=True)
+        for d in dates_to_check:
+            path = os.path.join(self.episodes_dir, d, f"{task_id}.json")
+            if os.path.exists(path):
+                try:
+                    with open(path) as f:
+                        ep = json.load(f)
+                    ep["score"] = score
+                    with open(path, "w") as f:
+                        json.dump(ep, f, ensure_ascii=False, indent=2)
+                    logger.debug("[%s] backfilled score=%s for %s",
+                                 self.agent_id, score, task_id)
+                    return True
+                except (json.JSONDecodeError, OSError) as e:
+                    logger.debug("[%s] update_episode_score failed: %s",
+                                 self.agent_id, e)
+        return False
 
     def load_episode(self, task_id: str, date: Optional[str] = None,
                      level: int = 1) -> Optional[dict]:
@@ -668,8 +695,15 @@ class EpisodicMemory:
                     continue
 
         # Sort by use_count descending, take top entries
+        # V0.03+: Filter out cases whose problem is conversation history
+        # metadata (injected by channel managers), not actual task content
+        _HISTORY_MARKERS = ("对话历史", "Conversation History",
+                            "[source:telegram]", "[source:dashboard]")
         cases.sort(key=lambda c: c.get("use_count", 0), reverse=True)
-        p0_cases = [c for c in cases if c.get("use_count", 0) >= 1][:10]
+        p0_cases = [c for c in cases
+                    if c.get("use_count", 0) >= 1
+                    and not any(m in c.get("problem", "")
+                                for m in _HISTORY_MARKERS)][:10]
         if p0_cases:
             for c in p0_cases:
                 problem = c.get("problem", "")[:150]

@@ -1,6 +1,6 @@
 # ⬡ Cleo
 
-![version](https://img.shields.io/badge/version-0.03-blue)
+![version](https://img.shields.io/badge/version-0.04-blue)
 ![python](https://img.shields.io/badge/python-3.11%2B-green)
 ![license](https://img.shields.io/badge/license-MIT-grey)
 
@@ -97,12 +97,41 @@ Role-based routing via `_ROLE_TO_AGENTS` mapping. Timeout recovery: claimed > 18
 | **Episodic Memory** | `adapters/memory/episodic.py` | 3-layer progressive: L0 atomic (~100 tok) → L1 overview (~500 tok) → L2 full detail |
 | **Knowledge Base** | `adapters/memory/knowledge_base.py` | Shared Zettelkasten-style notes + insights |
 | **Context Bus** | `core/context_bus.py` | 4-layer KV store (TASK/SESSION/SHORT/LONG) with TTL |
+| **Memory Consolidation** | `adapters/memory/consolidator.py` | 3-phase pipeline: cluster old episodes (>3d) → compress → promote to KB |
+
+### Episode Scoring
+
+Two-stage quality scoring for every task:
+
+1. **Baseline** — Agent self-assigns at episode creation (`success=8, partial=5, other=2`)
+2. **Critique backfill** — Alic's score retroactively written to evaluated agent's episode via `update_episode_score()`
+
+### SSE Streaming (`core/task_board.py` + `core/gateway.py`)
+
+Real-time token streaming for chat responses:
+
+- Per-task `.stream` files with lockless append + cursor-based reads
+- `GET /v1/stream/:task_id` — Server-Sent Events endpoint
+- Auto-cleanup on task complete/fail/cancel
+
+### Dashboard (`core/dashboard.html`)
+
+Web UI at `http://127.0.0.1:19789`:
+
+- **Session sidebar** — multi-session conversation management
+- **KB grid** — horizontal 2-column layout with scrollable cards
+- **Tab badges** — live count indicators on Episodes/Cases/KB tabs
+- **Episode table** — score + timestamp columns
+- **Daily log** — auto-filters tool call artifacts
+- **SSE streaming** — real-time token-by-token chat display
 
 ### Tools (37 tools × 10 groups)
 
 `web` · `fs` · `memory` · `task` · `automation` · `skill` · `browser` · `media` · `messaging` · `a2a`
 
 Access control: profiles (`minimal` / `coding` / `full`) + per-agent allow/deny lists. Audit log at `.logs/tool_audit.log`.
+
+`generate_doc` supports 8 output formats: PDF, DOCX, XLSX, PPTX, CSV, TXT, MD, HTML.
 
 ### Channels
 
@@ -140,6 +169,9 @@ Gateway on port **19789** (+ WebSocket on **19790**). Auth: `Authorization: Bear
 | GET | `/v1/memory/*` | Memory status / episodes / cases |
 | GET | `/v1/chain/*` | Blockchain status / balance |
 | POST | `/v1/cron` | Create scheduled job |
+| GET | `/v1/stream/:id` | SSE token stream |
+| GET/POST | `/v1/sessions` | Dashboard sessions |
+| GET/PUT/DELETE | `/v1/sessions/:id` | Session CRUD |
 | GET | `/health` | Gateway health |
 
 30+ endpoints total — see [ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full list.
@@ -200,12 +232,20 @@ cleo-dev/
 │   └── doctor.py              # Health check + auto-repair
 ├── adapters/
 │   ├── llm/minimax.py         # MiniMax SSE streaming + truncation recovery
-│   ├── memory/                # hybrid (BM25+ChromaDB), episodic, embedding
-│   └── channels/              # manager, telegram, discord, feishu, slack
-├── reputation/scorer.py       # 5-dim EMA scoring
+│   ├── memory/                # hybrid, episodic, embedding, consolidator
+│   ├── channels/              # manager, telegram, discord, feishu, slack
+│   └── memo/                  # Memo Protocol integration
+├── reputation/
+│   ├── scorer.py              # 5-dim EMA scoring
+│   └── textgrad.py            # TextGrad critique → skill patches
 ├── skills/                    # 56+ hot-reload markdown skills
 ├── tests/                     # 399 tests
-└── docs/ARCHITECTURE.md       # Full technical architecture
+├── cli/memo_cmd.py            # Memo CLI
+└── docs/                      # Architecture + product docs
+    ├── ARCHITECTURE.md
+    ├── Cleo_V0.01_Product_Logic.md
+    ├── Cleo_V0.01_Product_Narrative.md
+    └── Cleo_V0.01_Technical_Architecture.md
 ```
 
 ---
@@ -216,13 +256,16 @@ cleo-dev/
 - One LLM API key (MiniMax, OpenAI, or local Ollama)
 
 **Core:** `pyyaml` `filelock` `requests` `chromadb` `websockets`
-**Optional:** `python-telegram-bot` · `discord.py` · `web3` · `rich`
+**Optional:** `python-telegram-bot` · `discord.py` · `web3` · `rich` · `python-pptx` · `slack-sdk`
 
 ---
 
 ## Docs
 
 - **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** — Full technical architecture with code details
+- **[Product Logic](docs/Cleo_V0.01_Product_Logic.md)** — Product design and decision logic
+- **[Product Narrative](docs/Cleo_V0.01_Product_Narrative.md)** — Product vision and narrative
+- **[Technical Architecture V0.01](docs/Cleo_V0.01_Technical_Architecture.md)** — Original technical architecture
 
 ---
 
