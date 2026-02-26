@@ -138,6 +138,17 @@ def extract_insight(task_description: str, result: str,
         except (json.JSONDecodeError, ValueError):
             pass
 
+    # Fallback: for substantial results, use the first meaningful line
+    if len(result.strip()) > 300:
+        for line in result.strip().split('\n'):
+            line = line.strip()
+            # Skip markdown headers, code fences, short lines
+            if (line and len(line) > 30
+                    and not line.startswith('#')
+                    and not line.startswith('```')
+                    and not line.startswith('|')):
+                return f"{line[:150]} (task: {task_description[:80]})"
+
     return None
 
 

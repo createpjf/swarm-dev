@@ -111,6 +111,23 @@ a{color:var(--accent);text-decoration:none}
   gap:8px;
 }
 .sidebar-logo span{color:var(--accent)}
+/* ── Session Sidebar ── */
+.session-section{border-bottom:1px solid rgba(0,0,0,0.06);padding:4px 0 6px;max-height:260px;display:flex;flex-direction:column}
+.session-header{display:flex;align-items:center;justify-content:space-between;padding:4px 14px 4px}
+.session-header-title{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--fg3)}
+.session-new-btn{background:none;border:1px solid rgba(0,0,0,0.1);border-radius:6px;padding:3px 6px;cursor:pointer;color:var(--fg2);display:flex;align-items:center;transition:all .15s}
+.session-new-btn:hover{background:rgba(0,122,255,0.08);border-color:var(--accent);color:var(--accent)}
+.session-list{overflow-y:auto;flex:1;padding:0 6px}
+.session-item{padding:7px 10px;border-radius:8px;cursor:pointer;font-size:12px;color:var(--fg2);display:flex;align-items:center;gap:6px;transition:background .15s;position:relative}
+.session-item:hover{background:rgba(0,0,0,0.04)}
+.session-item.active{background:rgba(0,122,255,0.08);color:var(--accent);font-weight:600}
+.session-title{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.session-time{font-size:10px;color:var(--fg3);flex-shrink:0}
+.session-actions{display:none;gap:4px;flex-shrink:0}
+.session-item:hover .session-actions{display:flex}
+.session-item:hover .session-time{display:none}
+.session-action-btn{background:none;border:none;cursor:pointer;padding:2px;font-size:11px;color:var(--fg3);border-radius:4px}
+.session-action-btn:hover{background:rgba(0,0,0,0.08);color:var(--fg)}
 .status-dot{width:8px;height:8px;border-radius:50%;background:var(--fg3);display:inline-block}
 .status-dot.online{background:var(--green);box-shadow:0 0 8px var(--green),0 0 16px rgba(52,199,89,0.25)}
 .status-dot.offline{background:var(--red);box-shadow:0 0 8px var(--red),0 0 16px rgba(255,59,48,0.20)}
@@ -499,6 +516,13 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 }
 .modal-tab-content{display:none}
 .modal-tab-content.active{display:block}
+.tab-badge{
+  display:inline-block;font-size:10px;font-weight:600;
+  background:var(--accent);color:#fff;border-radius:8px;
+  padding:1px 6px;margin-left:4px;min-width:16px;text-align:center;
+  font-family:var(--mono);vertical-align:middle;line-height:1.4;
+}
+.tab-badge-secondary{background:var(--bg4);color:var(--fg2)}
 
 /* ── Overview tab ── */
 .overview-section{margin-bottom:14px}
@@ -826,6 +850,102 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 /* ── Empty State ──────────────────────────────────────────────── */
 .empty{text-align:center;color:var(--fg3);padding:30px 0;font-size:13px}
 
+/* ── Knowledge Base Notes ─────────────────────────────────────── */
+.kb-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+.kb-note{
+  background:rgba(255,255,255,0.55);
+  border:1px solid rgba(0,0,0,0.06);
+  border-radius:14px;padding:16px 18px;
+  transition:all .2s ease;position:relative;overflow:hidden;
+}
+.kb-note:hover{
+  border-color:rgba(0,0,0,0.10);
+  box-shadow:0 4px 16px rgba(0,0,0,0.06);
+  transform:translateY(-1px);
+}
+.kb-note-head{display:flex;align-items:flex-start;gap:10px;margin-bottom:10px}
+.kb-note-icon{
+  width:32px;height:32px;border-radius:8px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:15px;flex-shrink:0;
+  background:linear-gradient(135deg,var(--accent),#7c3aed);
+  color:#fff;
+}
+.kb-note-title{font-size:14px;font-weight:600;color:var(--fg1);line-height:1.35;flex:1}
+.kb-note-tags{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px}
+.kb-tag{
+  padding:2px 8px;border-radius:6px;font-size:10px;font-weight:500;
+  letter-spacing:.3px;
+}
+.kb-tag-blue{background:rgba(59,130,246,0.12);color:#3b82f6}
+.kb-tag-purple{background:rgba(139,92,246,0.12);color:#8b5cf6}
+.kb-tag-green{background:rgba(34,197,94,0.12);color:#16a34a}
+.kb-tag-orange{background:rgba(249,115,22,0.12);color:#ea580c}
+.kb-tag-pink{background:rgba(236,72,153,0.12);color:#db2777}
+.kb-tag-cyan{background:rgba(6,182,212,0.12);color:#0891b2}
+.kb-note-body{
+  font-size:12.5px;line-height:1.65;color:var(--fg2);
+  max-height:200px;overflow-y:auto;position:relative;
+  scrollbar-width:thin;scrollbar-color:var(--bg4) transparent;
+}
+.kb-note-body::-webkit-scrollbar{width:5px}
+.kb-note-body::-webkit-scrollbar-track{background:transparent}
+.kb-note-body::-webkit-scrollbar-thumb{background:var(--bg4);border-radius:3px}
+.kb-note-body h3{font-size:13px;font-weight:600;color:var(--fg1);margin:10px 0 4px}
+.kb-note-body h4{font-size:12px;font-weight:600;color:var(--fg2);margin:8px 0 3px}
+.kb-note-body pre{
+  background:var(--bg3);border-radius:8px;padding:10px 12px;
+  font-size:11px;font-family:var(--mono);overflow-x:auto;
+  margin:6px 0;line-height:1.5;
+}
+.kb-note-body code{
+  background:var(--bg3);padding:1px 5px;border-radius:4px;
+  font-size:11px;font-family:var(--mono);
+}
+.kb-note-body ul,.kb-note-body ol{margin:4px 0;padding-left:18px}
+.kb-note-body li{margin:2px 0}
+.kb-note-body p{margin:4px 0}
+.kb-note-body strong{color:var(--fg1)}
+.kb-note-body hr{border:none;border-top:1px solid var(--bg4);margin:10px 0}
+.kb-note-footer{
+  display:flex;justify-content:space-between;align-items:center;
+  margin-top:10px;padding-top:8px;border-top:1px solid rgba(0,0,0,0.05);
+  font-size:10px;color:var(--fg3);
+}
+.kb-note-footer .contributor{color:var(--accent);font-weight:500}
+.kb-density{
+  padding:1px 6px;border-radius:4px;font-size:9px;
+  font-weight:600;letter-spacing:.3px;text-transform:uppercase;
+}
+.kb-density-high{background:rgba(239,68,68,0.10);color:#ef4444}
+.kb-density-normal{background:rgba(59,130,246,0.10);color:#3b82f6}
+.kb-density-low{background:rgba(34,197,94,0.10);color:#22c55e}
+
+/* ── Daily Log Content ─────────────────────────────────────────── */
+.daily-log-content{font-size:13px;line-height:1.7;color:var(--fg2);max-height:500px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--bg4) transparent}
+.daily-log-content::-webkit-scrollbar{width:5px}
+.daily-log-content::-webkit-scrollbar-track{background:transparent}
+.daily-log-content::-webkit-scrollbar-thumb{background:var(--bg4);border-radius:3px}
+.daily-log-content h3{font-size:14px;font-weight:600;color:var(--fg1);margin:12px 0 4px}
+.daily-log-content h4{font-size:12.5px;font-weight:600;color:var(--fg2);margin:8px 0 3px}
+.daily-log-content p{margin:4px 0}
+.daily-log-content strong{color:var(--fg1)}
+.daily-log-content hr{border:none;border-top:1px solid var(--bg4);margin:10px 0}
+.daily-log-content pre{background:var(--bg3);border-radius:8px;padding:10px 12px;font-size:11px;font-family:var(--mono);overflow-x:auto;margin:6px 0;line-height:1.5}
+.daily-log-content code{background:var(--bg3);padding:1px 5px;border-radius:4px;font-size:11px;font-family:var(--mono)}
+.daily-log-content ul,.daily-log-content ol{margin:4px 0;padding-left:18px}
+.daily-log-content li{margin:2px 0}
+
+/* Dark mode overrides */
+[data-theme="dark"] .kb-note{background:rgba(255,255,255,0.04);border-color:rgba(255,255,255,0.06)}
+[data-theme="dark"] .kb-note:hover{border-color:rgba(255,255,255,0.12);box-shadow:0 4px 16px rgba(0,0,0,0.3)}
+[data-theme="dark"] .kb-note-body pre{background:rgba(0,0,0,0.3)}
+[data-theme="dark"] .kb-note-body code{background:rgba(0,0,0,0.25)}
+[data-theme="dark"] .kb-note-body::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.15)}
+[data-theme="dark"] .daily-log-content pre{background:rgba(0,0,0,0.3)}
+[data-theme="dark"] .daily-log-content code{background:rgba(0,0,0,0.25)}
+[data-theme="dark"] .daily-log-content::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.15)}
+
 /* ── Toast ────────────────────────────────────────────────────── */
 .toast{
   position:fixed;bottom:24px;right:24px;
@@ -869,7 +989,7 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .dialog .actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
 
 /* ── Overview: Split Layout (top orchestration + bottom chat) ── */
-#panel-overview.active{display:flex!important;flex-direction:column;height:calc(100vh - 44px);gap:0}
+#panel-overview.active{display:flex!important;flex-direction:column;height:calc(100vh - 44px);gap:0;position:relative}
 
 /* ── Overview: Header Bar (statuses left, agents right) ────── */
 .ov-header{
@@ -1267,6 +1387,21 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 .stream-meta .stream-agent-status{color:var(--cyan);font-weight:600;display:flex;align-items:center;gap:4px}
 .stream-meta .stream-agent-status::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--cyan);animation:statusPulse 1.5s ease-in-out infinite}
 @keyframes statusPulse{0%,100%{opacity:1}50%{opacity:.3}}
+/* ── Artifacts sidebar ── */
+.artifacts-sidebar{position:absolute;right:0;top:0;bottom:0;width:400px;max-width:50%;background:var(--bg);border-left:1px solid var(--border);display:flex;flex-direction:column;z-index:50;box-shadow:-4px 0 20px rgba(0,0,0,0.15)}
+.artifacts-header{padding:12px 16px;font-size:14px;font-weight:700;color:var(--fg);border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.artifacts-close{background:none;border:none;color:var(--fg3);cursor:pointer;font-size:20px;padding:0 4px;line-height:1}
+.artifacts-close:hover{color:var(--fg)}
+.artifacts-list{flex:1;overflow-y:auto;padding:12px}
+.artifact-card{background:var(--bg1);border:1px solid var(--border);border-radius:10px;margin-bottom:12px;overflow:hidden}
+.artifact-card-header{padding:10px 14px;font-size:12px;font-weight:600;color:var(--fg2);display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);cursor:pointer}
+.artifact-card-header:hover{background:rgba(0,0,0,0.03)}
+.artifact-card-body{padding:12px 14px;font-size:12px;line-height:1.6}
+.artifact-card-body pre{margin:0;padding:10px;background:var(--bg2);border-radius:6px;overflow-x:auto;font-size:11px;line-height:1.5}
+.artifact-card-body code{font-family:var(--mono)}
+/* ── Think toggle ── */
+.think-toggle{cursor:pointer;text-decoration:underline;text-decoration-style:dotted}
+.think-toggle:hover{color:var(--accent)}
 .chat-bubble.assistant-bubble .asst-body{word-break:break-word;color:var(--fg)}
 .chat-bubble.assistant-bubble .asst-body p{margin:6px 0}
 .chat-bubble.assistant-bubble .asst-body h1,.chat-bubble.assistant-bubble .asst-body h2,.chat-bubble.assistant-bubble .asst-body h3,.chat-bubble.assistant-bubble .asst-body h4,.chat-bubble.assistant-bubble .asst-body h5,.chat-bubble.assistant-bubble .asst-body h6{color:var(--fg);margin:16px 0 8px;font-weight:700}
@@ -1516,6 +1651,7 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
 /* ── Responsive ───────────────────────────────────────────────── */
 @media(max-width:800px){
   .sidebar{width:56px;min-width:56px}
+  .session-section{display:none}
   .nav-section-title,.nav-item span:not(.icon),.sidebar-footer,.sidebar-logo span,.sidebar-logo div:not(:first-child){display:none}
   .nav-item{justify-content:center;padding:10px 0}
   .nav-item .icon{margin:0}
@@ -1530,6 +1666,7 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
   .chat-bubble.assistant-bubble .asst-body table{font-size:11px}
   .chat-bubble.assistant-bubble .asst-body th,.chat-bubble.assistant-bubble .asst-body td{padding:4px 6px}
   .chat-msg{max-width:92%}
+  .kb-grid{grid-template-columns:1fr}
 }
 
 /* ── Responsive: MacBook 14" (~1440-1512px) ──────────────────── */
@@ -1571,6 +1708,23 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
   <div class="sidebar-logo">
     ⬡ <span>Cleo</span>
     <span class="status-dot" id="statusDot"></span>
+  </div>
+
+  <!-- ═══ Session List ═══ -->
+  <div class="session-section">
+    <div class="session-header">
+      <span class="session-header-title">Sessions</span>
+      <button class="session-new-btn" onclick="createNewSession()" title="New Chat">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="12" y1="5" x2="12" y2="19"/>
+          <line x1="5" y1="12" x2="19" y2="12"/>
+        </svg>
+      </button>
+    </div>
+    <div class="session-list" id="sessionList">
+      <div style="padding:8px 10px;color:var(--fg3);font-size:11px">Loading…</div>
+    </div>
   </div>
 
   <div class="nav-section">
@@ -1699,6 +1853,15 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
         <button class="btn chat-send" id="chatSend" onclick="chatSubmit()">Send ↑</button>
       </div>
     </div>
+  </div>
+
+  <!-- ═══ ARTIFACTS SIDEBAR ═══ -->
+  <div id="artifactsSidebar" class="artifacts-sidebar" style="display:none">
+    <div class="artifacts-header">
+      <span>📎 Artifacts</span>
+      <button onclick="toggleArtifacts()" class="artifacts-close" title="Close">&times;</button>
+    </div>
+    <div id="artifactsList" class="artifacts-list"></div>
   </div>
 </div>
 
@@ -1944,20 +2107,12 @@ textarea.mono{font-family:var(--mono);font-size:12px;line-height:1.6}
     </div>
   </div>
 
-  <!-- Stat Cards -->
-  <div class="stat-grid" id="memStats" style="margin-bottom:18px">
-    <div class="stat-card"><div class="stat-value" id="memEpisodes">—</div><div class="stat-label">Episodes</div></div>
-    <div class="stat-card"><div class="stat-value" id="memCases">—</div><div class="stat-label">Cases</div></div>
-    <div class="stat-card"><div class="stat-value" id="memPatterns">—</div><div class="stat-label">Patterns</div></div>
-    <div class="stat-card"><div class="stat-value" id="memNotes">—</div><div class="stat-label">KB Notes</div></div>
-  </div>
-
-  <!-- Sub-tabs -->
+  <!-- Sub-tabs with inline stat badges -->
   <div class="modal-tabs" id="memTabs" style="margin-bottom:16px">
-    <button class="modal-tab active" data-memtab="episodes" onclick="switchMemoryTab('episodes')">Episodes</button>
-    <button class="modal-tab" data-memtab="cases" onclick="switchMemoryTab('cases')">Cases</button>
+    <button class="modal-tab active" data-memtab="episodes" onclick="switchMemoryTab('episodes')">Episodes <span class="tab-badge" id="memEpisodes">—</span></button>
+    <button class="modal-tab" data-memtab="cases" onclick="switchMemoryTab('cases')">Cases <span class="tab-badge" id="memCases">—</span></button>
     <button class="modal-tab" data-memtab="daily" onclick="switchMemoryTab('daily')">Daily Log</button>
-    <button class="modal-tab" data-memtab="kb" onclick="switchMemoryTab('kb')">Knowledge Base</button>
+    <button class="modal-tab" data-memtab="kb" onclick="switchMemoryTab('kb')">KB <span class="tab-badge" id="memNotes">—</span> <span class="tab-badge tab-badge-secondary" id="memPatterns">—</span></button>
   </div>
 
   <!-- Data Area (content switches per tab) -->
@@ -2201,6 +2356,10 @@ let chatPrevSnapshot = {};      // previous polling snapshot for diff
 let chatTaskMap = {};           // taskId → Set of generated message types (dedup)
 let chatMsgCounter = 0;        // unique msg id counter
 let dashboardUser = 'createpjf';  // default submitter name for dashboard tasks
+
+// ── Session state ──
+let currentSessionId = null;
+let dashboardSessions = [];
 
 // ══════════════════════════════════════════════════════════════════
 //  AUTH & API HELPERS
@@ -2795,6 +2954,8 @@ function stripLlmTags(text) {
   text = text.replace(/<tool_result>[\s\S]*?(<\/tool_result>|$)/g, '');
   // Strip Minimax-specific tool call XML (complete or streaming)
   text = text.replace(/<minimax:tool_call>[\s\S]*?(<\/minimax:tool_call>|$)/g, '');
+  // Strip <artifact>...</artifact> blocks (routed to sidebar)
+  text = text.replace(/<artifact(?:\s[^>]*)?>[\s\S]*?(<\/artifact>|$)/g, '');
   // Strip generic XML tool patterns: <invoke>, <parameter>, <tool_use>
   text = text.replace(/<invoke[\s\S]*?(<\/invoke>|$)/g, '');
   text = text.replace(/<parameter[\s\S]*?(<\/parameter>|$)/g, '');
@@ -3312,6 +3473,17 @@ async function chatSubmit() {
     return;
   }
 
+  // ── Auto-create session if none selected ──
+  if (!currentSessionId) {
+    const autoTitle = desc.length > 50 ? desc.substring(0, 47) + '…' : desc;
+    const ns = await apiPost('/v1/sessions', {title: autoTitle});
+    if (ns && ns.session_id) {
+      currentSessionId = ns.session_id;
+      localStorage.setItem('cleo_current_session', currentSessionId);
+      loadSessions();
+    }
+  }
+
   // ── Normal mode ──
   let taskDesc = desc;
   if (files.length) {
@@ -3325,11 +3497,15 @@ async function chatSubmit() {
     taskDesc += '\n\n[' + images.length + ' image(s) attached]';
   }
 
-  const result = await apiPost('/v1/task', {description: taskDesc});
+  const payload = {description: taskDesc};
+  if (currentSessionId) payload.session_id = currentSessionId;
+  const result = await apiPost('/v1/task', payload);
   if (result && result.task_id) {
     // Task creation goes to TOP dispatch
     addDispatch('📤', 'system', 'Task Submitted: ' + result.task_id.slice(0,8) + '…', {taskId: result.task_id});
     chatTaskMap[result.task_id] = new Set(['created']);
+    // Start SSE token-level streaming for this task
+    startTaskStream(result.task_id);
   } else {
     addChatMsg('system', '✗ Failed to submit task');
     renderChat();
@@ -3337,6 +3513,134 @@ async function chatSubmit() {
   renderDispatch();
   btn.disabled = false;
   setTimeout(pollChatUpdates, 500);
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  DASHBOARD SESSIONS
+// ══════════════════════════════════════════════════════════════════
+
+async function loadSessions() {
+  const data = await api('/v1/sessions');
+  if (!data || !data.sessions) return;
+  dashboardSessions = data.sessions;
+  renderSessionList();
+}
+
+function renderSessionList() {
+  const container = document.getElementById('sessionList');
+  if (!container) return;
+  if (!dashboardSessions.length) {
+    container.innerHTML = '<div style="padding:8px 10px;color:var(--fg3);font-size:11px">No sessions yet</div>';
+    return;
+  }
+  const sorted = [...dashboardSessions].sort((a, b) => {
+    if (a.pinned !== b.pinned) return b.pinned ? 1 : -1;
+    return b.last_active - a.last_active;
+  });
+  container.innerHTML = sorted.map(s => {
+    const isActive = s.session_id === currentSessionId;
+    const timeAgo = fmtTimeAgo(s.last_active);
+    const title = escHtml(s.title || 'New Chat');
+    const sid = escHtml(s.session_id);
+    return '<div class="session-item' + (isActive ? ' active' : '') + '" '
+      + 'onclick="switchSession(\'' + sid + '\')" '
+      + 'data-session-id="' + sid + '">'
+      + '<span class="session-title">' + (s.pinned ? '📌 ' : '') + title + '</span>'
+      + '<span class="session-time">' + timeAgo + '</span>'
+      + '<span class="session-actions">'
+      + '<button class="session-action-btn" onclick="event.stopPropagation();renameSession(\'' + sid + '\')" title="Rename">✏️</button>'
+      + '<button class="session-action-btn" onclick="event.stopPropagation();deleteSession(\'' + sid + '\')" title="Delete">🗑</button>'
+      + '</span></div>';
+  }).join('');
+}
+
+async function createNewSession() {
+  const data = await apiPost('/v1/sessions', {title: ''});
+  if (!data || !data.session_id) return;
+  currentSessionId = data.session_id;
+  localStorage.setItem('cleo_current_session', currentSessionId);
+  resetChatState();
+  await loadSessions();
+  switchPanel('overview');
+}
+
+async function switchSession(sessionId) {
+  if (sessionId === currentSessionId) return;
+  currentSessionId = sessionId;
+  localStorage.setItem('cleo_current_session', sessionId);
+
+  // Load session messages from backend
+  const data = await api('/v1/sessions/' + encodeURIComponent(sessionId));
+  if (!data) return;
+
+  resetChatState();
+  if (data.messages && data.messages.length) {
+    for (const msg of data.messages) {
+      addChatMsg(msg.role === 'user' ? 'user' : 'assistant', msg.content, {
+        ts: msg.ts ? msg.ts * 1000 : Date.now(),
+        agent: msg.role === 'assistant' ? 'cleo' : undefined
+      });
+    }
+  }
+  renderChat();
+  renderSessionList();
+  switchPanel('overview');
+}
+
+function resetChatState() {
+  stopAllTaskStreams();
+  clearArtifacts();
+  chatMsgs = [];
+  chatPrevSnapshot = {};
+  chatTaskMap = {};
+  chatMsgCounter = 0;
+  dispatchEntries = [];
+  dispatchLastIdx = 0;
+  const chatEl = document.getElementById('chatMessages');
+  if (chatEl) {
+    chatEl.innerHTML = '<div class="chat-welcome"><div class="chat-welcome-icon">⬡</div>'
+      + '<div class="chat-welcome-text">What can I help you with?</div>'
+      + '<div class="chat-welcome-sub">Your task will be planned, executed, and reviewed by the Cleo agent team</div></div>';
+  }
+  const dispEl = document.getElementById('dispatchLog');
+  if (dispEl) dispEl.innerHTML = '';
+}
+
+async function renameSession(sessionId) {
+  const current = dashboardSessions.find(s => s.session_id === sessionId);
+  const newTitle = prompt('Rename session:', current?.title || 'New Chat');
+  if (newTitle === null) return;
+  await apiPut('/v1/sessions/' + encodeURIComponent(sessionId), {title: newTitle});
+  await loadSessions();
+}
+
+async function deleteSession(sessionId) {
+  if (!confirm('Delete this session?')) return;
+  await apiDelete('/v1/sessions/' + encodeURIComponent(sessionId));
+  if (currentSessionId === sessionId) {
+    currentSessionId = null;
+    localStorage.removeItem('cleo_current_session');
+    resetChatState();
+  }
+  await loadSessions();
+}
+
+function fmtTimeAgo(ts) {
+  if (!ts) return '';
+  const diff = (Date.now() / 1000) - ts;
+  if (diff < 60) return 'now';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h';
+  if (diff < 604800) return Math.floor(diff / 86400) + 'd';
+  return new Date(ts * 1000).toLocaleDateString();
+}
+
+// Save assistant message to session when task completes
+function persistAssistantMessage(content) {
+  if (!currentSessionId || !content) return;
+  apiPost('/v1/sessions/' + encodeURIComponent(currentSessionId) + '/message', {
+    role: 'assistant', content: content
+  });
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -3437,6 +3741,71 @@ function renderLiveStatus() {
 }
 
 // ══════════════════════════════════════════════════════════════════
+//  SSE TOKEN-LEVEL STREAMING (EventSource per task)
+// ══════════════════════════════════════════════════════════════════
+
+const _taskStreams = {};       // task_id → EventSource
+const _taskStreamText = {};    // task_id → accumulated text
+
+function startTaskStream(taskId) {
+  if (_taskStreams[taskId]) return;
+  const url = API + '/v1/stream/' + taskId
+    + (TOKEN ? '?token=' + encodeURIComponent(TOKEN) : '');
+  const es = new EventSource(url);
+  _taskStreamText[taskId] = '';
+
+  es.addEventListener('chunk', function(e) {
+    try {
+      const data = JSON.parse(e.data);
+      _taskStreamText[taskId] += data.c;
+      // Determine agent for this task from cached allTasks
+      const agent = (allTasks[taskId] && allTasks[taskId].agent_id) || 'system';
+      updateStreamingBubble(taskId, agent, _taskStreamText[taskId]);
+    } catch(err) { /* skip malformed chunk */ }
+  });
+
+  es.addEventListener('done', function() {
+    es.close();
+    delete _taskStreams[taskId];
+    delete _taskStreamText[taskId];
+  });
+
+  es.addEventListener('timeout', function() {
+    es.close();
+    delete _taskStreams[taskId];
+    delete _taskStreamText[taskId];
+  });
+
+  es.onerror = function() {
+    es.close();
+    delete _taskStreams[taskId];
+    // Reconnect after 2 s if task is still active
+    setTimeout(function() {
+      if (!_taskStreams[taskId] && allTasks[taskId]
+          && !['completed','failed','cancelled'].includes(allTasks[taskId].status)) {
+        startTaskStream(taskId);
+      }
+    }, 2000);
+  };
+
+  _taskStreams[taskId] = es;
+}
+
+function stopTaskStream(taskId) {
+  if (_taskStreams[taskId]) {
+    _taskStreams[taskId].close();
+    delete _taskStreams[taskId];
+  }
+  delete _taskStreamText[taskId];
+}
+
+function stopAllTaskStreams() {
+  for (const tid of Object.keys(_taskStreams)) {
+    stopTaskStream(tid);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
 //  STREAMING — live partial results in ChatBox
 // ══════════════════════════════════════════════════════════════════
 
@@ -3493,7 +3862,8 @@ function _parseStreamSteps(partial) {
     for (const t of thinkComplete) {
       const content = t.replace(/<\/?think>/g, '').trim();
       const preview = content.length > 80 ? content.slice(0, 80) + '…' : content;
-      steps.push({type: 'think', status: 'done', label: 'Thought', preview});
+      steps.push({type: 'think', status: 'done', label: 'Thought', preview,
+        fullContent: content});
     }
   }
 
@@ -3537,7 +3907,41 @@ function _parseStreamSteps(partial) {
     const toolName = nameMatch ? titleCase(nameMatch[1].replace(/[_-]/g, ' ')) : 'Tool';
     steps.push({type: 'tool', status: 'active', label: 'Calling ' + toolName + '…'});
   }
+
+  // ── Completed <artifact>...</artifact> ──
+  const artifactComplete = partial.match(/<artifact(?:\s[^>]*)?>[\s\S]*?<\/artifact>/g);
+  if (artifactComplete) {
+    for (const a of artifactComplete) {
+      const typeMatch = a.match(/type="([^"]+)"/);
+      const titleMatch = a.match(/title="([^"]+)"/);
+      const aType = typeMatch ? typeMatch[1] : 'code';
+      const aTitle = titleMatch ? titleMatch[1] : 'Artifact';
+      const inner = a.replace(/<artifact[^>]*>/, '').replace(/<\/artifact>/, '').trim();
+      steps.push({type: 'artifact', status: 'done', label: aTitle,
+        artifactType: aType, content: inner});
+    }
+  }
+  // ── Streaming <artifact> (open, not closed) ──
+  const hasOpenArtifact = /<artifact(?:\s[^>]*)?>(?![\s\S]*<\/artifact>)[\s\S]*$/.test(partial);
+  if (hasOpenArtifact) {
+    steps.push({type: 'artifact', status: 'active', label: 'Creating artifact…'});
+  }
+
   return steps;
+}
+
+// ── Sanitize partial markdown for safe rendering during streaming ──
+function _sanitizePartialMarkdown(text) {
+  // Close unclosed code fences
+  const fenceCount = (text.match(/^```/gm) || []).length;
+  if (fenceCount % 2 !== 0) text += '\n```';
+  // Close unclosed inline code backticks
+  const backtickCount = (text.match(/`/g) || []).length;
+  if (backtickCount % 2 !== 0) text += '`';
+  // Close unclosed bold markers
+  const boldCount = (text.match(/\*\*/g) || []).length;
+  if (boldCount % 2 !== 0) text += '**';
+  return text;
 }
 
 function _renderStreamContent(taskId) {
@@ -3548,18 +3952,39 @@ function _renderStreamContent(taskId) {
   const statusEl = bubble.querySelector('.stream-agent-status');
   const partial = _streamingFullText[taskId] || '';
   if (body) {
-    const cleaned = htmlToMd(stripLlmTagsCached(partial));
+    const cleaned = _sanitizePartialMarkdown(htmlToMd(stripLlmTagsCached(partial)));
     const steps = _parseStreamSteps(partial);
     let stepsHtml = '';
     if (steps.length) {
       stepsHtml = '<div class="stream-steps">';
-      for (const s of steps) {
-        const icon = s.status === 'done'
-          ? (s.type === 'think' ? '💭' : '<span style="color:var(--green)">✓</span>')
-          : (s.type === 'think' ? '💭' : '⚡');
-        const cls = s.status === 'done' ? 'step-done' : 'step-active';
-        const previewHtml = (s.preview && s.status === 'done')
-          ? '<span class="step-preview">' + escHtml(s.preview) + '</span>' : '';
+      for (let si = 0; si < steps.length; si++) {
+        const s = steps[si];
+        let icon, cls;
+        if (s.type === 'artifact') {
+          icon = s.status === 'done' ? '📎' : '📝';
+        } else if (s.type === 'think') {
+          icon = '💭';
+        } else {
+          icon = s.status === 'done' ? '<span style="color:var(--green)">✓</span>' : '⚡';
+        }
+        cls = s.status === 'done' ? 'step-done' : 'step-active';
+        let previewHtml = '';
+        if (s.preview && s.status === 'done') {
+          if (s.type === 'think' && s.fullContent) {
+            // Expandable think block
+            const thinkId = 'think-' + taskId + '-' + si;
+            previewHtml = '<span class="step-preview think-toggle" onclick="toggleThinkContent(\'' + thinkId + '\')">'
+              + escHtml(s.preview) + ' ▸</span>'
+              + '<div class="think-full" id="' + thinkId + '" style="display:none;margin:6px 0 2px 22px;padding:8px 10px;background:var(--bg1);border-radius:6px;font-size:12px;line-height:1.5;max-height:300px;overflow-y:auto">'
+              + renderMarkdown(s.fullContent) + '</div>';
+          } else {
+            previewHtml = '<span class="step-preview">' + escHtml(s.preview) + '</span>';
+          }
+        }
+        // Route completed artifacts to sidebar
+        if (s.type === 'artifact' && s.status === 'done' && s.content) {
+          showArtifact(s.artifactType || 'code', s.label, s.content);
+        }
         stepsHtml += '<div class="stream-step ' + cls + '">'
           + '<span class="step-icon">' + icon + '</span>'
           + '<span class="step-label">' + escHtml(s.label) + '</span>'
@@ -3620,6 +4045,77 @@ function _cleanupStreamRAF(taskId) {
     clearTimeout(_streamRenderRAF[taskId]);
     delete _streamRenderRAF[taskId];
   }
+}
+
+// ── Think block expand/collapse ──
+function toggleThinkContent(thinkId) {
+  const el = document.getElementById(thinkId);
+  if (!el) return;
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+// ── Artifacts sidebar ──
+let _artifactCounter = 0;
+
+function showArtifact(type, title, content) {
+  const sidebar = document.getElementById('artifactsSidebar');
+  const list = document.getElementById('artifactsList');
+  if (!sidebar || !list) return;
+
+  _artifactCounter++;
+  const cardId = 'artifact-' + _artifactCounter;
+
+  // Check if an artifact with same title already exists (update it)
+  const existing = list.querySelector('[data-artifact-title="' + escHtml(title) + '"]');
+  if (existing) {
+    const body = existing.querySelector('.artifact-card-body');
+    if (body) {
+      body.innerHTML = (type === 'code' || type === 'application/code')
+        ? '<pre><code>' + escHtml(content) + '</code></pre>'
+        : renderMarkdown(content);
+    }
+    sidebar.style.display = 'flex';
+    return;
+  }
+
+  const card = document.createElement('div');
+  card.className = 'artifact-card';
+  card.setAttribute('data-artifact-title', title);
+
+  const icon = type === 'code' || type === 'application/code' ? '💻'
+    : type === 'markdown' || type === 'text/markdown' ? '📄'
+    : type === 'html' || type === 'text/html' ? '🌐' : '📎';
+
+  let bodyContent;
+  if (type === 'code' || type === 'application/code') {
+    bodyContent = '<pre><code>' + escHtml(content) + '</code></pre>';
+  } else {
+    bodyContent = renderMarkdown(content);
+  }
+
+  card.innerHTML = '<div class="artifact-card-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display===\'none\'?\'block\':\'none\'">'
+    + '<span>' + icon + '</span>'
+    + '<span>' + escHtml(title) + '</span>'
+    + '<span style="margin-left:auto;font-size:10px;color:var(--fg3)">' + escHtml(type) + '</span>'
+    + '</div>'
+    + '<div class="artifact-card-body">' + bodyContent + '</div>';
+
+  list.appendChild(card);
+  sidebar.style.display = 'flex';
+}
+
+function toggleArtifacts() {
+  const sidebar = document.getElementById('artifactsSidebar');
+  if (!sidebar) return;
+  sidebar.style.display = sidebar.style.display === 'none' ? 'flex' : 'none';
+}
+
+function clearArtifacts() {
+  const list = document.getElementById('artifactsList');
+  if (list) list.innerHTML = '';
+  _artifactCounter = 0;
+  const sidebar = document.getElementById('artifactsSidebar');
+  if (sidebar) sidebar.style.display = 'none';
 }
 
 function updateCostBadge(taskId, costUsd) {
@@ -3805,9 +4301,10 @@ function diffAndRoute(prev, current) {
 
     if (oldStatus === newStatus && old) continue;
 
-    // Remove streaming bubble when task completes
+    // Remove streaming bubble + close SSE when task completes
     if (newStatus === 'completed' || newStatus === 'failed') {
       removeStreamingBubble(taskId);
+      stopTaskStream(taskId);
     }
 
     if (!chatTaskMap[taskId]) chatTaskMap[taskId] = new Set();
@@ -3907,6 +4404,8 @@ function diffAndRoute(prev, current) {
           promptTokens: totalIn || null,
           completionTokens: totalOut || null,
         });
+        // Persist to session history
+        persistAssistantMessage(task.result);
       }
     }
 
@@ -6100,12 +6599,12 @@ async function loadMemoryEpisodes(agent) {
     results.forEach((data, i) => {
       (data?.episodes || []).forEach(ep => { ep._agent = agents[i]; allEps.push(ep); });
     });
-    allEps.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    allEps.sort((a, b) => (b.ts || 0) - (a.ts || 0));
     renderEpisodesTable(area, allEps, true);
   } else {
     const data = await api('/v1/memory/episodes/' + agent);
     const eps = (data?.episodes || []).map(ep => { ep._agent = agent; return ep; });
-    eps.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    eps.sort((a, b) => (b.ts || 0) - (a.ts || 0));
     renderEpisodesTable(area, eps, false);
   }
 }
@@ -6117,11 +6616,12 @@ function renderEpisodesTable(area, episodes, showAgent) {
   }
   let html = '<div class="card"><table class="data-table"><thead><tr>';
   if (showAgent) html += '<th>Agent</th>';
-  html += '<th>Task</th><th>Date</th><th>Outcome</th><th>Score</th><th></th>';
+  html += '<th>Task</th><th>Date</th><th>Time</th><th>Outcome</th><th>Score</th><th></th>';
   html += '</tr></thead><tbody>';
   episodes.slice(0, 50).forEach((ep, i) => {
     const desc = escHtml((ep.task_description || ep.description || ep.task_id || '—').substring(0, 80));
-    const date = ep.timestamp ? new Date(ep.timestamp * 1000).toLocaleDateString() : '—';
+    const date = ep.ts ? new Date(ep.ts * 1000).toLocaleDateString() : '—';
+    const timeStr = ep.ts ? new Date(ep.ts * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '—';
     const outcome = ep.outcome || ep.status || '—';
     const score = ep.score != null ? ep.score : '—';
     const outcomeColor = outcome === 'success' ? 'var(--green)' : outcome === 'failure' ? 'var(--red)' : 'var(--fg2)';
@@ -6129,12 +6629,13 @@ function renderEpisodesTable(area, episodes, showAgent) {
     if (showAgent) html += '<td><strong>' + escHtml(capitalize(ep._agent)) + '</strong></td>';
     html += '<td>' + desc + '</td>';
     html += '<td style="white-space:nowrap">' + date + '</td>';
+    html += '<td style="white-space:nowrap;color:var(--fg3)">' + timeStr + '</td>';
     html += '<td style="color:' + outcomeColor + '">' + escHtml(outcome) + '</td>';
     html += '<td>' + score + '</td>';
     html += '<td><button class="btn btn-sm btn-outline" onclick="event.stopPropagation();showMemoryEditModal(\'episode\',' + JSON.stringify(ep._agent).replace(/"/g, '&quot;') + ',' + JSON.stringify(ep.task_id || '').replace(/"/g, '&quot;') + ',' + i + ')">Edit</button></td>';
     html += '</tr>';
     // Expandable detail row
-    html += '<tr id="ep-' + i + '" style="display:none"><td colspan="' + (showAgent ? 6 : 5) + '" style="padding:12px;background:var(--bg3);font-size:12px">';
+    html += '<tr id="ep-' + i + '" style="display:none"><td colspan="' + (showAgent ? 7 : 6) + '" style="padding:12px;background:var(--bg3);font-size:12px">';
     html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
     html += '<div><strong>Task ID:</strong> ' + escHtml(ep.task_id || '—') + '</div>';
     html += '<div><strong>Duration:</strong> ' + (ep.duration ? ep.duration + 's' : '—') + '</div>';
@@ -6204,53 +6705,99 @@ function renderCasesTable(area, cases, showAgent) {
   area.innerHTML = html;
 }
 
+function cleanDailyLogContent(raw) {
+  if (!raw) return '';
+  // Strip <tool_code>...</tool_code> blocks (including unclosed)
+  raw = raw.replace(/<tool_code>[\s\S]*?(<\/tool_code>|$)/g, '');
+  // Strip ```subtask or ```tool code blocks (including unclosed)
+  raw = raw.replace(/```(?:subtask|tool)\s*\n[\s\S]*?(?:```|$)/g, '');
+  // Strip inline tool JSON: tool{"tool":...}
+  raw = raw.replace(/\btool\s*\{[^}]*"tool"\s*:[^}]*\}/g, '');
+  // Strip <tool_code> opening tags with <parameter> children
+  raw = raw.replace(/<tool_code>[^<]*/g, '');
+  raw = raw.replace(/<parameter[^>]*>[^<]*<\/parameter>/g, '');
+  // Strip result lines that are just "..."
+  raw = raw.replace(/\*\*Result:\*\*\s*\.{3}\s*$/gm, '');
+  // Clean up excessive blank lines
+  raw = raw.replace(/\n{3,}/g, '\n\n');
+  return raw.trim();
+}
+
 async function loadMemoryDaily(agent) {
   const area = document.getElementById('memDataArea');
   if (agent === 'all') {
     const agents = ['leo', 'jerry', 'alic'];
-    let allDaily = [];
     const results = await Promise.all(agents.map(a => api('/v1/memory/daily/' + a)));
+    let html = '';
     results.forEach((data, i) => {
-      (data?.entries || data?.daily || []).forEach(d => { d._agent = agents[i]; allDaily.push(d); });
+      const log = cleanDailyLogContent(data?.daily_log || '');
+      if (log.trim()) {
+        html += '<div class="card" style="margin-bottom:12px">';
+        html += '<div class="card-title" style="margin-bottom:10px">' + capitalize(agents[i]) + ' — Daily Log</div>';
+        html += '<div class="daily-log-content">' + renderKbMarkdown(log) + '</div>';
+        html += '</div>';
+      }
     });
-    allDaily.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-    renderDailyList(area, allDaily, true);
+    if (!html) html = '<div class="card"><div class="empty">No daily log entries found</div></div>';
+    area.innerHTML = html;
   } else {
     const data = await api('/v1/memory/daily/' + agent);
-    const daily = (data?.entries || data?.daily || []).map(d => { d._agent = agent; return d; });
-    daily.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-    renderDailyList(area, daily, false);
+    const log = cleanDailyLogContent(data?.daily_log || '');
+    if (log.trim()) {
+      area.innerHTML = '<div class="card"><div class="daily-log-content">' + renderKbMarkdown(log) + '</div></div>';
+    } else {
+      area.innerHTML = '<div class="card"><div class="empty">No daily log entries found</div></div>';
+    }
   }
 }
 
-function renderDailyList(area, entries, showAgent) {
-  if (!entries.length) {
-    area.innerHTML = '<div class="card"><div class="empty">No daily log entries found</div></div>';
-    return;
-  }
-  let html = '<div class="card" style="display:flex;flex-direction:column;gap:12px">';
-  entries.slice(0, 30).forEach(d => {
-    const date = d.date || '—';
-    const agentLabel = showAgent ? '<span style="color:var(--accent)">[' + escHtml(capitalize(d._agent)) + ']</span> ' : '';
-    html += '<div style="border-left:2px solid var(--accent);padding-left:12px">';
-    html += '<div style="font-size:13px;font-weight:600">' + agentLabel + date + '</div>';
-    // Render learning entries
-    const items = d.learnings || d.entries || d.items || [];
-    if (Array.isArray(items) && items.length) {
-      items.forEach(item => {
-        const text = typeof item === 'string' ? item : (item.content || item.text || JSON.stringify(item));
-        html += '<div style="color:var(--fg2);font-size:12px;margin-top:4px;padding-left:8px">• ' + escHtml(text.substring(0, 200)) + '</div>';
-      });
-    } else if (d.summary) {
-      html += '<div style="color:var(--fg2);font-size:12px;margin-top:4px">' + escHtml(d.summary.substring(0, 300)) + '</div>';
-    } else if (d.content) {
-      html += '<div style="color:var(--fg2);font-size:12px;margin-top:4px">' + escHtml((typeof d.content === 'string' ? d.content : JSON.stringify(d.content)).substring(0, 300)) + '</div>';
-    }
-    html += '</div>';
+// ── KB Markdown renderer (lightweight) ──
+function renderKbMarkdown(raw) {
+  if (!raw) return '';
+  let s = escHtml(raw);
+  // Code blocks (``` ... ```)
+  s = s.replace(/```(\w*)\n([\s\S]*?)```/g, function(_, lang, code) {
+    return '<pre>' + code.trim() + '</pre>';
   });
-  if (entries.length > 30) html += '<div style="color:var(--fg3);font-size:12px">Showing 30 of ' + entries.length + ' entries</div>';
-  html += '</div>';
-  area.innerHTML = html;
+  // Inline code
+  s = s.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  // Headers (### before ##)
+  s = s.replace(/^####\s+(.+)$/gm, '<h4>$1</h4>');
+  s = s.replace(/^###\s+(.+)$/gm, '<h3>$1</h3>');
+  s = s.replace(/^##\s+(.+)$/gm, '<h3>$1</h3>');
+  // Bold
+  s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  // Horizontal rule
+  s = s.replace(/^---+$/gm, '<hr>');
+  // Unordered list items
+  s = s.replace(/^[\s]*[-•]\s+(.+)$/gm, '<li>$1</li>');
+  // Wrap consecutive <li> in <ul>
+  s = s.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+  // Paragraphs — double newline → paragraph break
+  s = s.replace(/\n{2,}/g, '</p><p>');
+  // Single newline → line break (except inside pre/ul)
+  s = s.replace(/\n/g, '<br>');
+  // Clean up spurious <br> inside block elements
+  s = s.replace(/<br><(h[34]|pre|ul|hr|li)/g, '<$1');
+  s = s.replace(/<\/(h[34]|pre|ul|hr|li)><br>/g, '</$1>');
+  s = s.replace(/<br><\/p><p><br>/g, '</p><p>');
+  return '<p>' + s + '</p>';
+}
+
+// Tag color assignment (deterministic by tag name)
+const _kbTagColors = ['blue','purple','green','orange','pink','cyan'];
+function kbTagColor(tag) {
+  let h = 0;
+  for (let i = 0; i < tag.length; i++) h = ((h << 5) - h + tag.charCodeAt(i)) | 0;
+  return _kbTagColors[Math.abs(h) % _kbTagColors.length];
+}
+
+// Topic icon (deterministic by slug)
+const _kbIcons = ['📝','📚','🔬','💡','🌐','⚙️','🧠','📊','🔗','🛠️','📋','🎯'];
+function kbIcon(slug) {
+  let h = 0;
+  for (let i = 0; i < slug.length; i++) h = ((h << 5) - h + slug.charCodeAt(i)) | 0;
+  return _kbIcons[Math.abs(h) % _kbIcons.length];
 }
 
 async function loadMemoryKB() {
@@ -6262,39 +6809,89 @@ async function loadMemoryKB() {
 
   let html = '';
 
-  // KB Notes
-  html += '<div class="card" style="margin-bottom:16px"><div class="card-title">Knowledge Base Notes</div>';
+  // KB Notes — card grid
+  html += '<div class="card" style="margin-bottom:16px">';
+  html += '<div class="card-title" style="margin-bottom:14px">Knowledge Base Notes';
+  if (kbData && kbData.notes) html += ' <span style="color:var(--fg3);font-weight:400">(' + kbData.notes.length + ')</span>';
+  html += '</div>';
+
   if (kbData && kbData.notes && kbData.notes.length > 0) {
-    html += '<div style="display:flex;flex-direction:column;gap:10px">';
-    kbData.notes.forEach(note => {
-      const tags = (note.tags || []).map(t => '<span style="background:var(--bg4);padding:1px 6px;border-radius:3px;font-size:10px;color:var(--fg2)">' + escHtml(t) + '</span>').join(' ');
-      const contributors = (note.contributors || []).join(', ');
-      const content = (note.content || '').substring(0, 200);
-      html += '<div style="border-left:2px solid var(--accent);padding-left:10px">';
-      html += '<div><strong>' + escHtml(note.topic || note.slug) + '</strong> ' + tags + '</div>';
-      html += '<div style="color:var(--fg2);font-size:12px;margin-top:2px">' + escHtml(content) + '</div>';
-      html += '<div style="color:var(--fg3);font-size:10px;margin-top:2px">by ' + escHtml(contributors) + ' · ' + (note.update_count || 1) + ' updates</div>';
+    html += '<div class="kb-grid">';
+    kbData.notes.forEach((note, idx) => {
+      const topic = note.topic || note.slug || 'Untitled';
+      const slug = note.slug || '';
+      const content = note.content || '';
+      const tags = note.tags || [];
+      const contributors = (note.contributors || []).map(c => capitalize(c));
+      const updCount = note.update_count || 1;
+      const density = (note.density || '').toUpperCase();
+      const updatedAt = note.updated_at
+        ? new Date(note.updated_at * 1000).toLocaleDateString()
+        : '';
+      html += '<div class="kb-note">';
+
+      // Head: icon + title
+      html += '<div class="kb-note-head">';
+      html += '<div class="kb-note-icon">' + kbIcon(slug) + '</div>';
+      html += '<div class="kb-note-title">' + escHtml(topic) + '</div>';
       html += '</div>';
+
+      // Tags row
+      if (tags.length > 0) {
+        html += '<div class="kb-note-tags">';
+        tags.forEach(t => {
+          html += '<span class="kb-tag kb-tag-' + kbTagColor(t) + '">' + escHtml(t) + '</span>';
+        });
+        if (density) {
+          const dc = density === 'HIGH' ? 'high' : density === 'LOW' ? 'low' : 'normal';
+          html += '<span class="kb-density kb-density-' + dc + '">' + density + '</span>';
+        }
+        html += '</div>';
+      }
+
+      // Body (markdown rendered)
+      html += '<div class="kb-note-body" id="kb-body-' + idx + '">';
+      html += renderKbMarkdown(content);
+      html += '</div>';
+
+      // Footer
+      html += '<div class="kb-note-footer">';
+      html += '<span>';
+      if (contributors.length) html += '<span class="contributor">' + escHtml(contributors.join(', ')) + '</span> · ';
+      html += updCount + ' update' + (updCount > 1 ? 's' : '');
+      html += '</span>';
+      if (updatedAt) html += '<span>' + updatedAt + '</span>';
+      html += '</div>';
+
+      html += '</div>'; // .kb-note
     });
-    html += '</div>';
+    html += '</div>'; // .kb-grid
   } else {
     html += '<div class="empty">No knowledge notes yet</div>';
   }
+  html += '</div>'; // .card
+
+  // Insights — styled cards
+  html += '<div class="card"><div class="card-title" style="margin-bottom:14px">Cross-Agent Insights';
+  if (insightsData && insightsData.insights) html += ' <span style="color:var(--fg3);font-weight:400">(' + insightsData.insights.length + ')</span>';
   html += '</div>';
 
-  // Insights
-  html += '<div class="card"><div class="card-title">Cross-Agent Insights</div>';
   if (insightsData && insightsData.insights && insightsData.insights.length > 0) {
-    html += '<div style="display:flex;flex-direction:column;gap:8px">';
+    html += '<div style="display:flex;flex-direction:column;gap:10px">';
     insightsData.insights.slice(-20).reverse().forEach(ins => {
-      const ts = new Date(ins.ts * 1000).toLocaleString();
-      const tags = (ins.tags || []).join(', ');
-      html += '<div style="border-left:2px solid var(--cyan);padding-left:8px">';
-      html += '<span style="color:var(--accent)">[' + escHtml(ins.agent_id) + ']</span> ';
-      html += '<span style="font-size:12px">' + escHtml(ins.insight) + '</span>';
-      html += '<div style="color:var(--fg3);font-size:10px">' + ts;
-      if (tags) html += ' · ' + escHtml(tags);
-      html += '</div></div>';
+      const ts = new Date(ins.ts * 1000).toLocaleDateString();
+      const insightTags = ins.tags || [];
+      html += '<div style="display:flex;gap:10px;align-items:flex-start;padding:10px 12px;background:rgba(6,182,212,0.04);border-radius:10px;border:1px solid rgba(6,182,212,0.08)">';
+      html += '<span style="font-size:16px;flex-shrink:0">💡</span>';
+      html += '<div style="flex:1;min-width:0">';
+      html += '<div style="font-size:12.5px;color:var(--fg1);line-height:1.5">' + escHtml(ins.insight) + '</div>';
+      html += '<div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap">';
+      html += '<span style="font-size:10px;color:var(--accent);font-weight:500">' + escHtml(capitalize(ins.agent_id)) + '</span>';
+      html += '<span style="font-size:10px;color:var(--fg3)">' + ts + '</span>';
+      insightTags.forEach(t => {
+        html += '<span class="kb-tag kb-tag-' + kbTagColor(t) + '">' + escHtml(t) + '</span>';
+      });
+      html += '</div></div></div>';
     });
     html += '</div>';
   } else {
@@ -6921,10 +7518,15 @@ let _wsConnected = false;
 let _wsLastUpdate = 0;
 
 function initWebSocket() {
+  if (!TOKEN) {
+    console.log('[ws] no token available, skipping WebSocket connection');
+    return;
+  }
   try {
     // WS gateway runs on HTTP port + 1 (19789 → 19790)
     const httpPort = parseInt(API.split(':').pop()) || 19789;
-    const wsUrl = 'ws://' + location.hostname + ':' + (httpPort + 1);
+    let wsUrl = 'ws://' + location.hostname + ':' + (httpPort + 1);
+    wsUrl += '?token=' + encodeURIComponent(TOKEN);
     _ws = new WebSocket(wsUrl);
     _ws.onopen = () => {
       _wsConnected = true;
@@ -6983,6 +7585,16 @@ function handleWsSnapshot(data) {
 pollHealth();
 pollChatUpdates();
 initWebSocket();
+
+// Restore session on page load
+(async function restoreSession() {
+  await loadSessions();
+  const saved = localStorage.getItem('cleo_current_session');
+  if (saved && dashboardSessions.find(s => s.session_id === saved)) {
+    await switchSession(saved);
+  }
+})();
+
 setInterval(pollHealth, 5000);
 // Use slower HTTP polling when WS connected; faster when disconnected
 setInterval(() => {

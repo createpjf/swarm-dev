@@ -908,14 +908,27 @@ class ChannelManager:
             board = TaskBoard()
             data = board._read()
 
-            # Check if all tasks are done (including subtasks)
+            # Check if all tasks in THIS tree are done
             if not data:
                 continue
+
+            # Build task tree: root + all descendant subtasks (BFS via parent_id)
+            # Same logic as TaskBoard.collect_results() — scopes to this task only
+            tree_ids = {task_id}
+            changed = True
+            while changed:
+                changed = False
+                for tid, t in data.items():
+                    if tid not in tree_ids and t.get("parent_id") in tree_ids:
+                        tree_ids.add(tid)
+                        changed = True
 
             active_states = {"pending", "claimed", "review", "critique",
                              "blocked", "paused", "synthesizing"}
             has_active = any(
-                t.get("status") in active_states for t in data.values())
+                data[tid].get("status") in active_states
+                for tid in tree_ids
+                if tid in data)
 
             if not has_active:
                 # All done — prefer root task result (Leo's synthesis)

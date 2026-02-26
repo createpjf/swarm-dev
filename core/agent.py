@@ -438,6 +438,16 @@ class BaseAgent:
         # 6b. Strip <think>...</think> blocks from model output
         result = _strip_think(result)
 
+        # 6c. Guard: empty LLM response (content filter, all retries exhausted)
+        if not result.strip():
+            logger.warning("[%s] LLM returned empty result — injecting fallback",
+                           self.cfg.agent_id)
+            result = (
+                "I'm sorry, I wasn't able to generate a response for this "
+                "request. This may be due to content filtering. "
+                "Please try rephrasing your question."
+            )
+
         # 7. Tool execution loop — parse tool calls, execute, feed back results
         if tools_cfg:
             result = await self._tool_loop(messages, task, result,
@@ -551,20 +561,37 @@ class BaseAgent:
                 from core.task_board import TaskBoard
                 board = TaskBoard()
                 chunks: list[str] = []
+                seq = 0
                 update_interval = 0
                 async for chunk in self.llm.chat_stream(
                     messages, self.cfg.model, **llm_kwargs
                 ):
                     chunks.append(chunk)
+                    seq += 1
+                    # Append chunk to per-task stream file (lockless, fast)
+                    try:
+                        TaskBoard.append_stream_chunk(
+                            task.task_id, chunk, seq)
+                    except Exception:
+                        pass  # non-critical: SSE just won't get this chunk
                     update_interval += 1
-                    # Write partial result every 5 chunks to avoid excessive I/O
-                    if update_interval >= 5:
-                        board.update_partial(task.task_id, "".join(chunks))
+                    # Still update TaskBoard partial_result periodically
+                    # for backward compat (WS gateway, HTTP polling)
+                    if update_interval >= 20:
+                        board.update_partial(
+                            task.task_id, "".join(chunks))
                         update_interval = 0
                 result = "".join(chunks)
                 # Final partial update (will be cleared when task completes)
                 if chunks:
                     board.update_partial(task.task_id, result)
+                # Detect empty streaming result (content filter / API issue)
+                if not result.strip():
+                    logger.warning(
+                        "[%s] streaming returned empty result, "
+                        "falling back to non-streaming",
+                        self.cfg.agent_id)
+                    raise RuntimeError("Empty streaming result")
                 return result
             except Exception as e:
                 logger.warning("[%s] streaming failed, falling back to blocking: %s",
@@ -984,11 +1011,14 @@ class BaseAgent:
         if self.episodic:
             try:
                 from adapters.memory.episodic import make_episode
+                # Derive baseline score from outcome when no explicit score
+                _score = {"success": 8, "partial": 5}.get(outcome, 2)
                 episode = make_episode(
                     agent_id=self.cfg.agent_id,
                     task_id=task.task_id,
                     task_description=task.description,
                     result=result,
+                    score=_score,
                     outcome=outcome,
                     error_type=error_type,
                     model=getattr(self.cfg, "model", None),

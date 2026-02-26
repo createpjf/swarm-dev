@@ -8,6 +8,9 @@ This is the **sole conversation persistence layer** for all channel interactions
 Tracks per-user/group sessions across channel interactions.
 Stores conversation history per session in separate JSONL files.
 Uses the same FileLock pattern as ContextBus and TaskBoard.
+
+V0.03+: Also serves as the persistence layer for Dashboard sessions
+(multi-session support — ChatGPT-style conversation list).
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ import json
 import logging
 import os
 import time
+import uuid
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 
@@ -23,10 +27,14 @@ from core.protocols import FileLock  # shared fallback
 
 logger = logging.getLogger(__name__)
 
-SESSIONS_FILE = "memory/channel_sessions.json"
-SESSIONS_LOCK = "memory/channel_sessions.lock"
-HISTORY_DIR = "memory/sessions"
-MAX_HISTORY_MESSAGES = 50   # FIFO limit per session
+# ── Absolute paths (Gateway CWD may differ from project root) ──
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))))  # adapters/channels/ → adapters/ → project root
+SESSIONS_FILE = os.path.join(_PROJECT_ROOT, "memory", "channel_sessions.json")
+SESSIONS_LOCK = os.path.join(_PROJECT_ROOT, "memory", "channel_sessions.lock")
+HISTORY_DIR   = os.path.join(_PROJECT_ROOT, "memory", "sessions")
+
+MAX_HISTORY_MESSAGES = 200  # FIFO limit per session (increased for dashboard)
 CHARS_PER_TOKEN = 3         # conservative (English ~4, CJK ~1.5)
 SESSION_EXPIRE_HOURS = 24   # start fresh if idle longer than this
 GROUP_USER_ISOLATION = True  # isolate per-user contexts in group chats
@@ -36,14 +44,18 @@ GROUP_USER_ISOLATION = True  # isolate per-user contexts in group chats
 class ChannelSession:
     """Represents a channel conversation session."""
     session_id: str             # "{channel}:{chat_id}"
-    channel: str                # "telegram" | "discord" | "feishu"
-    chat_id: str                # platform chat/group ID
+    channel: str                # "telegram" | "discord" | "feishu" | "dashboard"
+    chat_id: str                # platform chat/group ID (UUID for dashboard)
     user_ids: list[str] = field(default_factory=list)
     user_names: list[str] = field(default_factory=list)
     message_count: int = 0
     last_task_id: str = ""
     last_active: float = 0.0
     created_at: float = field(default_factory=time.time)
+    # V0.03+: Dashboard session fields
+    title: str = ""             # user-visible session name
+    pinned: bool = False        # pinned to top of list
+    no_expire: bool = False     # skip auto-expiry (dashboard sessions)
 
 
 class SessionStore:
@@ -147,6 +159,7 @@ class SessionStore:
 
         Returns list of {role, content, ts, user?} dicts, oldest first.
         Returns empty list if session is expired (idle > SESSION_EXPIRE_HOURS).
+        Dashboard sessions (no_expire=True) skip the expiry check.
         """
         history_path = self._history_path(session_id)
         if not os.path.exists(history_path):
@@ -169,12 +182,19 @@ class SessionStore:
             return []
 
         # Check session expiry — if idle too long, start fresh
-        last_ts = messages[-1].get("ts", 0)
-        idle_hours = (time.time() - last_ts) / 3600
-        if idle_hours > SESSION_EXPIRE_HOURS:
-            logger.info("Session %s expired (idle %.1fh), starting fresh",
-                        session_id, idle_hours)
-            return []
+        # (skip for dashboard sessions with no_expire=True)
+        skip_expiry = False
+        data = self._read()
+        if session_id in data:
+            skip_expiry = data[session_id].get("no_expire", False)
+
+        if not skip_expiry:
+            last_ts = messages[-1].get("ts", 0)
+            idle_hours = (time.time() - last_ts) / 3600
+            if idle_hours > SESSION_EXPIRE_HOURS:
+                logger.info("Session %s expired (idle %.1fh), starting fresh",
+                            session_id, idle_hours)
+                return []
 
         # Return last max_turns*2 messages (user + assistant pairs)
         limit = max_turns * 2
@@ -235,6 +255,7 @@ class SessionStore:
         """Remove sessions idle longer than max_idle_hours.
 
         Also deletes the associated conversation history JSONL files.
+        Skips sessions with no_expire=True (dashboard sessions).
         Returns the number of sessions removed.
         """
         cutoff = time.time() - (max_idle_hours * 3600)
@@ -244,6 +265,7 @@ class SessionStore:
             expired_keys = [
                 k for k, v in data.items()
                 if v.get("last_active", 0) < cutoff
+                and not v.get("no_expire", False)
             ]
             for key in expired_keys:
                 # Delete history file
@@ -260,6 +282,73 @@ class SessionStore:
                 logger.info("[session] cleaned up %d expired sessions "
                             "(idle > %.1fh)", removed, max_idle_hours)
         return removed
+
+    # ── Dashboard Session Methods ─────────────────────────────
+
+    def create_dashboard_session(self, title: str = "") -> ChannelSession:
+        """Create a new dashboard session with a UUID chat_id.
+
+        Dashboard sessions have no_expire=True and channel='dashboard'.
+        """
+        chat_id = uuid.uuid4().hex[:12]
+        session_id = f"dashboard:{chat_id}"
+        now = time.time()
+        session = ChannelSession(
+            session_id=session_id,
+            channel="dashboard",
+            chat_id=chat_id,
+            message_count=0,
+            last_active=now,
+            created_at=now,
+            title=title,
+            no_expire=True,
+        )
+        with self.lock:
+            data = self._read()
+            data[session_id] = asdict(session)
+            self._write(data)
+        return session
+
+    def list_dashboard_sessions(self) -> list[ChannelSession]:
+        """Return all dashboard sessions, sorted by last_active descending."""
+        data = self._read()
+        sessions = []
+        for s in data.values():
+            if s.get("channel") == "dashboard":
+                sessions.append(self._from_dict(s))
+        sessions.sort(key=lambda s: s.last_active, reverse=True)
+        return sessions
+
+    def rename_session(self, session_id: str, title: str):
+        """Update a session's title."""
+        with self.lock:
+            data = self._read()
+            if session_id in data:
+                data[session_id]["title"] = title
+                self._write(data)
+
+    def pin_session(self, session_id: str, pinned: bool = True):
+        """Pin or unpin a session."""
+        with self.lock:
+            data = self._read()
+            if session_id in data:
+                data[session_id]["pinned"] = pinned
+                self._write(data)
+
+    def delete_session(self, session_id: str):
+        """Delete a session and its history file."""
+        with self.lock:
+            data = self._read()
+            if session_id in data:
+                # Delete history file
+                history_path = self._history_path(session_id)
+                try:
+                    if os.path.exists(history_path):
+                        os.remove(history_path)
+                except OSError:
+                    pass
+                del data[session_id]
+                self._write(data)
 
     # ── Internal ──
 
@@ -302,4 +391,7 @@ class SessionStore:
             last_task_id=d.get("last_task_id", ""),
             last_active=d.get("last_active", 0),
             created_at=d.get("created_at", 0),
+            title=d.get("title", ""),
+            pinned=d.get("pinned", False),
+            no_expire=d.get("no_expire", False),
         )

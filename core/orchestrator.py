@@ -44,6 +44,29 @@ def _strip_tool_blocks(text: str) -> str:
     text = _TOOL_BLOCK_RE.sub("", text)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
 
+
+def _extract_current_task(description: str) -> str:
+    """Extract current task from a description that may contain
+    injected conversation history.
+
+    Channel managers inject session history into task descriptions as:
+      [source:telegram]
+      ## 对话历史 ...
+      ---
+      ## ⚠️ CURRENT TASK — focus ONLY on this
+      <actual task>
+
+    This function strips the history and returns only the current task.
+    Falls back to full description if no marker is found.
+    """
+    m = re.search(
+        r'##\s*(?:⚠️\s*)?(?:CURRENT TASK|Current Task)[^\n]*\n',
+        description)
+    if m:
+        return description[m.end():].strip()
+    return description
+
+
 # ── Graceful shutdown flag (per-process) ──
 _shutdown_requested = False
 
@@ -181,8 +204,8 @@ async def _handle_critique_request(agent, board: TaskBoard, mail: dict, sched):
                               if isinstance(parent_intent, dict)
                               else parent_intent)
                 intent_context = f"## Original User Intent\n{intent_val}\n\n"
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.debug("Failed to extract parent intent for critique: %s", _e)
 
     # V0.02 CritiqueSpec prompt (5-dimension structured scoring)
     critique_prompt = (
@@ -323,6 +346,17 @@ async def _handle_critique_request(agent, board: TaskBoard, mail: dict, sched):
                 f"**Task:** {description[:100]}\n"
                 f"**Comment:** {comment[:200]}"
             )
+
+        # ── Backfill critique score to evaluated agent's episode ──
+        if task_obj_ep and task_obj_ep.agent_id:
+            try:
+                from adapters.memory.episodic import EpisodicMemory
+                eval_ep = EpisodicMemory(task_obj_ep.agent_id)
+                eval_ep.update_episode_score(task_id, score)
+            except Exception as e2:
+                logger.debug("Backfill score to %s failed: %s",
+                             task_obj_ep.agent_id, e2)
+
     except Exception as e:
         logger.debug("[%s] critique episode save failed: %s",
                      agent.cfg.agent_id, e)
@@ -533,8 +567,9 @@ def _create_subtasks_from_specs(board: TaskBoard, specs: list,
 
     for spec in specs:
         # Inject parent_intent (IntentAnchor — Improvement 5)
+        # V0.03+: Strip conversation history to prevent contamination
         if not spec.parent_intent:
-            spec.parent_intent = parent_description
+            spec.parent_intent = _extract_current_task(parent_description)
 
         description = spec.to_task_description()
         role = _infer_role(spec.objective)
@@ -914,8 +949,8 @@ async def _agent_loop(agent, bus: ContextBus, board: TaskBoard,
                         from core.protocols import SubTaskSpec as _STS
                         _spec = _STS.from_json(t["spec"])
                         _tool_hints = _spec.tool_hint or None
-                    except Exception:
-                        pass
+                    except Exception as _e:
+                        logger.debug("Failed to parse SubTaskSpec tool_hints: %s", _e)
 
             result = await agent.run(task, bus, tool_hints=_tool_hints)
 
@@ -1012,12 +1047,15 @@ async def _agent_loop(agent, bus: ContextBus, board: TaskBoard,
                     # Store subtask mapping for close-out tracking
                     _register_subtasks(bus, task.task_id, subtask_ids)
                     # V0.02: Publish IntentAnchor to ContextBus L0 (TASK layer)
+                    # V0.03+: Strip conversation history to prevent context
+                    # contamination — only publish current task as intent
                     try:
                         from core.protocols import INTENT_KEY_PREFIX
                         from core.context_bus import LAYER_TASK
+                        intent_value = _extract_current_task(task.description)
                         bus.publish("system",
                                     f"{INTENT_KEY_PREFIX}{task.task_id}",
-                                    task.description,
+                                    intent_value,
                                     layer=LAYER_TASK)
                     except Exception as e:
                         logger.debug("[%s] intent anchor publish failed: %s",
@@ -1294,8 +1332,9 @@ async def _check_planner_closeouts(agent, bus, board: TaskBoard, config: dict):
                        if isinstance(_intent_raw, dict) else _intent_raw)
                 if _iv and _iv != parent_desc:
                     _intent_text = f"## Original User Intent (anchored)\n{_iv}\n\n"
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.debug("Failed to retrieve IntentAnchor for closeout %s: %s",
+                         parent_id, _e)
 
         close_prompt = (
             f"You are synthesizing the FINAL answer for the user.\n\n"
@@ -1422,13 +1461,16 @@ async def _check_planner_closeouts(agent, bus, board: TaskBoard, config: dict):
             logger.info("Planner close-out completed for task %s", parent_id)
         except Exception as e:
             logger.error("Planner close-out failed for %s: %s", parent_id, e)
-            # On failure, just complete with collected results
+            # Mark as failed so channel does NOT send raw subtask results
             with board.lock:
                 data = board._read()
                 t = data.get(parent_id)
                 if t:
-                    t["result"] = results_text
-                    t["status"] = "completed"
+                    t["result"] = (
+                        f"⚠️ 合成失败，请重试。\n"
+                        f"(内部错误: {str(e)[:200]})"
+                    )
+                    t["status"] = "failed"
                     t["completed_at"] = time.time()
                     board._write(data)
 
@@ -1626,6 +1668,47 @@ def _build_episodic_memory(config: dict, agent_id: str):
 
 # ── Post-task memory extraction ────────────────────────────────────────────
 
+def _auto_create_kb_note(kb, task, result: str, agent_id: str) -> None:
+    """Auto-create a KB atomic note from a completed task if result is substantial.
+
+    Filtering: skip short / trivial results to avoid noise in the KB.
+    Duplicate topics are handled by KnowledgeBase.create_note() MERGE logic.
+    """
+    try:
+        stripped = result.strip()
+        # Skip very short results
+        if len(stripped) < 200:
+            return
+
+        # Skip mediocre results: <500 chars AND no structural markers
+        if len(stripped) < 500 and not any(
+            kw in result.lower()
+            for kw in ["```", "def ", "class ", "## ", "步骤", "step "]
+        ):
+            return
+
+        topic = task.description[:120].strip()
+        if not topic:
+            return
+
+        from adapters.memory.extractor import _extract_tags, _extract_key_points
+        tags = _extract_tags(task.description + " " + result[:500])
+        tags.append("auto-created")
+
+        content = _extract_key_points(result, max_length=800)
+
+        kb.create_note(
+            topic=topic,
+            content=content,
+            tags=tags,
+            author=agent_id,
+        )
+        logger.debug("[%s] auto-created KB note: %s", agent_id, topic[:60])
+    except Exception as e:
+        logger.debug("[%s] KB auto-create failed (non-critical): %s",
+                     agent_id, e)
+
+
 def _extract_and_store_memories(agent, task, result: str) -> None:
     """
     Extract reusable knowledge from a completed task and store
@@ -1639,9 +1722,13 @@ def _extract_and_store_memories(agent, task, result: str) -> None:
 
         agent_id = agent.cfg.agent_id
 
+        # V0.03+: Strip conversation history before memory extraction
+        # to prevent dialogue metadata from polluting cases/patterns/KB
+        clean_desc = _extract_current_task(task.description)
+
         # Extract and store cases
         if agent.episodic:
-            cases = extract_cases(task.description, result, agent_id)
+            cases = extract_cases(clean_desc, result, agent_id)
             for case in cases:
                 agent.episodic.save_case(
                     problem=case["problem"],
@@ -1650,7 +1737,7 @@ def _extract_and_store_memories(agent, task, result: str) -> None:
                     source_task_id=task.task_id,
                 )
 
-            patterns = extract_patterns(task.description, result, agent_id)
+            patterns = extract_patterns(clean_desc, result, agent_id)
             for pat in patterns:
                 agent.episodic.save_pattern(
                     pattern=pat["pattern"],
@@ -1660,10 +1747,13 @@ def _extract_and_store_memories(agent, task, result: str) -> None:
 
         # Extract and publish cross-agent insight
         if agent.kb:
-            insight = extract_insight(task.description, result, agent_id)
+            insight = extract_insight(clean_desc, result, agent_id)
             if insight:
                 agent.kb.add_insight(agent_id, insight)
                 logger.debug("[%s] published insight to KB", agent_id)
+
+            # Auto-create KB note from significant task results
+            _auto_create_kb_note(agent.kb, task, result, agent_id)
 
     except Exception as e:
         logger.debug("[%s] memory extraction failed (non-critical): %s",
@@ -1674,30 +1764,30 @@ def _extract_and_store_memories(agent, task, result: str) -> None:
         from core.search import QMD
         qmd = QMD()
         qmd.index(
-            title=task.description[:120],
+            title=clean_desc[:120],
             content=result[:2000],
             collection="memory",
             agent_id=agent_id,
             source_type="episode",
         )
         qmd.close()
-    except Exception:
-        pass  # search index is optional enhancement
+    except Exception as _e:
+        logger.debug("FTS5 search indexing skipped: %s", _e)
 
     # Refresh MEMORY.md from episodic data
     if agent.episodic:
         try:
             agent.episodic.generate_memory_md()
-        except Exception:
-            pass  # MEMORY.md generation is non-critical
+        except Exception as _e:
+            logger.debug("MEMORY.md generation failed: %s", _e)
 
     # Auto-update docs (error pattern detection + lesson consolidation)
     try:
         from core.doc_updater import DocUpdater
         updater = DocUpdater(agent.cfg.agent_id)
         updater.check_and_update()
-    except Exception:
-        pass  # doc update is non-critical
+    except Exception as _e:
+        logger.debug("DocUpdater check failed: %s", _e)
 
     # ── Memo Protocol auto-upload hook (V0.03) ───────────────────────────
     try:
@@ -1724,9 +1814,9 @@ def _extract_and_store_memories(agent, task, result: str) -> None:
                     config=_memo_cfg,
                 ))
     except ImportError:
-        pass  # memo module not installed, silently skip
-    except Exception:
-        pass  # memo hook failure never affects core pipeline
+        pass  # memo module not installed
+    except Exception as _e:
+        logger.debug("Memo post-task hook failed: %s", _e)
 
 
 # ── Orchestrator ────────────────────────────────────────────────────────────

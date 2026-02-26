@@ -1033,13 +1033,19 @@ def _handle_send_mail(to: str, content: str,
 
 
 def _handle_generate_doc(**kwargs) -> dict:
-    """Generate a document file (PDF, Excel, or Word) from content.
+    """Generate a document file from content.
 
-    Supported formats:
-      - pdf:  Renders Markdown-like content into a styled PDF (via fpdf2).
-      - xlsx: Creates a spreadsheet from JSON rows (via openpyxl).
-      - docx: Creates a Word document from Markdown-like content (via python-docx).
+    Supported formats (8 total):
+      - pdf:  Styled PDF with CJK support, tables, code blocks (via fpdf2).
+      - docx: Word document with rich formatting, tables (via python-docx).
+      - xlsx: Spreadsheet from JSON rows or markdown tables (via openpyxl).
+      - pptx: PowerPoint slides split by ## headings (via python-pptx).
+      - csv:  CSV from tabular data (JSON, markdown table, TSV).
+      - txt:  Plain text with markdown formatting stripped.
+      - md:   Markdown file (pass-through).
+      - html: Styled HTML with tables, code blocks, lists.
 
+    PDF auto-falls-back to DOCX if generation fails (e.g. font issues).
     The generated file is written to output_path (defaults to /tmp/).
     After generation, use send_file to deliver to the user.
     """
@@ -1106,12 +1112,18 @@ def _handle_generate_doc(**kwargs) -> dict:
     if not content:
         return {"ok": False, "error": "content parameter is required"}
 
+    # Normalise format aliases
+    _FMT_ALIASES = {"excel": "xlsx", "word": "docx", "powerpoint": "pptx",
+                    "ppt": "pptx", "text": "txt", "markdown": "md",
+                    "htm": "html"}
+    fmt = _FMT_ALIASES.get(fmt, fmt)
+
     # Default output path
     if not output_path:
         ts = int(time.time())
-        ext = {"pdf": "pdf", "xlsx": "xlsx", "docx": "docx",
-               "excel": "xlsx", "word": "docx"}.get(fmt, fmt)
-        fmt = {"excel": "xlsx", "word": "docx"}.get(fmt, fmt)
+        ext = {"xlsx": "xlsx", "docx": "docx", "pptx": "pptx",
+               "csv": "csv", "txt": "txt", "md": "md",
+               "html": "html", "pdf": "pdf"}.get(fmt, fmt)
         output_path = f"/tmp/doc_{ts}.{ext}"
 
     _audit_log("generate_doc", agent_id=agent_id, format=fmt, path=output_path)
@@ -1119,19 +1131,45 @@ def _handle_generate_doc(**kwargs) -> dict:
     try:
         if fmt == "pdf":
             result = _gen_pdf(content, output_path, title)
-        elif fmt in ("xlsx", "excel"):
+        elif fmt == "xlsx":
             result = _gen_xlsx(content, output_path, title)
-        elif fmt in ("docx", "word"):
+        elif fmt == "docx":
             result = _gen_docx(content, output_path, title)
+        elif fmt == "pptx":
+            result = _gen_pptx(content, output_path, title)
+        elif fmt == "csv":
+            result = _gen_csv(content, output_path, title)
+        elif fmt == "txt":
+            result = _gen_txt(content, output_path, title)
+        elif fmt == "md":
+            result = _gen_md(content, output_path, title)
+        elif fmt == "html":
+            result = _gen_html(content, output_path, title)
         else:
             return {"ok": False,
-                    "error": f"Unsupported format: {fmt}. Use pdf, xlsx, or docx."}
+                    "error": f"Unsupported format: {fmt}. "
+                             "Use pdf, docx, xlsx, pptx, csv, txt, md, or html."}
     except ImportError as e:
         return {"ok": False,
                 "error": f"Missing library for {fmt}: {e}. Install via pip3."}
     except Exception as e:
-        logger.exception("generate_doc failed")
-        return {"ok": False, "error": str(e)}
+        # ── Auto-fallback: if PDF fails, retry as DOCX ──
+        if fmt == "pdf":
+            logger.warning("PDF generation failed (%s), falling back to DOCX", e)
+            try:
+                fallback_path = output_path.rsplit(".", 1)[0] + ".docx"
+                result = _gen_docx(content, fallback_path, title)
+                result["original_format"] = "pdf"
+                result["fallback"] = True
+                result["fallback_reason"] = str(e)
+                logger.info("Fallback DOCX generated: %s", fallback_path)
+            except Exception as e2:
+                logger.exception("generate_doc failed (PDF + DOCX fallback)")
+                return {"ok": False,
+                        "error": f"PDF failed: {e}; DOCX fallback also failed: {e2}"}
+        else:
+            logger.exception("generate_doc failed")
+            return {"ok": False, "error": str(e)}
 
     # ── Auto-send: if channel session is active, deliver file immediately ──
     if result.get("ok") and result.get("path"):
@@ -1178,84 +1216,189 @@ def _file_delivery_hint(path: str, reason: str, error: str = "") -> str:
 
 
 def _gen_pdf(content: str, output_path: str, title: str) -> dict:
-    """Generate PDF from text/markdown content using fpdf2."""
+    """Generate PDF from text/markdown content using fpdf2.
+
+    Improvements over v1:
+      - Robust CJK font chain (macOS + Linux), no deprecated uni=True
+      - All text uses multi_cell() for proper wrapping (prevents
+        "Not enough horizontal space" crash on long CJK lines)
+      - Markdown table rendering (| col | col |)
+      - Bold / italic inline formatting via **text** and *text*
+      - Stripped markdown formatting chars (**bold**, *italic*) in plain text
+    """
+    import re as _re
     from fpdf import FPDF
 
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=20)
     pdf.add_page()
 
-    # Try to add a Unicode font for CJK support
-    font_set = False
-    for font_path in [
-        "/System/Library/Fonts/PingFang.ttc",           # macOS CJK
-        "/System/Library/Fonts/STHeiti Light.ttc",       # macOS CJK fallback
+    # ── Font setup: CJK-capable Unicode fonts ──
+    _FONT_CHAIN = [
+        # macOS
+        "/Library/Fonts/Arial Unicode.ttf",
         "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",  # Linux
-    ]:
-        if os.path.exists(font_path):
+        "/System/Library/Fonts/STHeiti Light.ttc",
+        "/System/Library/Fonts/STHeiti Medium.ttc",
+        "/System/Library/Fonts/Hiragino Sans GB.ttc",
+        "/System/Library/Fonts/Supplemental/Songti.ttc",
+        # Linux
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ]
+    font_name = "Helvetica"
+    for fp in _FONT_CHAIN:
+        if os.path.exists(fp):
             try:
-                pdf.add_font("UniFont", "", font_path, uni=True)
+                pdf.add_font("UniFont", "", fp)
                 pdf.set_font("UniFont", size=11)
-                font_set = True
+                font_name = "UniFont"
                 break
             except Exception:
                 continue
-    if not font_set:
+    if font_name == "Helvetica":
         pdf.set_font("Helvetica", size=11)
 
-    # Render title
+    def _has_cjk(text: str) -> bool:
+        return any('\u4e00' <= ch <= '\u9fff' or '\u3000' <= ch <= '\u30ff'
+                   or '\uac00' <= ch <= '\ud7af' for ch in text)
+
+    def _safe_text(text: str) -> str:
+        """If using Helvetica (no CJK), replace CJK chars with ?."""
+        if font_name != "Helvetica":
+            return text
+        return "".join(ch if ord(ch) < 0x2E80 else "?" for ch in text)
+
+    def _strip_md_inline(text: str) -> str:
+        """Strip **bold** and *italic* markers for plain rendering."""
+        text = _re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+        text = _re.sub(r'\*(.+?)\*', r'\1', text)
+        text = _re.sub(r'`(.+?)`', r'\1', text)
+        return text
+
+    # ── Title ──
     if title:
         pdf.set_font_size(18)
-        pdf.cell(0, 12, title, new_x="LMARGIN", new_y="NEXT", align="C")
+        pdf.multi_cell(0, 12, _safe_text(_strip_md_inline(title)),
+                        align="C", new_x="LMARGIN", new_y="NEXT")
         pdf.ln(6)
         pdf.set_font_size(11)
 
-    # Render content line by line with basic markdown support
-    for line in content.split("\n"):
-        stripped = line.strip()
+    # ── Pre-process: detect table blocks ──
+    lines = content.split("\n")
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
 
-        # Headers
+        # ── Markdown table block ──
+        if "|" in stripped and stripped.startswith("|") and stripped.endswith("|"):
+            table_lines = []
+            while i < len(lines):
+                row = lines[i].strip()
+                if not ("|" in row and row.startswith("|")):
+                    break
+                # Skip separator rows (|---|---|)
+                cells = [c.strip() for c in row.split("|")[1:-1]]
+                if cells and not all(_re.match(r'^[-:]+$', c) for c in cells):
+                    table_lines.append(cells)
+                i += 1
+            if table_lines:
+                _render_pdf_table(pdf, table_lines, font_name, _safe_text,
+                                  _strip_md_inline)
+                pdf.ln(4)
+            continue
+
+        # ── Headers ──
         if stripped.startswith("### "):
             pdf.ln(4)
             pdf.set_font_size(13)
-            pdf.cell(0, 8, stripped[4:], new_x="LMARGIN", new_y="NEXT")
+            pdf.multi_cell(0, 8, _safe_text(_strip_md_inline(stripped[4:])),
+                           new_x="LMARGIN", new_y="NEXT")
             pdf.set_font_size(11)
         elif stripped.startswith("## "):
             pdf.ln(5)
             pdf.set_font_size(15)
-            pdf.cell(0, 9, stripped[3:], new_x="LMARGIN", new_y="NEXT")
+            pdf.multi_cell(0, 9, _safe_text(_strip_md_inline(stripped[3:])),
+                           new_x="LMARGIN", new_y="NEXT")
             pdf.set_font_size(11)
         elif stripped.startswith("# "):
             pdf.ln(6)
             pdf.set_font_size(17)
-            pdf.cell(0, 10, stripped[2:], new_x="LMARGIN", new_y="NEXT")
+            pdf.multi_cell(0, 10, _safe_text(_strip_md_inline(stripped[2:])),
+                           new_x="LMARGIN", new_y="NEXT")
             pdf.set_font_size(11)
+
+        # ── Bullet list ──
         elif stripped.startswith(("- ", "* ", "• ")):
             bullet_text = stripped.lstrip("-*• ").strip()
-            pdf.cell(8)
-            pdf.cell(0, 7, "•  " + bullet_text, new_x="LMARGIN", new_y="NEXT")
+            pdf.set_x(pdf.l_margin + 8)
+            pdf.multi_cell(0, 7,
+                           _safe_text("•  " + _strip_md_inline(bullet_text)),
+                           new_x="LMARGIN", new_y="NEXT")
+
+        # ── Horizontal rule ──
         elif stripped.startswith(("---", "***", "___")):
             pdf.ln(3)
-            pdf.line(pdf.get_x(), pdf.get_y(), pdf.get_x() + 170, pdf.get_y())
+            x = pdf.l_margin
+            pdf.line(x, pdf.get_y(), x + 170, pdf.get_y())
             pdf.ln(3)
+
+        # ── Blank line ──
         elif stripped == "":
             pdf.ln(4)
+
+        # ── Code block ──
+        elif stripped.startswith("```"):
+            # Consume until closing ```
+            i += 1
+            code_lines = []
+            while i < len(lines) and not lines[i].strip().startswith("```"):
+                code_lines.append(lines[i])
+                i += 1
+            if code_lines:
+                pdf.set_font_size(9)
+                for cl in code_lines:
+                    pdf.multi_cell(0, 5, _safe_text(cl),
+                                   new_x="LMARGIN", new_y="NEXT")
+                pdf.set_font_size(11)
+                pdf.ln(2)
+
         else:
-            # Check for numbered list
-            import re as _re
+            # ── Numbered list ──
             num_match = _re.match(r'^(\d+)[.)]\s+(.+)$', stripped)
             if num_match:
-                pdf.cell(0, 7, f"{num_match.group(1)}. {num_match.group(2)}",
-                         new_x="LMARGIN", new_y="NEXT")
+                pdf.multi_cell(
+                    0, 7,
+                    _safe_text(f"{num_match.group(1)}. "
+                               f"{_strip_md_inline(num_match.group(2))}"),
+                    new_x="LMARGIN", new_y="NEXT")
             else:
-                pdf.multi_cell(0, 7, stripped)
+                pdf.multi_cell(0, 7, _safe_text(_strip_md_inline(stripped)),
+                               new_x="LMARGIN", new_y="NEXT")
+
+        i += 1
 
     os.makedirs(os.path.dirname(output_path) or "/tmp", exist_ok=True)
     pdf.output(output_path)
     size = os.path.getsize(output_path)
     return {"ok": True, "path": output_path, "format": "pdf",
             "size": size, "pages": pdf.pages_count}
+
+
+def _render_pdf_table(pdf, rows, font_name, _safe_text, _strip_md_inline):
+    """Render a markdown table into the PDF using fpdf2 built-in table API."""
+    if not rows:
+        return
+    n_cols = max(len(r) for r in rows)
+    with pdf.table(first_row_as_headings=False,
+                   col_widths=tuple(1 for _ in range(n_cols))) as table:
+        for row_data in rows:
+            row = table.row()
+            for c_idx in range(n_cols):
+                text = _safe_text(_strip_md_inline(
+                    str(row_data[c_idx]) if c_idx < len(row_data) else ""))
+                row.cell(text)
 
 
 def _gen_xlsx(content: str, output_path: str, title: str) -> dict:
@@ -1323,48 +1466,474 @@ def _gen_xlsx(content: str, output_path: str, title: str) -> dict:
 
 
 def _gen_docx(content: str, output_path: str, title: str) -> dict:
-    """Generate Word document from text/markdown content using python-docx."""
+    """Generate Word document from text/markdown content using python-docx.
+
+    Improvements:
+      - CJK-friendly font (PingFang SC / SimSun / Noto Sans CJK)
+      - Markdown table rendering (| col | col |)
+      - Bold / italic inline formatting
+      - Code block support
+    """
+    import re as _re
     from docx import Document
-    from docx.shared import Pt, Inches
+    from docx.shared import Pt, Inches, RGBColor
+    from docx.oxml.ns import qn
 
     doc = Document()
 
-    # Set default font
+    # ── CJK-friendly default font ──
     style = doc.styles["Normal"]
     font = style.font
     font.size = Pt(11)
+    font.name = "Arial Unicode MS"
+    # Set East Asian font for CJK rendering
+    rpr = style.element.get_or_add_rPr()
+    ea_font = rpr.makeelement(qn('w:rFonts'), {
+        qn('w:eastAsia'): 'PingFang SC',
+    })
+    rpr.insert(0, ea_font)
+
+    def _strip_md(text):
+        text = _re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+        text = _re.sub(r'\*(.+?)\*', r'\1', text)
+        text = _re.sub(r'`(.+?)`', r'\1', text)
+        return text
+
+    def _add_rich_paragraph(doc, text, style_name=None):
+        """Add paragraph with **bold** and *italic* inline formatting."""
+        p = doc.add_paragraph(style=style_name)
+        parts = _re.split(r'(\*\*[^*]+\*\*|\*[^*]+\*|`[^`]+`)', text)
+        for part in parts:
+            if part.startswith("**") and part.endswith("**"):
+                run = p.add_run(part[2:-2])
+                run.bold = True
+            elif part.startswith("*") and part.endswith("*"):
+                run = p.add_run(part[1:-1])
+                run.italic = True
+            elif part.startswith("`") and part.endswith("`"):
+                run = p.add_run(part[1:-1])
+                run.font.name = "Courier New"
+                run.font.size = Pt(10)
+            else:
+                p.add_run(part)
+        return p
 
     if title:
-        doc.add_heading(title, level=0)
+        doc.add_heading(_strip_md(title), level=0)
 
-    for line in content.split("\n"):
-        stripped = line.strip()
+    lines = content.split("\n")
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+
+        # ── Markdown table ──
+        if ("|" in stripped and stripped.startswith("|")
+                and stripped.endswith("|")):
+            table_rows = []
+            while i < len(lines):
+                row = lines[i].strip()
+                if not ("|" in row and row.startswith("|")):
+                    break
+                cells = [c.strip() for c in row.split("|")[1:-1]]
+                if cells and not all(_re.match(r'^[-:]+$', c) for c in cells):
+                    table_rows.append(cells)
+                i += 1
+            if table_rows:
+                n_cols = max(len(r) for r in table_rows)
+                tbl = doc.add_table(rows=len(table_rows), cols=n_cols,
+                                    style="Light Grid Accent 1")
+                for r_idx, row_data in enumerate(table_rows):
+                    for c_idx, cell_text in enumerate(row_data):
+                        if c_idx < n_cols:
+                            tbl.cell(r_idx, c_idx).text = _strip_md(cell_text)
+                            # Bold header row
+                            if r_idx == 0:
+                                for run in tbl.cell(r_idx, c_idx).paragraphs[0].runs:
+                                    run.bold = True
+                doc.add_paragraph("")
+            continue
+
+        # ── Headers ──
         if stripped.startswith("### "):
-            doc.add_heading(stripped[4:], level=3)
+            doc.add_heading(_strip_md(stripped[4:]), level=3)
         elif stripped.startswith("## "):
-            doc.add_heading(stripped[3:], level=2)
+            doc.add_heading(_strip_md(stripped[3:]), level=2)
         elif stripped.startswith("# "):
-            doc.add_heading(stripped[2:], level=1)
+            doc.add_heading(_strip_md(stripped[2:]), level=1)
+
+        # ── Bullet list ──
         elif stripped.startswith(("- ", "* ", "• ")):
             text = stripped.lstrip("-*• ").strip()
-            doc.add_paragraph(text, style="List Bullet")
+            _add_rich_paragraph(doc, text, style_name="List Bullet")
+
+        # ── Horizontal rule ──
         elif stripped.startswith(("---", "***", "___")):
-            # Horizontal rule approximation
             doc.add_paragraph("_" * 50)
+
+        # ── Code block ──
+        elif stripped.startswith("```"):
+            i += 1
+            code_lines = []
+            while i < len(lines) and not lines[i].strip().startswith("```"):
+                code_lines.append(lines[i])
+                i += 1
+            if code_lines:
+                p = doc.add_paragraph()
+                run = p.add_run("\n".join(code_lines))
+                run.font.name = "Courier New"
+                run.font.size = Pt(9)
+                run.font.color.rgb = RGBColor(0x33, 0x33, 0x33)
+
+        # ── Blank line ──
         elif stripped == "":
             doc.add_paragraph("")
+
         else:
-            import re as _re
+            # ── Numbered list ──
             num_match = _re.match(r'^(\d+)[.)]\s+(.+)$', stripped)
             if num_match:
-                doc.add_paragraph(num_match.group(2), style="List Number")
+                _add_rich_paragraph(doc, num_match.group(2),
+                                    style_name="List Number")
             else:
-                doc.add_paragraph(stripped)
+                _add_rich_paragraph(doc, stripped)
+
+        i += 1
 
     os.makedirs(os.path.dirname(output_path) or "/tmp", exist_ok=True)
     doc.save(output_path)
     size = os.path.getsize(output_path)
     return {"ok": True, "path": output_path, "format": "docx", "size": size}
+
+
+def _gen_pptx(content: str, output_path: str, title: str) -> dict:
+    """Generate PowerPoint presentation from text/markdown content.
+
+    Splits content by ## headings into slides. Each slide gets a title
+    and bullet-point body. Supports CJK text natively.
+    """
+    import re as _re
+    from pptx import Presentation
+    from pptx.util import Inches, Pt
+
+    prs = Presentation()
+    prs.slide_width = Inches(13.333)
+    prs.slide_height = Inches(7.5)
+
+    # ── Title slide ──
+    slide_layout = prs.slide_layouts[0]  # Title Slide
+    slide = prs.slides.add_slide(slide_layout)
+    slide.shapes.title.text = _re.sub(r'\*\*(.+?)\*\*', r'\1', title or "Untitled")
+    if slide.placeholders[1]:
+        slide.placeholders[1].text = ""
+
+    # ── Split content into slide sections by ## headings ──
+    sections: list[dict] = []
+    current: dict | None = None
+    for line in content.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            if current:
+                sections.append(current)
+            current = {"title": _re.sub(r'\*\*(.+?)\*\*', r'\1', stripped[3:]),
+                        "body": []}
+        elif stripped.startswith("# ") and not current:
+            # Top-level heading as subtitle on title slide
+            if slide.placeholders[1]:
+                slide.placeholders[1].text = _re.sub(
+                    r'\*\*(.+?)\*\*', r'\1', stripped[2:])
+        elif current is not None:
+            if stripped and not stripped.startswith(("---", "***", "___", "```")):
+                # Clean markdown formatting
+                clean = _re.sub(r'\*\*(.+?)\*\*', r'\1', stripped)
+                clean = _re.sub(r'\*(.+?)\*', r'\1', clean)
+                clean = _re.sub(r'`(.+?)`', r'\1', clean)
+                clean = clean.lstrip("-*• ").strip()
+                if clean:
+                    current["body"].append(clean)
+    if current:
+        sections.append(current)
+
+    # If no ## headings found, create one slide with all content
+    if not sections:
+        body_lines = []
+        for line in content.split("\n"):
+            stripped = line.strip()
+            if stripped and not stripped.startswith(("#", "---", "***", "```")):
+                clean = _re.sub(r'\*\*(.+?)\*\*', r'\1', stripped)
+                clean = clean.lstrip("-*• ").strip()
+                if clean:
+                    body_lines.append(clean)
+        if body_lines:
+            sections = [{"title": title or "Content", "body": body_lines}]
+
+    # ── Render slides ──
+    slide_layout = prs.slide_layouts[1]  # Title and Content
+    for sec in sections:
+        slide = prs.slides.add_slide(slide_layout)
+        slide.shapes.title.text = sec["title"]
+        tf = slide.placeholders[1].text_frame
+        tf.clear()
+        for idx, bullet in enumerate(sec["body"]):
+            if idx == 0:
+                tf.paragraphs[0].text = bullet
+                tf.paragraphs[0].font.size = Pt(18)
+            else:
+                p = tf.add_paragraph()
+                p.text = bullet
+                p.font.size = Pt(18)
+
+    # ── Markdown table → table slide ──
+    table_rows = []
+    in_table = False
+    for line in content.split("\n"):
+        stripped = line.strip()
+        if "|" in stripped and stripped.startswith("|") and stripped.endswith("|"):
+            cells = [c.strip() for c in stripped.split("|")[1:-1]]
+            if cells and not all(_re.match(r'^[-:]+$', c) for c in cells):
+                table_rows.append(cells)
+                in_table = True
+        elif in_table:
+            break
+    if table_rows and len(table_rows) > 1:
+        slide_layout = prs.slide_layouts[5]  # Blank
+        slide = prs.slides.add_slide(slide_layout)
+        n_cols = max(len(r) for r in table_rows)
+        tbl_shape = slide.shapes.add_table(
+            len(table_rows), n_cols,
+            Inches(0.5), Inches(0.5),
+            Inches(12), Inches(6))
+        tbl = tbl_shape.table
+        for r_idx, row_data in enumerate(table_rows):
+            for c_idx in range(n_cols):
+                cell_text = row_data[c_idx] if c_idx < len(row_data) else ""
+                tbl.cell(r_idx, c_idx).text = _re.sub(
+                    r'\*\*(.+?)\*\*', r'\1', cell_text)
+
+    os.makedirs(os.path.dirname(output_path) or "/tmp", exist_ok=True)
+    prs.save(output_path)
+    size = os.path.getsize(output_path)
+    return {"ok": True, "path": output_path, "format": "pptx",
+            "size": size, "slides": len(prs.slides)}
+
+
+def _gen_csv(content: str, output_path: str, title: str) -> dict:
+    """Generate CSV from tabular content (markdown table, JSON, or TSV)."""
+    import csv
+    import io
+    import re as _re
+
+    rows: list[list[str]] = []
+
+    # Try JSON first
+    try:
+        parsed = json.loads(content)
+        if isinstance(parsed, list):
+            for item in parsed:
+                if isinstance(item, (list, tuple)):
+                    rows.append([str(v) for v in item])
+                elif isinstance(item, dict):
+                    if not rows:
+                        rows.append(list(item.keys()))
+                    rows.append([str(v) for v in item.values()])
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # Fallback: parse markdown table or TSV
+    if not rows:
+        for line in content.strip().split("\n"):
+            stripped = line.strip()
+            if "|" in stripped:
+                cells = [c.strip() for c in stripped.split("|")]
+                # Remove empty leading/trailing from |col|col|
+                if cells and cells[0] == "":
+                    cells = cells[1:]
+                if cells and cells[-1] == "":
+                    cells = cells[:-1]
+                if cells and not all(_re.match(r'^[-:]+$', c) for c in cells):
+                    rows.append(cells)
+            elif "\t" in stripped:
+                rows.append(stripped.split("\t"))
+            elif stripped:
+                rows.append([stripped])
+
+    if not rows:
+        return {"ok": False, "error": "No tabular data found in content"}
+
+    os.makedirs(os.path.dirname(output_path) or "/tmp", exist_ok=True)
+    with open(output_path, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        writer.writerows(rows)
+
+    size = os.path.getsize(output_path)
+    return {"ok": True, "path": output_path, "format": "csv",
+            "size": size, "rows": len(rows)}
+
+
+def _gen_txt(content: str, output_path: str, title: str) -> dict:
+    """Generate plain text file, stripping markdown formatting."""
+    import re as _re
+
+    lines = []
+    if title:
+        lines.append(title)
+        lines.append("=" * len(title))
+        lines.append("")
+
+    for line in content.split("\n"):
+        # Strip markdown formatting but keep structure
+        clean = line
+        clean = _re.sub(r'^#{1,6}\s+', '', clean)          # Headers
+        clean = _re.sub(r'\*\*(.+?)\*\*', r'\1', clean)    # Bold
+        clean = _re.sub(r'\*(.+?)\*', r'\1', clean)        # Italic
+        clean = _re.sub(r'`(.+?)`', r'\1', clean)          # Inline code
+        lines.append(clean)
+
+    os.makedirs(os.path.dirname(output_path) or "/tmp", exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+
+    size = os.path.getsize(output_path)
+    return {"ok": True, "path": output_path, "format": "txt", "size": size}
+
+
+def _gen_md(content: str, output_path: str, title: str) -> dict:
+    """Generate Markdown file (pass-through with optional title)."""
+    text = ""
+    if title:
+        text = f"# {title}\n\n"
+    text += content
+
+    os.makedirs(os.path.dirname(output_path) or "/tmp", exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(text)
+
+    size = os.path.getsize(output_path)
+    return {"ok": True, "path": output_path, "format": "md", "size": size}
+
+
+def _gen_html(content: str, output_path: str, title: str) -> dict:
+    """Generate styled HTML file from markdown-like content."""
+    import re as _re
+    import html as _html
+
+    html_lines = [
+        '<!DOCTYPE html>',
+        '<html lang="zh"><head><meta charset="utf-8">',
+        f'<title>{_html.escape(title or "Document")}</title>',
+        '<style>',
+        'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,'
+        '"Helvetica Neue",Arial,sans-serif;max-width:800px;margin:40px auto;'
+        'padding:0 20px;line-height:1.6;color:#1d1d1f}',
+        'h1,h2,h3{margin-top:1.5em}',
+        'table{border-collapse:collapse;width:100%;margin:1em 0}',
+        'th,td{border:1px solid #ddd;padding:8px 12px;text-align:left}',
+        'th{background:#f5f5f7;font-weight:600}',
+        'code{background:#f0f0f0;padding:2px 6px;border-radius:4px;font-size:0.9em}',
+        'pre{background:#f5f5f7;padding:16px;border-radius:8px;overflow-x:auto}',
+        'pre code{background:none;padding:0}',
+        'hr{border:none;border-top:1px solid #ddd;margin:2em 0}',
+        'ul,ol{padding-left:2em}',
+        '</style></head><body>',
+    ]
+
+    if title:
+        html_lines.append(f'<h1>{_html.escape(title)}</h1>')
+
+    lines = content.split("\n")
+    i = 0
+    in_list = False
+    list_type = None
+
+    while i < len(lines):
+        stripped = lines[i].strip()
+
+        # ── Table block ──
+        if "|" in stripped and stripped.startswith("|") and stripped.endswith("|"):
+            html_lines.append('<table>')
+            first_row = True
+            while i < len(lines):
+                row = lines[i].strip()
+                if not ("|" in row and row.startswith("|")):
+                    break
+                cells = [c.strip() for c in row.split("|")[1:-1]]
+                if cells and all(_re.match(r'^[-:]+$', c) for c in cells):
+                    i += 1
+                    continue
+                tag = "th" if first_row else "td"
+                html_lines.append('<tr>' + ''.join(
+                    f'<{tag}>{_html.escape(c)}</{tag}>' for c in cells) + '</tr>')
+                first_row = False
+                i += 1
+            html_lines.append('</table>')
+            continue
+
+        # Close open list if needed
+        if in_list and not stripped.startswith(("- ", "* ", "• ")) and \
+                not _re.match(r'^\d+[.)]\s', stripped):
+            html_lines.append(f'</{list_type}>')
+            in_list = False
+
+        # ── Code block ──
+        if stripped.startswith("```"):
+            i += 1
+            code = []
+            while i < len(lines) and not lines[i].strip().startswith("```"):
+                code.append(_html.escape(lines[i]))
+                i += 1
+            html_lines.append('<pre><code>' + '\n'.join(code) + '</code></pre>')
+            i += 1
+            continue
+
+        # ── Headers ──
+        if stripped.startswith("### "):
+            html_lines.append(f'<h3>{_html.escape(stripped[4:])}</h3>')
+        elif stripped.startswith("## "):
+            html_lines.append(f'<h2>{_html.escape(stripped[3:])}</h2>')
+        elif stripped.startswith("# "):
+            html_lines.append(f'<h1>{_html.escape(stripped[2:])}</h1>')
+        # ── HR ──
+        elif stripped.startswith(("---", "***", "___")):
+            html_lines.append('<hr>')
+        # ── Bullet list ──
+        elif stripped.startswith(("- ", "* ", "• ")):
+            if not in_list or list_type != "ul":
+                if in_list:
+                    html_lines.append(f'</{list_type}>')
+                html_lines.append('<ul>')
+                in_list = True
+                list_type = "ul"
+            text = _html.escape(stripped.lstrip("-*• ").strip())
+            html_lines.append(f'<li>{text}</li>')
+        # ── Numbered list ──
+        elif _re.match(r'^\d+[.)]\s', stripped):
+            if not in_list or list_type != "ol":
+                if in_list:
+                    html_lines.append(f'</{list_type}>')
+                html_lines.append('<ol>')
+                in_list = True
+                list_type = "ol"
+            text = _re.sub(r'^\d+[.)]\s+', '', stripped)
+            html_lines.append(f'<li>{_html.escape(text)}</li>')
+        # ── Blank ──
+        elif stripped == "":
+            html_lines.append('')
+        # ── Paragraph ──
+        else:
+            html_lines.append(f'<p>{_html.escape(stripped)}</p>')
+
+        i += 1
+
+    if in_list:
+        html_lines.append(f'</{list_type}>')
+
+    html_lines.append('</body></html>')
+
+    os.makedirs(os.path.dirname(output_path) or "/tmp", exist_ok=True)
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write('\n'.join(html_lines))
+
+    size = os.path.getsize(output_path)
+    return {"ok": True, "path": output_path, "format": "html", "size": size}
 
 
 def _handle_send_file(**kwargs) -> dict:
@@ -2489,17 +3058,19 @@ _BUILTIN_TOOLS: list[Tool] = [
          _handle_send_mail, group="messaging"),
 
     Tool("generate_doc",
-         "Generate a document file (PDF, Excel/XLSX, or Word/DOCX) from content. "
-         "Supports: pdf (from text/markdown), xlsx (from JSON/tabular data), docx (from text/markdown). "
-         "Chinese and other CJK characters are fully supported in PDF. "
+         "Generate a document file from content. "
+         "Supports 8 formats: pdf, docx/word, xlsx/excel, pptx/powerpoint, csv, txt, md, html. "
+         "CJK (Chinese/Japanese/Korean) fully supported. "
+         "PDF auto-falls-back to DOCX on failure. "
          "After generating, use send_file to deliver to the user.",
          {"format": {"type": "string",
-                     "description": "Output format: 'pdf', 'xlsx'/'excel', 'docx'/'word'",
+                     "description": "Output format: 'pdf', 'docx'/'word', 'xlsx'/'excel', "
+                                    "'pptx'/'powerpoint', 'csv', 'txt', 'md', 'html'",
                      "required": True},
           "content": {"type": "string",
                       "description": "Document content (IMPORTANT: keep under 2000 chars to avoid truncation; "
-                                     "use concise formatting). Markdown text for pdf/docx, "
-                                     "or JSON array [[row1],[row2]] / markdown table for xlsx",
+                                     "use concise formatting). Markdown text for pdf/docx/pptx/html/txt, "
+                                     "JSON array or markdown table for xlsx/csv",
                       "required": True},
           "title": {"type": "string",
                     "description": "Document title (optional)",

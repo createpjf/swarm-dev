@@ -34,7 +34,9 @@ from core.protocols import FileLock  # shared fallback
 
 logger = logging.getLogger(__name__)
 
-SHARED_DIR = os.path.join("memory", "shared")
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))))  # adapters/memory/ → adapters/ → project root
+SHARED_DIR = os.path.join(_PROJECT_ROOT, "memory", "shared")
 ATOMIC_DIR = os.path.join(SHARED_DIR, "atomic")
 MOC_PATH   = os.path.join(SHARED_DIR, "moc.md")
 INSIGHTS_PATH = os.path.join(SHARED_DIR, "insights.jsonl")
@@ -287,14 +289,29 @@ class KnowledgeBase:
         """
         Publish a cross-agent insight.
         Other agents can read the feed for collective learning.
+        Skips exact duplicates (same insight text already recorded).
         """
-        entry = {
-            "agent_id": agent_id,
-            "insight": insight,
-            "tags": tags or [],
-            "ts": time.time(),
-        }
         with self.lock:
+            # Dedup: skip if identical insight text already exists
+            if os.path.exists(self.insights_path):
+                try:
+                    with open(self.insights_path) as f:
+                        for line in f:
+                            if line.strip():
+                                try:
+                                    if json.loads(line).get("insight") == insight:
+                                        return  # exact duplicate — skip
+                                except json.JSONDecodeError:
+                                    continue
+                except OSError:
+                    pass
+
+            entry = {
+                "agent_id": agent_id,
+                "insight": insight,
+                "tags": tags or [],
+                "ts": time.time(),
+            }
             with open(self.insights_path, "a") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
@@ -324,6 +341,46 @@ class KnowledgeBase:
 
         # Return most recent
         return entries[-limit:]
+
+    def dedup_insights(self) -> dict:
+        """Remove duplicate insights, keeping earliest occurrence.
+
+        Called periodically by MemoryConsolidator.
+        Returns stats: {before, after, removed}.
+        """
+        with self.lock:
+            if not os.path.exists(self.insights_path):
+                return {"before": 0, "after": 0, "removed": 0}
+            entries = []
+            try:
+                with open(self.insights_path) as f:
+                    for line in f:
+                        if line.strip():
+                            try:
+                                entries.append(json.loads(line))
+                            except json.JSONDecodeError:
+                                continue
+            except OSError:
+                return {"before": 0, "after": 0, "removed": 0}
+
+            before = len(entries)
+            seen: set[str] = set()
+            unique: list[dict] = []
+            for e in entries:
+                key = e.get("insight", "")
+                if key not in seen:
+                    seen.add(key)
+                    unique.append(e)
+
+            if len(unique) < before:
+                with open(self.insights_path, "w") as f:
+                    for e in unique:
+                        f.write(json.dumps(e, ensure_ascii=False) + "\n")
+                logger.debug("Insight dedup: %d → %d (removed %d)",
+                             before, len(unique), before - len(unique))
+
+            return {"before": before, "after": len(unique),
+                    "removed": before - len(unique)}
 
     # ── Recall for System Prompt Injection ────────────────────────────────
 

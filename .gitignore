@@ -99,3 +99,10 @@ config/agents.yaml.lock
 cleo-completion.sh
 adapters/voice/sherpa-onnx/
 =3.1.0
+
+# ── Runtime data (consolidation/streaming) ──
+memory/consolidation_log.jsonl
+memory/critique_log.jsonl
+memo_export/
+.task_streams/
+.task_signals/
